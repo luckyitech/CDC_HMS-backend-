@@ -1,6 +1,6 @@
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
-const { v4: uuidv4 } = require('uuid');
+const crypto = require('crypto');
 const { Op } = require('sequelize');
 const { success, error } = require('../utils/response');
 const { sendPasswordResetEmail } = require('../utils/emailService');
@@ -88,7 +88,7 @@ const forgotPassword = async (req, res) => {
   if (!user) return error(res, 'Email not found', 404);
 
   // Generate token and expiry (from .env: RESET_TOKEN_EXPIRES_IN in ms)
-  const resetToken = uuidv4();
+  const resetToken = crypto.randomBytes(32).toString('hex');
   const resetTokenExpires = new Date(Date.now() + parseInt(process.env.RESET_TOKEN_EXPIRES_IN));
 
   await user.update({ resetToken, resetTokenExpires });

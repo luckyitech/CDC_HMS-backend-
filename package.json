@@ -24,8 +24,7 @@
     "multer": "^2.0.2",
     "mysql2": "^3.16.3",
     "nodemailer": "^8.0.0",
-    "sequelize": "^6.37.7",
-    "uuid": "^13.0.0"
+    "sequelize": "^6.37.7"
   },
   "devDependencies": {
     "axios": "^1.13.5",
