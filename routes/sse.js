@@ -1,11 +1,12 @@
 const express = require('express');
 const router = express.Router();
 const { addClient } = require('../utils/sseManager');
+const { sseLimiter } = require('../middleware/rateLimiter');
 
 // GET /api/sse — SSE connection endpoint
 // Unauthenticated: sends only a notification event (no patient data).
 // The client re-fetches actual data via the authenticated REST API on receipt.
-router.get('/', (req, res) => {
+router.get('/', sseLimiter, (req, res) => {
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
   res.setHeader('Connection', 'keep-alive');

@@ -60,10 +60,28 @@ const strictLimiter = rateLimit({
 });
 
 // ------------------------------------
+// SSE Rate Limiter
+// ------------------------------------
+// Applied to the SSE endpoint only.
+// SSE holds persistent connections — limit each IP to 20 connections
+// per 15 minutes to prevent connection-flood DoS attacks.
+const sseLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 20,
+  message: {
+    success: false,
+    message: 'Too many SSE connections from this IP, please try again later.',
+  },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+// ------------------------------------
 // EXPORTS
 // ------------------------------------
 module.exports = {
   generalLimiter,
   authLimiter,
   strictLimiter,
+  sseLimiter,
 };
