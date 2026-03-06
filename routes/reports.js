@@ -1,7 +1,21 @@
 const express = require('express');
 const router = express.Router();
+const { query } = require('express-validator');
 const { authenticate, authorize } = require('../middleware/auth');
+const validate = require('../middleware/validate');
 const reportController = require('../controllers/reportController');
+
+// Reusable validators
+const uhidRequired = query('uhid').notEmpty().withMessage('uhid is required').isString().trim();
+const periodOptional = query('period')
+  .optional()
+  .isIn(['7days', '30days', '90days', '6months', '1year'])
+  .withMessage('period must be one of: 7days, 30days, 90days, 6months, 1year');
+const limitOptional = query('limit')
+  .optional()
+  .isInt({ min: 1, max: 100 })
+  .withMessage('limit must be an integer between 1 and 100')
+  .toInt();
 
 // ====================================
 // REPORTS API ROUTES
@@ -30,6 +44,7 @@ router.get(
   '/glycemic',
   authenticate,
   authorize('doctor', 'admin', 'patient'),
+  uhidRequired, periodOptional, validate,
   reportController.getGlycemicReport
 );
 
@@ -42,6 +57,7 @@ router.get(
   '/patient-summary',
   authenticate,
   authorize('doctor', 'admin', 'patient'),
+  uhidRequired, validate,
   reportController.getPatientSummary
 );
 
@@ -54,6 +70,7 @@ router.get(
   '/medication-adherence',
   authenticate,
   authorize('doctor', 'admin', 'patient'),
+  uhidRequired, periodOptional, validate,
   reportController.getMedicationAdherence
 );
 
@@ -66,6 +83,7 @@ router.get(
   '/high-risk-patients',
   authenticate,
   authorize('doctor', 'admin'),
+  limitOptional, validate,
   reportController.getHighRiskPatients
 );
 
@@ -78,6 +96,7 @@ router.get(
   '/clinic-overview',
   authenticate,
   authorize('doctor', 'admin'),
+  periodOptional, validate,
   reportController.getClinicOverview
 );
 
