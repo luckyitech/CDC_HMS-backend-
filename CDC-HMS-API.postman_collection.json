@@ -1,0 +1,1319 @@
+{
+  "info": {
+    "name": "CDC HMS API",
+    "description": "Complete API collection for CDC Hospital Management System",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:3000/api"
+    },
+    {
+      "key": "token",
+      "value": ""
+    }
+  ],
+  "item": [
+    {
+      "name": "Auth",
+      "item": [
+        {
+          "name": "Login (Admin)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "var jsonData = pm.response.json();",
+                  "if (jsonData.data && jsonData.data.token) {",
+                  "    pm.collectionVariables.set('token', jsonData.data.token);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"admin@cdc.com\",\n  \"password\": \"password123\",\n  \"role\": \"admin\"\n}"
+            },
+            "url": "{{baseUrl}}/auth/login"
+          }
+        },
+        {
+          "name": "Login (Doctor)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "var jsonData = pm.response.json();",
+                  "if (jsonData.data && jsonData.data.token) {",
+                  "    pm.collectionVariables.set('token', jsonData.data.token);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"ahmed.hassan@cdc.com\",\n  \"password\": \"password123\",\n  \"role\": \"doctor\"\n}"
+            },
+            "url": "{{baseUrl}}/auth/login"
+          }
+        },
+        {
+          "name": "Login (Staff)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "var jsonData = pm.response.json();",
+                  "if (jsonData.data && jsonData.data.token) {",
+                  "    pm.collectionVariables.set('token', jsonData.data.token);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"staff@cdc.com\",\n  \"password\": \"password123\",\n  \"role\": \"staff\"\n}"
+            },
+            "url": "{{baseUrl}}/auth/login"
+          }
+        },
+        {
+          "name": "Login (Patient)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "var jsonData = pm.response.json();",
+                  "if (jsonData.data && jsonData.data.token) {",
+                  "    pm.collectionVariables.set('token', jsonData.data.token);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"patient@cdc.com\",\n  \"password\": \"password123\",\n  \"role\": \"patient\"\n}"
+            },
+            "url": "{{baseUrl}}/auth/login"
+          }
+        },
+        {
+          "name": "Get Me",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": "{{baseUrl}}/auth/me"
+          }
+        },
+        {
+          "name": "Change Password",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"currentPassword\": \"password123\",\n  \"newPassword\": \"newpassword456\"\n}"
+            },
+            "url": "{{baseUrl}}/auth/change-password"
+          }
+        },
+        {
+          "name": "Logout",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": "{{baseUrl}}/auth/logout"
+          }
+        },
+        {
+          "name": "Forgot Password",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"admin@cdc.com\"\n}"
+            },
+            "url": "{{baseUrl}}/auth/forgot-password"
+          }
+        },
+        {
+          "name": "Reset Password",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"token\": \"paste-reset-token-here\",\n  \"password\": \"newpassword123\"\n}"
+            },
+            "url": "{{baseUrl}}/auth/reset-password"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Dashboard",
+      "description": "Role-specific dashboard statistics",
+      "item": [
+        {
+          "name": "Get Dashboard (Current Role)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": "{{baseUrl}}/dashboard",
+            "description": "Returns role-specific dashboard statistics based on the authenticated user's role (admin, doctor, staff, lab, or patient)."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Users (Admin Only)",
+      "item": [
+        {
+          "name": "List All Users",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": "{{baseUrl}}/users"
+          }
+        },
+        {
+          "name": "List Users by Role",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/users?role=doctor",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "users"
+              ],
+              "query": [
+                {
+                  "key": "role",
+                  "value": "doctor"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get User by ID",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": "{{baseUrl}}/users/1"
+          }
+        },
+        {
+          "name": "Create Doctor",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"firstName\": \"Sarah\",\n  \"lastName\": \"Johnson\",\n  \"email\": \"sarah.johnson@cdc.com\",\n  \"phone\": \"+254 722 123 456\",\n  \"licenseNumber\": \"LIC-2024-54321\",\n  \"specialty\": \"Cardiology\",\n  \"subSpecialty\": \"Interventional Cardiology\",\n  \"department\": \"Cardiology\",\n  \"qualification\": \"MD, FACC\",\n  \"medicalSchool\": \"Harvard Medical School\",\n  \"yearsExperience\": 12,\n  \"employmentType\": \"Full-time\",\n  \"startDate\": \"2024-01-15\",\n  \"address\": \"123 Medical Center Drive\",\n  \"city\": \"Nairobi\"\n}"
+            },
+            "url": "{{baseUrl}}/users/doctors"
+          }
+        },
+        {
+          "name": "Create Staff",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"firstName\": \"Mary\",\n  \"lastName\": \"Wanjiku\",\n  \"email\": \"mary.wanjiku@cdc.com\",\n  \"phone\": \"+254 733 456 789\",\n  \"position\": \"Nurse\",\n  \"department\": \"Emergency\",\n  \"shift\": \"Morning\",\n  \"startDate\": \"2024-02-01\"\n}"
+            },
+            "url": "{{baseUrl}}/users/staff"
+          }
+        },
+        {
+          "name": "Create Lab Tech",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"firstName\": \"Peter\",\n  \"lastName\": \"Ochieng\",\n  \"email\": \"peter.ochieng@cdc.com\",\n  \"phone\": \"+254 744 567 890\",\n  \"specialization\": \"Hematology\",\n  \"certificationNumber\": \"CERT-2024-001\",\n  \"qualification\": \"BSc Medical Laboratory Science\",\n  \"institution\": \"University of Nairobi\",\n  \"yearsExperience\": 5,\n  \"shift\": \"Afternoon\",\n  \"startDate\": \"2024-03-01\"\n}"
+            },
+            "url": "{{baseUrl}}/users/lab-techs"
+          }
+        },
+        {
+          "name": "Update User",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"firstName\": \"Ahmed\",\n  \"lastName\": \"Hassan Updated\",\n  \"phone\": \"+254 712 999 999\",\n  \"specialty\": \"Diabetology\"\n}"
+            },
+            "url": "{{baseUrl}}/users/1"
+          }
+        },
+        {
+          "name": "Toggle User Status (Deactivate)",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"isActive\": false\n}"
+            },
+            "url": "{{baseUrl}}/users/1/status"
+          }
+        },
+        {
+          "name": "Toggle User Status (Activate)",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"isActive\": true\n}"
+            },
+            "url": "{{baseUrl}}/users/1/status"
+          }
+        },
+        {
+          "name": "Delete User",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": "{{baseUrl}}/users/5"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Patients",
+      "item": [
+        {
+          "name": "List Patients",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": "{{baseUrl}}/patients"
+          }
+        },
+        {
+          "name": "Get Patient by UHID",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": "{{baseUrl}}/patients/CDC001"
+          }
+        },
+        {
+          "name": "Create Patient",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"firstName\": \"Jane\",\n  \"lastName\": \"Smith\",\n  \"email\": \"jane.smith@email.com\",\n  \"phone\": \"+254 755 123 456\",\n  \"dateOfBirth\": \"1985-06-15\",\n  \"gender\": \"Female\",\n  \"address\": \"456 Health Street\",\n  \"diabetesType\": \"Type 2\",\n  \"diagnosisDate\": \"2020-03-20\",\n  \"primaryDoctorId\": 1\n}"
+            },
+            "url": "{{baseUrl}}/patients"
+          }
+        },
+        {
+          "name": "Update Patient",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"phone\": \"+254 755 999 999\",\n  \"address\": \"789 New Address\"\n}"
+            },
+            "url": "{{baseUrl}}/patients/CDC001"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Queue",
+      "item": [
+        {
+          "name": "Get Today's Queue",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": "{{baseUrl}}/queue"
+          }
+        },
+        {
+          "name": "Add to Queue",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"uhid\": \"CDC001\",\n  \"visitType\": \"Follow-up\",\n  \"priority\": \"Normal\",\n  \"notes\": \"Regular diabetes checkup\"\n}"
+            },
+            "url": "{{baseUrl}}/queue"
+          }
+        },
+        {
+          "name": "Update Queue Status",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"In Progress\"\n}"
+            },
+            "url": "{{baseUrl}}/queue/1/status"
+          }
+        },
+        {
+          "name": "Call Next Patient",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": "{{baseUrl}}/queue/call-next"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Blood Sugar",
+      "item": [
+        {
+          "name": "Get Patient Readings",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/blood-sugar?uhid=CDC001",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "blood-sugar"
+              ],
+              "query": [
+                {
+                  "key": "uhid",
+                  "value": "CDC001"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Record Blood Sugar",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"uhid\": \"CDC001\",\n  \"date\": \"2026-02-14\",\n  \"timeSlot\": \"Fasting\",\n  \"value\": 120,\n  \"notes\": \"Before breakfast\"\n}"
+            },
+            "url": "{{baseUrl}}/blood-sugar"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Prescriptions",
+      "item": [
+        {
+          "name": "Get Patient Prescriptions",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/prescriptions?uhid=CDC001",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "prescriptions"
+              ],
+              "query": [
+                {
+                  "key": "uhid",
+                  "value": "CDC001"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Create Prescription",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"uhid\": \"CDC001\",\n  \"medications\": [\n    {\n      \"name\": \"Metformin\",\n      \"dosage\": \"500mg\",\n      \"frequency\": \"Twice daily\",\n      \"duration\": \"30 days\",\n      \"instructions\": \"Take with meals\"\n    }\n  ],\n  \"notes\": \"Continue current treatment plan\"\n}"
+            },
+            "url": "{{baseUrl}}/prescriptions"
+          }
+        },
+        {
+          "name": "Update Prescription Status",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"Dispensed\"\n}"
+            },
+            "url": "{{baseUrl}}/prescriptions/1/status"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Lab Tests",
+      "item": [
+        {
+          "name": "Get Patient Lab Tests",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/lab-tests?uhid=CDC001",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "lab-tests"
+              ],
+              "query": [
+                {
+                  "key": "uhid",
+                  "value": "CDC001"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Order Lab Test",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"uhid\": \"CDC001\",\n  \"testType\": \"HbA1c\",\n  \"priority\": \"Normal\",\n  \"notes\": \"Quarterly diabetes monitoring\"\n}"
+            },
+            "url": "{{baseUrl}}/lab-tests"
+          }
+        },
+        {
+          "name": "Enter Lab Results",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"results\": {\n    \"value\": \"6.8\",\n    \"unit\": \"%\",\n    \"referenceRange\": \"4.0-5.6%\"\n  },\n  \"notes\": \"Slightly elevated\"\n}"
+            },
+            "url": "{{baseUrl}}/lab-tests/1/results"
+          }
+        },
+        {
+          "name": "Get Pending Lab Tests",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": "{{baseUrl}}/lab-tests/pending"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Documents",
+      "item": [
+        {
+          "name": "List Patient Documents",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/documents?uhid=CDC001",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "documents"
+              ],
+              "query": [
+                {
+                  "key": "uhid",
+                  "value": "CDC001"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Upload Document",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "file",
+                  "type": "file",
+                  "src": ""
+                },
+                {
+                  "key": "uhid",
+                  "value": "CDC001",
+                  "type": "text"
+                },
+                {
+                  "key": "documentCategory",
+                  "value": "Lab Results",
+                  "type": "text"
+                }
+              ]
+            },
+            "url": "{{baseUrl}}/documents"
+          }
+        },
+        {
+          "name": "Update Document Status",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"Reviewed\"\n}"
+            },
+            "url": "{{baseUrl}}/documents/1/status"
+          }
+        },
+        {
+          "name": "Delete Document",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": "{{baseUrl}}/documents/1"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Treatment Plans",
+      "item": [
+        {
+          "name": "Get Patient Treatment Plans",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/treatment-plans?uhid=CDC001",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "treatment-plans"
+              ],
+              "query": [
+                {
+                  "key": "uhid",
+                  "value": "CDC001"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Create Treatment Plan",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"uhid\": \"CDC001\",\n  \"diagnosis\": \"Type 2 Diabetes Mellitus\",\n  \"goals\": [\"Maintain HbA1c below 7%\", \"Weight management\"],\n  \"medications\": [\"Metformin 500mg twice daily\"],\n  \"lifestyle\": [\"30 min daily exercise\", \"Low carb diet\"],\n  \"monitoring\": [\"Weekly blood sugar checks\", \"Quarterly HbA1c\"],\n  \"followUpDate\": \"2026-03-14\",\n  \"notes\": \"Initial treatment plan\"\n}"
+            },
+            "url": "{{baseUrl}}/treatment-plans"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Physical Exams",
+      "item": [
+        {
+          "name": "Get Patient Physical Exams",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/physical-exams?uhid=CDC001",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "physical-exams"
+              ],
+              "query": [
+                {
+                  "key": "uhid",
+                  "value": "CDC001"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Create Physical Exam",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"uhid\": \"CDC001\",\n  \"vitals\": {\n    \"bloodPressure\": \"120/80\",\n    \"heartRate\": 72,\n    \"temperature\": 36.6,\n    \"weight\": 75,\n    \"height\": 170\n  },\n  \"generalAppearance\": \"Alert and oriented\",\n  \"cardiovascular\": \"Normal heart sounds\",\n  \"respiratory\": \"Clear lung fields\",\n  \"notes\": \"Routine examination\"\n}"
+            },
+            "url": "{{baseUrl}}/physical-exams"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Assessments",
+      "item": [
+        {
+          "name": "Get Patient Assessments",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/assessments?uhid=CDC001",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "assessments"
+              ],
+              "query": [
+                {
+                  "key": "uhid",
+                  "value": "CDC001"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Create Assessment",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"uhid\": \"CDC001\",\n  \"chiefComplaint\": \"Routine diabetes follow-up\",\n  \"historyOfPresentIllness\": \"Patient reports good compliance with medications\",\n  \"assessment\": \"Type 2 DM, well controlled\",\n  \"plan\": \"Continue current medications, follow up in 3 months\"\n}"
+            },
+            "url": "{{baseUrl}}/assessments"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Consultation Notes",
+      "item": [
+        {
+          "name": "Get Patient Consultation Notes",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/consultation-notes?uhid=CDC001",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "consultation-notes"
+              ],
+              "query": [
+                {
+                  "key": "uhid",
+                  "value": "CDC001"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Create Consultation Note",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"uhid\": \"CDC001\",\n  \"subjective\": \"Patient reports feeling well, no hypoglycemic episodes\",\n  \"objective\": \"BP 120/80, HR 72, Weight 75kg\",\n  \"assessment\": \"Type 2 DM, controlled\",\n  \"plan\": \"Continue metformin, recheck HbA1c in 3 months\"\n}"
+            },
+            "url": "{{baseUrl}}/consultation-notes"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Appointments",
+      "item": [
+        {
+          "name": "Get Patient Appointments",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/appointments?uhid=CDC001",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "appointments"
+              ],
+              "query": [
+                {
+                  "key": "uhid",
+                  "value": "CDC001"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Create Appointment",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"uhid\": \"CDC001\",\n  \"doctorId\": 1,\n  \"date\": \"2026-03-01\",\n  \"time\": \"10:00\",\n  \"type\": \"Follow-up\",\n  \"notes\": \"Quarterly diabetes checkup\"\n}"
+            },
+            "url": "{{baseUrl}}/appointments"
+          }
+        },
+        {
+          "name": "Update Appointment Status",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"confirmed\"\n}"
+            },
+            "url": "{{baseUrl}}/appointments/1/status"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Reports",
+      "item": [
+        {
+          "name": "Get Report Types",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": "{{baseUrl}}/reports/types"
+          }
+        },
+        {
+          "name": "Get Glycemic Report",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/reports/glycemic?uhid=CDC001&period=30days",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "reports",
+                "glycemic"
+              ],
+              "query": [
+                {
+                  "key": "uhid",
+                  "value": "CDC001"
+                },
+                {
+                  "key": "period",
+                  "value": "30days"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get Patient Summary",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/reports/patient-summary?uhid=CDC001",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "reports",
+                "patient-summary"
+              ],
+              "query": [
+                {
+                  "key": "uhid",
+                  "value": "CDC001"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get Medication Adherence",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/reports/medication-adherence?uhid=CDC001",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "reports",
+                "medication-adherence"
+              ],
+              "query": [
+                {
+                  "key": "uhid",
+                  "value": "CDC001"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get High Risk Patients",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": "{{baseUrl}}/reports/high-risk"
+          }
+        },
+        {
+          "name": "Get Clinic Overview",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": "{{baseUrl}}/reports/clinic-overview"
+          }
+        }
+      ]
+    }
+  ]
+}
