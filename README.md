@@ -1,6 +1,6 @@
 # CDC HMS API
 
-Backend REST API for the **Centre for Diabetes Care (CDC) Hospital Management System**. Built with Node.js, Express 5, Sequelize ORM, and MySQL.
+Backend REST API for the **Comprehensive Diabetes Care (CDC) Hospital Management System**. Built with Node.js, Express 5, Sequelize ORM, and MySQL.
 
 ---
 
