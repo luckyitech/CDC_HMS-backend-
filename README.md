@@ -176,3 +176,153 @@ cdc-hms-api/
 | `staff` | Patient registration, queue management, triage |
 | `lab` | Lab test results, critical alerts |
 | `patient` | Own records, blood sugar logs, appointments |
+
+---
+
+## Production Deployment
+
+This guide documents how the CDC HMS API is deployed on the Host Africa VPS (Ubuntu 24.04, IP `102.68.87.18`).
+
+### Server Requirements
+
+- Ubuntu 22.04 / 24.04
+- Node.js 20+ (installed via NodeSource)
+- MySQL 8+
+- PM2 (process manager)
+- Nginx (reverse proxy)
+
+### 1. Install Node.js 20
+
+```bash
+curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+apt-get install -y nodejs
+node -v   # should print v20.x.x
+```
+
+### 2. Clone the Repository
+
+```bash
+mkdir -p /var/www/cdc
+cd /var/www/cdc
+git clone https://github.com/luckyitech/CDC_HMS-backend-.git api
+cd api
+```
+
+### 3. Install Dependencies
+
+```bash
+npm install --omit=dev
+```
+
+### 4. Create the `.env` File
+
+```bash
+nano .env
+```
+
+Paste and fill in your values:
+
+```env
+PORT=3001
+DB_HOST=127.0.0.1
+DB_PORT=3306
+DB_NAME=cdc_hms
+DB_USER=your_db_user
+DB_PASSWORD=your_db_password
+JWT_SECRET=your_long_random_secret_here
+JWT_EXPIRES_IN=7d
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=587
+SMTP_USER=your_email@gmail.com
+SMTP_PASSWORD=your_app_password
+RESET_TOKEN_EXPIRES_IN=3600000
+```
+
+> **Note:** Use `DB_HOST=127.0.0.1` not `localhost` — MySQL on Linux listens on IPv4, and `localhost` resolves to IPv6 (`::1`) which will be refused.
+
+### 5. Create the Database
+
+```sql
+CREATE DATABASE cdc_hms CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+CREATE USER 'cdc_user'@'localhost' IDENTIFIED BY 'your_password';
+GRANT ALL PRIVILEGES ON cdc_hms.* TO 'cdc_user'@'localhost';
+FLUSH PRIVILEGES;
+```
+
+### 6. Seed Initial Users (first deploy only)
+
+Tables are created automatically by Sequelize on first start. After the first `pm2 start`, run:
+
+```bash
+node seeders/seed.js
+```
+
+This creates the default admin, doctor, staff, lab tech, and patient accounts.
+
+### 7. Start with PM2
+
+```bash
+npm install -g pm2
+pm2 start server.js --name cdc-api
+pm2 save
+pm2 startup   # follow the printed command to enable auto-start on reboot
+```
+
+### 8. Configure Nginx
+
+```bash
+nano /etc/nginx/sites-available/cdiabetescentre
+```
+
+Paste:
+
+```nginx
+server {
+    listen 80;
+    server_name api.cdiabetescentre.com;
+
+    location / {
+        proxy_pass http://127.0.0.1:3001;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    }
+
+    # SSE endpoint — disable buffering for real-time events
+    location /api/sse {
+        proxy_pass http://127.0.0.1:3001;
+        proxy_buffering off;
+        proxy_cache off;
+        proxy_read_timeout 86400s;
+        proxy_set_header Connection '';
+        proxy_http_version 1.1;
+    }
+}
+```
+
+Enable and reload:
+
+```bash
+ln -s /etc/nginx/sites-available/cdiabetescentre /etc/nginx/sites-enabled/
+nginx -t
+systemctl reload nginx
+```
+
+### 9. DNS
+
+On your domain registrar (one.com), add an A record:
+
+| Type | Name | Value |
+|------|------|-------|
+| A | api | 102.68.87.18 |
+
+### Updating the Backend
+
+Whenever you push new code:
+
+```bash
+cd /var/www/cdc/api
+git pull
+pm2 restart cdc-api --update-env
+```
