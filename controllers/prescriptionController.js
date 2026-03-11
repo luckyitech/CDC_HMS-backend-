@@ -3,7 +3,7 @@ const { success, error } = require('../utils/response');
 const db = require('../models');
 const { generatePrescriptionNumber } = require('../utils/generateId');
 
-const { Prescription, Patient, User } = db;
+const { Prescription, Patient, User, DoctorProfile } = db;
 
 // ====================================
 // HELPER FUNCTIONS
@@ -32,6 +32,7 @@ const formatPrescription = (prescription) => {
     doctorName: p.doctor
       ? `Dr. ${p.doctor.firstName} ${p.doctor.lastName}`
       : null,
+    doctorLicenseNumber: p.doctor?.DoctorProfile?.licenseNumber || null,
     date: p.date,
     diagnosis: p.diagnosis,
     status: p.status,
@@ -57,8 +58,9 @@ const prescriptionIncludes = [
   },
   {
     model: User,
-    as: 'doctor',  // This matches the alias in the model relationship
+    as: 'doctor',
     attributes: ['firstName', 'lastName'],
+    include: [{ model: DoctorProfile, attributes: ['licenseNumber'] }],
   },
 ];
 
