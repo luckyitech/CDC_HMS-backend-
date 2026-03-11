@@ -8,7 +8,7 @@ const app = express();
 
 // CORS — MUST be first to handle preflight OPTIONS requests
 app.use(cors({
-  origin: ['http://localhost:5173', 'http://localhost:5174'], // Vite default ports
+  origin: ['http://localhost:5173', 'http://localhost:5174', 'https://cdiabetescentre.com', 'https://www.cdiabetescentre.com'],
   credentials: true,
 }));
 
