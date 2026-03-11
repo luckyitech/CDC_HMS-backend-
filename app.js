@@ -25,8 +25,9 @@ app.use('/api/sse', require('./routes/sse'));
 // Applied to ALL endpoints: 100 requests per 15 minutes per IP
 app.use('/api/', generalLimiter);
 
-// Parse JSON bodies
-app.use(express.json());
+// Parse JSON bodies (increased limit for physical exam base64 images)
+app.use(express.json({ limit: '20mb' }));
+app.use(express.urlencoded({ extended: true, limit: '20mb' }));
 
 // Health check
 app.get('/api/health', (req, res) => {
