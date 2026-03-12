@@ -26,7 +26,7 @@ router.post('/forgot-password', strictLimiter, [
 // Rate limit: 3 attempts per hour (prevents token guessing)
 router.post('/reset-password', strictLimiter, [
   body('token').notEmpty().withMessage('Token is required'),
-  body('password').isLength({ min: 6 }).withMessage('Password must be at least 6 characters'),
+  body('password').isStrongPassword({ minLength: 8, minLowercase: 1, minUppercase: 1, minNumbers: 1, minSymbols: 1 }).withMessage('Password must be at least 8 characters and include an uppercase letter, a number, and a special character'),
   validate,
 ], authController.resetPassword);
 
