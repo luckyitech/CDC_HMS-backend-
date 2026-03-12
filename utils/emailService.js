@@ -177,7 +177,7 @@ const sendStaffWelcomeEmail = async ({ to, name, role, tempPassword }) => {
 
     ${primaryButton('Log In to CDC HMS', `${FRONTEND_URL}${loginPath}`)}
 
-    ${infoBanner('<strong>Important:</strong> This is a temporary password. You will be required to change it after your first login. Do not share this password with anyone.')}
+    ${infoBanner(`<strong>Important:</strong> This is a temporary password. To change it, go to the login page and click <strong>"Forgot Password"</strong>, then follow the instructions sent to this email address. Do not share this password with anyone.`)}
   `;
 
   await sendEmail(to, `Welcome to CDC HMS — Your ${roleLabel} Account`, baseTemplate(body));
@@ -212,7 +212,7 @@ const sendPatientWelcomeEmail = async ({ to, name, uhid, tempPassword }) => {
       <li>Access your lab results and medical documents</li>
     </ul>
 
-    ${infoBanner('<strong>Important:</strong> This is a temporary password. Please change it after your first login to keep your account secure.')}
+    ${infoBanner('<strong>Important:</strong> This is a temporary password. To change it, go to the patient portal login page and click <strong>"Forgot Password"</strong>, then follow the instructions sent to this email address. Keep your account secure — do not share this password with anyone.')}
   `;
 
   await sendEmail(to, 'Welcome to CDC HMS — Your Patient Portal Account', baseTemplate(body));
