@@ -6,6 +6,10 @@ const errorHandler = require('./middleware/errorHandler');
 
 const app = express();
 
+// Trust nginx reverse proxy — required for express-rate-limit to correctly
+// identify client IPs from the X-Forwarded-For header
+app.set('trust proxy', 1);
+
 // CORS — MUST be first to handle preflight OPTIONS requests
 app.use(cors({
   origin: ['http://localhost:5173', 'http://localhost:5174', 'https://cdiabetescentre.com', 'https://www.cdiabetescentre.com'],
