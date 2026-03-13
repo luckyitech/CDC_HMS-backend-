@@ -20,7 +20,7 @@ const Patient = defineModel('Patient', {
     type: DataTypes.INTEGER,
   },
   gender: {
-    type: DataTypes.ENUM('Male', 'Female'),
+    type: DataTypes.ENUM('Male', 'Female', 'Other'),
   },
   phone: {
     type: DataTypes.STRING,
