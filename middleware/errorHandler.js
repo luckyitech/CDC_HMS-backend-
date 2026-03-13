@@ -20,7 +20,11 @@ const errorHandler = (err, req, res, next) => {
   const statusCode = err.statusCode || 500;
 
   // Only log stack traces for unexpected 5xx errors
-  if (statusCode >= 500) console.error(err.stack);
+  if (statusCode >= 500) {
+    console.error(err.stack);
+    // Log the underlying DB error if present (Sequelize wraps MySQL errors in err.parent)
+    if (err.parent) console.error('DB error:', err.parent.message, '| SQL:', err.sql || err.parent.sql);
+  }
 
   res.status(statusCode).json({
     success: false,
