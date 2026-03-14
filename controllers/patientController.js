@@ -167,7 +167,7 @@ const list = async (req, res) => {
   const where   = {};
   const include = [{ ...doctorInclude }]; // default: left join, no filter
 
-  // Full-text search across name, uhid, phone, email (OR)
+  // Full-text search across name, uhid, phone, email, idNumber (OR)
   if (search) {
     where[Op.or] = [
       { firstName: { [Op.like]: `%${search}%` } },
@@ -175,6 +175,7 @@ const list = async (req, res) => {
       { uhid:      { [Op.like]: `%${search}%` } },
       { phone:     { [Op.like]: `%${search}%` } },
       { email:     { [Op.like]: `%${search}%` } },
+      { idNumber:  { [Op.like]: `%${search}%` } },
     ];
   }
 
