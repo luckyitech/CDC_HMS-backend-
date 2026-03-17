@@ -145,9 +145,10 @@ const update = async (req, res) => {
   const { assignedDoctorName, ...updates } = req.body;
 
   // Auto-set timestamps on status transitions
-  if (updates.status === 'With Doctor')     updates.consultationStartTime = new Date();
-  if (updates.status === 'Pending Billing') updates.consultationEndTime   = new Date();
-  if (updates.status === 'Completed')       updates.consultationEndTime   = updates.consultationEndTime || new Date();
+  // consultationStartTime is NOT set here — it is set explicitly by the doctor
+  // when they click "Start Consultation" on the frontend (via startConsultation in QueueContext)
+  if (updates.status === 'Pending Billing') updates.consultationEndTime = new Date();
+  if (updates.status === 'Completed')       updates.consultationEndTime = updates.consultationEndTime || new Date();
 
   await item.update(updates);
 
@@ -200,7 +201,7 @@ const callNext = async (req, res) => {
 
   if (!next) return error(res, 'No patients waiting', 404);
 
-  await next.update({ status: 'With Doctor', consultationStartTime: new Date() });
+  await next.update({ status: 'With Doctor' });
 
   // Re-fetch after update
   const updated = await Queue.findByPk(next.id, { include: queueIncludes });

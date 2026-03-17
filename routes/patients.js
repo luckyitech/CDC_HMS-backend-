@@ -48,8 +48,8 @@ router.delete('/:uhid', authenticate, authorize('admin'), findPatient, patientCo
 router.post('/:uhid/vitals', authenticate, authorize('staff'), findPatient, [
   body('bp').notEmpty().withMessage('Blood pressure is required'),
   body('heartRate').isInt().withMessage('Heart rate must be an integer'),
-  body('weight').isFloat().withMessage('Weight is required'),
-  body('height').isFloat().withMessage('Height is required'),
+  body('weight').optional({ nullable: true }).isFloat().withMessage('Weight must be a number'),
+  body('height').optional({ nullable: true }).isFloat().withMessage('Height must be a number'),
   validate,
 ], patientController.recordVitals);
 
