@@ -273,20 +273,6 @@ const sendAppointmentConfirmationEmail = async ({ to, patientName, doctorName, s
       ${reason ? credentialRow('Reason', reason) : ''}
     </table>
 
-    // <table width="100%" cellpadding="0" cellspacing="0" style="margin-top:24px;">
-    //   <tr>
-    //     <td style="background-color:#F0FDF4;border-left:4px solid #22C55E;border-radius:0 6px 6px 0;padding:12px 16px;">
-    //       <p style="margin:0;font-size:13px;color:#166534;"><strong>What to bring:</strong></p>
-    //       <ul style="margin:6px 0 0 0;padding-left:16px;font-size:13px;color:#166534;line-height:1.8;">
-    //         <li>National ID or Passport</li>
-    //         <li>Any previous medical records or test results</li>
-    //         <li>Current medication list</li>
-    //         <li>Insurance card (if applicable)</li>
-    //       </ul>
-    //     </td>
-    //   </tr>
-    // </table>
-
     ${infoBanner('Please arrive 10 minutes before your scheduled time. To cancel or reschedule, log in to the patient portal.')}
   `;
 
