@@ -266,7 +266,9 @@ const list = async (req, res) => {
   ];
 
   // Fetch physical examinations with count
+  // Exclude the heavy 'data' column (base64 images) from list queries — only fetch it in getOne
   const { count, rows } = await PhysicalExamination.findAndCountAll({
+    attributes: { exclude: ['data'] },
     where,
     include: includes,
     order: [['date', 'DESC'], ['time', 'DESC']],  // Newest first
