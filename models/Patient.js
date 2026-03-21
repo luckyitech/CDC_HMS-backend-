@@ -40,7 +40,7 @@ const Patient = defineModel('Patient', {
 
   // --- Medical info ---
   diabetesType: {
-    type: DataTypes.ENUM('Type 1', 'Type 2', 'Pre-diabetes', 'Gestational'),
+    type: DataTypes.STRING,
   },
   diagnosisDate: {
     type: DataTypes.DATE,
