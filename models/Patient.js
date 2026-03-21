@@ -39,7 +39,7 @@ const Patient = defineModel('Patient', {
   },
 
   // --- Medical info ---
-  diabetesType: {
+  diagnosis: {
     type: DataTypes.STRING,
   },
   diagnosisDate: {

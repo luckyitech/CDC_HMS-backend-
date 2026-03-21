@@ -145,7 +145,7 @@ async function seed() {
         email: 'patient@cdc.com',
         address: 'Nairobi, Kenya',
         dateOfBirth: new Date('1980-05-15'),
-        diabetesType: 'Type 2',
+        diagnosis: 'Type 2',
         diagnosisDate: new Date('2018-01-10'),
         hba1c: '7.2%',
         status: 'Active',

@@ -59,7 +59,7 @@ const formatPatient = (patient, latestVital) => {
     address:          p.address,
     dateOfBirth:      p.dateOfBirth,
     idNumber:         p.idNumber,
-    diabetesType:     p.diabetesType,
+    diagnosis:        p.diagnosis,
     diagnosisDate:    p.diagnosisDate,
     hba1c:            p.hba1c,
     primaryDoctor:    p.primaryDoctor
@@ -283,8 +283,8 @@ const stats = async (req, res) => {
       Patient.count({ where: { riskLevel:   'High'     } }),
       Patient.count({ where: { riskLevel:   'Medium'   } }),
       Patient.count({ where: { riskLevel:   'Low'      } }),
-      Patient.count({ where: { diabetesType: 'Type 1'  } }),
-      Patient.count({ where: { diabetesType: 'Type 2'  } }),
+      Patient.count({ where: { diagnosis: 'Type 1'  } }),
+      Patient.count({ where: { diagnosis: 'Type 2'  } }),
     ]);
 
   return success(res, { total, active, inactive, highRisk, mediumRisk, lowRisk, type1, type2 });

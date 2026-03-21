@@ -40,11 +40,11 @@ const buildUserResponse = async (user) => {
       Object.assign(userData, fields);
     }
   } else if (user.role === 'patient') {
-    // patient — attach uhid and diabetesType from the Patient table
+    // patient — attach uhid and diagnosis from the Patient table
     const patient = await Patient.findOne({ where: { userId: user.id } });
     if (patient) {
       userData.uhid = patient.uhid;
-      userData.diabetesType = patient.diabetesType;
+      userData.diagnosis = patient.diagnosis;
     }
   }
 

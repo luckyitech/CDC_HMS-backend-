@@ -283,7 +283,7 @@ const getPatientStats = async (userId) => {
     patient: {
       uhid: patient.uhid,
       name: formatPatientName(patient),
-      diabetesType: patient.diabetesType,
+      diagnosis: patient.diagnosis,
       hba1c: patient.hba1c,
       hba1cStatus: classifyHbA1c(patient.hba1c),
       primaryDoctor: formatDoctorName(patient.primaryDoctor),
