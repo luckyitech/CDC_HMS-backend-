@@ -20,8 +20,8 @@ sequelize.authenticate()
   .then(async () => {
     console.log('MySQL connection established successfully.');
 
-    // Sync models — alter: true adds missing columns and fixes schema
-    return sequelize.sync({ alter: true });
+    // Sync models — use alter: true only when schema changes are needed
+    return sequelize.sync({ alter: false });
   })
   .then(() => {
     console.log('Models synced.');
