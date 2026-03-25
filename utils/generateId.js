@@ -5,10 +5,10 @@ const { Op } = require('sequelize');
 const generateUHID = async (Patient) => {
   const patients = await Patient.findAll({
     where: { uhid: { [Op.regexp]: '^CDC[0-9]+$' } },
-    order: [['uhid', 'DESC']],
   });
   if (!patients.length) return 'CDC001';
   const nums = patients.map(p => parseInt(p.uhid.replace('CDC', ''))).filter(n => !isNaN(n));
+  if (!nums.length) return 'CDC001';
   const max = Math.max(...nums);
   return 'CDC' + String(max + 1).padStart(3, '0');
 };
