@@ -3,7 +3,7 @@ const { defineModel, DataTypes } = require('../utils/defineModel');
 const User = defineModel('User', {
   email: {
     type: DataTypes.STRING,
-    allowNull: false,
+    allowNull: true,
   },
   password: {
     type: DataTypes.STRING,
@@ -38,7 +38,7 @@ const User = defineModel('User', {
   },
 }, {
   indexes: [
-    { unique: true, fields: ['email'], name: 'unique_email' },
+    { unique: true, fields: ['email'], name: 'unique_email', where: { email: { [require('sequelize').Op.ne]: null } } },
   ],
 });
 
