@@ -1,10 +1,12 @@
 const { Op } = require('sequelize');
 
 // UHID: CDC001, CDC002, ...
-// Looks at the last patient by id to derive the next sequential number.
+// Finds the highest existing CDC-prefixed UHID to derive the next number.
 const generateUHID = async (Patient) => {
-  const last = await Patient.findOne({ order: [['id', 'DESC']] });
-  const num = last ? parseInt(last.uhid.replace('CDC', '')) + 1 : 1;
+  const last = await Patient.findOne({ order: [['uhid', 'DESC']] });
+  if (!last) return 'CDC001';
+  const match = last.uhid.match(/CDC(\d+)/);
+  const num = match ? parseInt(match[1]) + 1 : 1;
   return 'CDC' + String(num).padStart(3, '0');
 };
 
