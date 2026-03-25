@@ -1,13 +1,16 @@
 const { Op } = require('sequelize');
 
 // UHID: CDC001, CDC002, ...
-// Finds the highest existing CDC-prefixed UHID to derive the next number.
+// Finds the highest valid CDC-prefixed UHID to derive the next number.
 const generateUHID = async (Patient) => {
-  const last = await Patient.findOne({ order: [['uhid', 'DESC']] });
-  if (!last) return 'CDC001';
-  const match = last.uhid.match(/CDC(\d+)/);
-  const num = match ? parseInt(match[1]) + 1 : 1;
-  return 'CDC' + String(num).padStart(3, '0');
+  const patients = await Patient.findAll({
+    where: { uhid: { [Op.regexp]: '^CDC[0-9]+$' } },
+    order: [['uhid', 'DESC']],
+  });
+  if (!patients.length) return 'CDC001';
+  const nums = patients.map(p => parseInt(p.uhid.replace('CDC', ''))).filter(n => !isNaN(n));
+  const max = Math.max(...nums);
+  return 'CDC' + String(max + 1).padStart(3, '0');
 };
 
 // Generic number generator: PREFIX-YYYY-NNN
