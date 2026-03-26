@@ -63,6 +63,8 @@ const formatItem = (item, position) => {
     finalCharges:          q.finalCharges          || [],
     finalProcedures:       q.finalProcedures       || [],
     dischargeComment:      q.dischargeComment      || null,
+    addedBy:               q.addedBy               || null,
+    triagedBy:             q.triagedBy             || null,
     dischargedBy:          q.dischargedBy          || null,
   };
 };
@@ -85,7 +87,7 @@ const add = async (req, res) => {
   });
   if (existing) return error(res, 'Patient is already in the queue', 400);
 
-  const item = await Queue.create({ PatientId: patient.id, priority, reason });
+  const item = await Queue.create({ PatientId: patient.id, priority, reason, addedBy: req.user.name || 'Unknown' });
 
   // Re-fetch with joins for the response
   const full = await Queue.findByPk(item.id, { include: queueIncludes });
@@ -151,6 +153,7 @@ const update = async (req, res) => {
   // Auto-set timestamps on status transitions
   // consultationStartTime is NOT set here — it is set explicitly by the doctor
   // when they click "Start Consultation" on the frontend (via startConsultation in QueueContext)
+  if (updates.status === 'In Triage') updates.triagedBy = req.user.name || 'Unknown';
   if (updates.status === 'Pending Billing') updates.consultationEndTime = new Date();
   if (updates.status === 'Completed') {
     updates.consultationEndTime = updates.consultationEndTime || new Date();

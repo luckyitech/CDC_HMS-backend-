@@ -76,6 +76,7 @@ const formatPatient = (patient, latestVital) => {
     medications:      p.currentMedications,
     allergies:        p.allergies,
     comorbidities:    p.comorbidities,
+    registeredBy:     p.registeredBy || null,
   };
 };
 
@@ -135,7 +136,7 @@ const create = async (req, res) => {
       isActive: true,
     }, { transaction });
 
-    const patient = await Patient.create({ ...patientFields, uhid, UserId: user.id }, { transaction });
+    const patient = await Patient.create({ ...patientFields, uhid, UserId: user.id, registeredBy: req.user.name || 'Unknown' }, { transaction });
     await transaction.commit();
 
     const full = await Patient.findByPk(patient.id, { include: [doctorInclude] });

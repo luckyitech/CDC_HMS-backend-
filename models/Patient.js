@@ -90,6 +90,12 @@ const Patient = defineModel('Patient', {
   nextVisit: {
     type: DataTypes.DATE,
   },
+
+  // --- Accountability ---
+  registeredBy: {
+    type: DataTypes.STRING,
+    defaultValue: null,
+  },
 }, {
   indexes: [
     { unique: true, fields: ['uhid'], name: 'unique_uhid' },

@@ -38,6 +38,16 @@ const Queue = defineModel('Queue', {
     defaultValue: null,
   },
 
+  // --- Accountability ---
+  addedBy: {
+    type: DataTypes.STRING,
+    defaultValue: null,
+  },
+  triagedBy: {
+    type: DataTypes.STRING,
+    defaultValue: null,
+  },
+
   // Set by receptionist at discharge
   finalCharges: {
     type: DataTypes.JSON,
