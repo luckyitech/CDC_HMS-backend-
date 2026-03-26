@@ -9,7 +9,7 @@ const documentController = require('../controllers/documentController');
 // ------------------------------------
 // POST /api/documents — upload document
 // ------------------------------------
-router.post('/', authenticate, authorize('patient', 'doctor', 'staff'), upload.single('file'), [
+router.post('/', authenticate, authorize('patient', 'doctor', 'staff', 'admin'), upload.single('file'), [
   body('uhid').notEmpty().withMessage('Patient UHID is required'),
   body('documentCategory').notEmpty().withMessage('Document category is required'),
   validate,
@@ -18,12 +18,12 @@ router.post('/', authenticate, authorize('patient', 'doctor', 'staff'), upload.s
 // ------------------------------------
 // GET /api/documents — list documents
 // ------------------------------------
-router.get('/', authenticate, authorize('patient', 'doctor', 'staff'), documentController.list);
+router.get('/', authenticate, authorize('patient', 'doctor', 'staff', 'admin'), documentController.list);
 
 // ------------------------------------
 // PUT /api/documents/:id/status — review/archive document
 // ------------------------------------
-router.put('/:id/status', authenticate, authorize('doctor', 'staff'), [
+router.put('/:id/status', authenticate, authorize('doctor', 'staff', 'admin'), [
   body('status').isIn(['Pending Review', 'Reviewed', 'Archived']).withMessage('Invalid status'),
   validate,
 ], documentController.updateStatus);
@@ -31,11 +31,11 @@ router.put('/:id/status', authenticate, authorize('doctor', 'staff'), [
 // ------------------------------------
 // DELETE /api/documents/:id — delete document
 // ------------------------------------
-router.delete('/:id', authenticate, authorize('doctor', 'staff'), documentController.destroy);
+router.delete('/:id', authenticate, authorize('doctor', 'staff', 'admin'), documentController.destroy);
 
 // ------------------------------------
 // GET /api/documents/file/:filename — serve file (authenticated)
 // ------------------------------------
-router.get('/file/:filename', authenticate, authorize('patient', 'doctor', 'staff'), documentController.serveFile);
+router.get('/file/:filename', authenticate, authorize('patient', 'doctor', 'staff', 'admin'), documentController.serveFile);
 
 module.exports = router;
