@@ -66,6 +66,8 @@ const formatItem = (item, position) => {
     addedBy:               q.addedBy               || null,
     triagedBy:             q.triagedBy             || null,
     dischargedBy:          q.dischargedBy          || null,
+    removedBy:             q.removedBy             || null,
+    removalReason:         q.removalReason         || null,
   };
 };
 
@@ -119,7 +121,7 @@ const list = async (req, res) => {
   const items = await Queue.findAll({
     where: {
       [Op.or]: [
-        { status: { [Op.ne]: 'Completed' } },              // all active — any date
+        { status: { [Op.notIn]: ['Completed', 'Removed'] } },          // all active — any date
         { status: 'Completed', createdAt: { [Op.gte]: startOfToday } }, // today's discharged
       ],
     },
@@ -169,15 +171,20 @@ const update = async (req, res) => {
 };
 
 // ------------------------------------
-// DELETE /api/queue/:id — remove from queue
+// DELETE /api/queue/:id — soft-remove from queue (keeps record for audit)
 // ------------------------------------
 const remove = async (req, res) => {
   const item = await Queue.findByPk(req.params.id);
   if (!item) return error(res, 'Queue item not found', 404);
 
-  await item.destroy();
+  await item.update({
+    status: 'Removed',
+    removedBy: req.user.name || 'Unknown',
+    removalReason: req.body.reason || null,
+  });
+
   broadcast('queue_updated');
-  return success(res, { message: 'Removed from queue' });
+  return success(res, { message: 'Patient removed from queue' });
 };
 
 // ------------------------------------

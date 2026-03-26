@@ -5,7 +5,7 @@ const Queue = defineModel('Queue', {
   // assignedDoctorId — added by Queue.belongsTo(User, { as: 'assignedDoctor' }) — nullable
 
   status: {
-    type: DataTypes.ENUM('Waiting', 'In Triage', 'With Doctor', 'Pending Billing', 'Completed'),
+    type: DataTypes.ENUM('Waiting', 'In Triage', 'With Doctor', 'Pending Billing', 'Completed', 'Removed'),
     allowNull: false,
     defaultValue: 'Waiting',
   },
@@ -63,6 +63,16 @@ const Queue = defineModel('Queue', {
   },
   dischargedBy: {
     type: DataTypes.STRING,
+    defaultValue: null,
+  },
+
+  // Set when a patient is removed before discharge
+  removedBy: {
+    type: DataTypes.STRING,
+    defaultValue: null,
+  },
+  removalReason: {
+    type: DataTypes.TEXT,
     defaultValue: null,
   },
 });
