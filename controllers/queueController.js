@@ -60,6 +60,10 @@ const formatItem = (item, position) => {
     consultationEndTime:   q.consultationEndTime   || null,
     selectedCharges:       q.selectedCharges       || [],
     selectedProcedures:    q.selectedProcedures    || [],
+    finalCharges:          q.finalCharges          || [],
+    finalProcedures:       q.finalProcedures       || [],
+    dischargeComment:      q.dischargeComment      || null,
+    dischargedBy:          q.dischargedBy          || null,
   };
 };
 
@@ -148,7 +152,10 @@ const update = async (req, res) => {
   // consultationStartTime is NOT set here — it is set explicitly by the doctor
   // when they click "Start Consultation" on the frontend (via startConsultation in QueueContext)
   if (updates.status === 'Pending Billing') updates.consultationEndTime = new Date();
-  if (updates.status === 'Completed')       updates.consultationEndTime = updates.consultationEndTime || new Date();
+  if (updates.status === 'Completed') {
+    updates.consultationEndTime = updates.consultationEndTime || new Date();
+    updates.dischargedBy = req.user.name || 'Unknown';
+  }
 
   await item.update(updates);
 

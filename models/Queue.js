@@ -37,6 +37,24 @@ const Queue = defineModel('Queue', {
     type: DataTypes.JSON,
     defaultValue: null,
   },
+
+  // Set by receptionist at discharge
+  finalCharges: {
+    type: DataTypes.JSON,
+    defaultValue: null,
+  },
+  finalProcedures: {
+    type: DataTypes.JSON,
+    defaultValue: null,
+  },
+  dischargeComment: {
+    type: DataTypes.TEXT,
+    defaultValue: null,
+  },
+  dischargedBy: {
+    type: DataTypes.STRING,
+    defaultValue: null,
+  },
 });
 
 module.exports = Queue;

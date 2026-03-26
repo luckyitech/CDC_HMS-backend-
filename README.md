@@ -142,13 +142,15 @@ Full API reference is available in `CDC-HMS-API.postman_collection.json` — imp
 
 ```
 cdc-hms-api/
-├── config/          # Database connection
+├── config/          # Database connection + sequelize-cli config
 ├── controllers/     # Request handlers (business logic)
 ├── middleware/      # Auth, validation, rate limiting, file upload
+├── migrations/      # Sequelize migration files (schema versioning)
 ├── models/          # Sequelize models (18 tables)
 ├── routes/          # Express route definitions
 ├── utils/           # Helpers (response, email, SSE, formatters)
 ├── .env.example     # Environment variable template
+├── .sequelizerc     # sequelize-cli path config
 ├── app.js           # Express app setup
 └── server.js        # Entry point
 ```
@@ -326,3 +328,82 @@ cd /var/www/cdc/api
 git pull
 pm2 restart cdc-api --update-env
 ```
+
+If the update includes schema changes, run migrations after restarting:
+
+```bash
+npm run migrate
+```
+
+---
+
+## Database Migrations
+
+This project uses **Sequelize CLI migrations** to manage all database schema changes. Migrations are the only supported way to alter the database schema — `alter: true` is disabled in `server.js` and must never be re-enabled.
+
+### Why Migrations?
+
+- `alter: true` causes Sequelize to hang on startup while it analyzes foreign key constraints — the server never finishes booting.
+- Migrations give you a versioned, reproducible history of every schema change.
+- On production, you can apply changes safely with zero downtime by running `npm run migrate` after a `git pull`.
+
+### Run Pending Migrations
+
+```bash
+npm run migrate
+```
+
+This applies all migration files in `migrations/` that have not been run yet. Safe to run multiple times — already-applied migrations are skipped.
+
+### Undo the Last Migration
+
+```bash
+npm run migrate:undo
+```
+
+Reverts only the most recently applied migration. Run again to undo further.
+
+### How to Add a New Migration
+
+Whenever you add, rename, or remove a column or table in a Sequelize model, create a migration file:
+
+**1. Create the file** in `migrations/` with a timestamp prefix:
+
+```
+migrations/YYYYMMDDHHMMSS-describe-your-change.js
+```
+
+Example: `migrations/20260401120000-add-notes-to-appointments.js`
+
+**2. Write the migration:**
+
+```js
+'use strict';
+
+module.exports = {
+  async up(queryInterface, Sequelize) {
+    const tableDescription = await queryInterface.describeTable('Appointments');
+
+    if (!tableDescription.notes) {
+      await queryInterface.addColumn('Appointments', 'notes', {
+        type: Sequelize.TEXT,
+        defaultValue: null,
+      });
+    }
+  },
+
+  async down(queryInterface) {
+    await queryInterface.removeColumn('Appointments', 'notes');
+  },
+};
+```
+
+> **Always guard with `describeTable`** — this prevents errors if the column already exists (e.g. when re-running on a DB that was previously synced with `alter: true`).
+
+**3. Run the migration:**
+
+```bash
+npm run migrate
+```
+
+**4. Never use `alter: true`** — keep `server.js` set to `alter: false` permanently. All schema changes go through migration files only.
