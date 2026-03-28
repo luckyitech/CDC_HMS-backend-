@@ -56,6 +56,7 @@ app.use('/api/users',              require('./routes/users'));
 app.use('/api/documents',          require('./routes/documents'));
 app.use('/api/reports',            require('./routes/reports'));
 app.use('/api/dashboard',          require('./routes/dashboard'));
+app.use('/api/activity',           require('./routes/activity'));
 
 // Global error handler — must be last
 app.use(errorHandler);
