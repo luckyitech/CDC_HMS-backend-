@@ -49,15 +49,12 @@ const buildSummary = (events) => {
 
 const getRegistrationEvents = async (dateFilter, hasDateFilter) => {
   const patients = await Patient.findAll({
-    where: {
-      registeredBy: { [Op.ne]: null },
-      ...(hasDateFilter ? { createdAt: dateFilter } : {}),
-    },
+    where: hasDateFilter ? { createdAt: dateFilter } : {},
     attributes: ['uhid', 'firstName', 'lastName', 'registeredBy', 'createdAt'],
   });
 
   return patients.map(p =>
-    makeEvent('registered', 'Registered Patient', p.registeredBy, `${p.firstName} ${p.lastName}`, p.uhid, p.createdAt, null, 'staff')
+    makeEvent('registered', 'Registered Patient', p.registeredBy || 'Unknown', `${p.firstName} ${p.lastName}`, p.uhid, p.createdAt, null, 'staff')
   );
 };
 
