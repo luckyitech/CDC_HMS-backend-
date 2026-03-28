@@ -6,8 +6,8 @@ const { Queue, Patient, MedicalDocument, MedicalEquipment, EquipmentHistory, Use
 
 // ── Shared event shape ────────────────────────────────────────────────────────
 
-const makeEvent = (type, label, staff, patient, uhid, timestamp, detail = null) => ({
-  type, label, staff, patient, uhid, timestamp, detail,
+const makeEvent = (type, label, staff, patient, uhid, timestamp, detail = null, role = null) => ({
+  type, label, staff, patient, uhid, timestamp, detail, role,
 });
 
 // ── Summary builder ───────────────────────────────────────────────────────────
@@ -36,7 +36,7 @@ const buildSummary = (events) => {
   const map = {};
   for (const e of events) {
     if (!map[e.staff]) {
-      map[e.staff] = { staff: e.staff, total: 0, ...Object.fromEntries(Object.values(SUMMARY_KEYS).map(k => [k, 0])) };
+      map[e.staff] = { staff: e.staff, role: e.role, total: 0, ...Object.fromEntries(Object.values(SUMMARY_KEYS).map(k => [k, 0])) };
     }
     map[e.staff].total++;
     const key = SUMMARY_KEYS[e.type];
@@ -57,7 +57,7 @@ const getRegistrationEvents = async (dateFilter, hasDateFilter) => {
   });
 
   return patients.map(p =>
-    makeEvent('registered', 'Registered Patient', p.registeredBy, `${p.firstName} ${p.lastName}`, p.uhid, p.createdAt)
+    makeEvent('registered', 'Registered Patient', p.registeredBy, `${p.firstName} ${p.lastName}`, p.uhid, p.createdAt, null, 'staff')
   );
 };
 
@@ -86,12 +86,12 @@ const getQueueEvents = async (dateFilter, hasDateFilter) => {
     const { uhid } = q.Patient;
     const doctor   = q.assignedDoctor ? `Dr. ${q.assignedDoctor.firstName} ${q.assignedDoctor.lastName}` : null;
 
-    if (q.addedBy)            events.push(makeEvent('added_to_queue',       'Added to Queue',        q.addedBy,     patient, uhid, q.createdAt));
-    if (q.triagedBy)          events.push(makeEvent('triaged',               'Triaged Patient',       q.triagedBy,   patient, uhid, q.createdAt));
-    if (q.dischargedBy)       events.push(makeEvent('discharged',            'Discharged Patient',    q.dischargedBy,patient, uhid, q.consultationEndTime || q.updatedAt, q.dischargeComment));
-    if (q.removedBy)          events.push(makeEvent('removed',               'Removed from Queue',    q.removedBy,   patient, uhid, q.updatedAt, q.removalReason));
-    if (q.consultationStartTime && doctor) events.push(makeEvent('consultation_started',   'Started Consultation',   doctor, patient, uhid, q.consultationStartTime));
-    if (q.consultationEndTime   && doctor) events.push(makeEvent('consultation_completed', 'Completed Consultation', doctor, patient, uhid, q.consultationEndTime));
+    if (q.addedBy)            events.push(makeEvent('added_to_queue',       'Added to Queue',        q.addedBy,     patient, uhid, q.createdAt,                              null,                 'staff'));
+    if (q.triagedBy)          events.push(makeEvent('triaged',               'Triaged Patient',       q.triagedBy,   patient, uhid, q.createdAt,                              null,                 'staff'));
+    if (q.dischargedBy)       events.push(makeEvent('discharged',            'Discharged Patient',    q.dischargedBy,patient, uhid, q.consultationEndTime || q.updatedAt,      q.dischargeComment,   'staff'));
+    if (q.removedBy)          events.push(makeEvent('removed',               'Removed from Queue',    q.removedBy,   patient, uhid, q.updatedAt,                              q.removalReason,      'staff'));
+    if (q.consultationStartTime && doctor) events.push(makeEvent('consultation_started',   'Started Consultation',   doctor, patient, uhid, q.consultationStartTime, null, 'doctor'));
+    if (q.consultationEndTime   && doctor) events.push(makeEvent('consultation_completed', 'Completed Consultation', doctor, patient, uhid, q.consultationEndTime,   null, 'doctor'));
   }
   return events;
 };
@@ -110,7 +110,8 @@ const getDocumentEvents = async (dateFilter, hasDateFilter) => {
 
   return docs.map(d => {
     const staff = d.uploader ? `${d.uploader.firstName} ${d.uploader.lastName}` : 'Unknown';
-    return makeEvent('document_uploaded', 'Uploaded Document', staff, `${d.Patient.firstName} ${d.Patient.lastName}`, d.Patient.uhid, d.createdAt, d.documentCategory);
+    const role  = d.uploadedByRole ? d.uploadedByRole.toLowerCase() : 'staff';
+    return makeEvent('document_uploaded', 'Uploaded Document', staff, `${d.Patient.firstName} ${d.Patient.lastName}`, d.Patient.uhid, d.createdAt, d.documentCategory, role);
   });
 };
 
@@ -123,7 +124,7 @@ const getEquipmentEvents = async (dateFilter, hasDateFilter) => {
       },
       include: [
         { model: Patient, attributes: ['uhid', 'firstName', 'lastName'] },
-        { model: User, as: 'addedByUser', attributes: ['firstName', 'lastName'] },
+        { model: User, as: 'addedByUser', attributes: ['firstName', 'lastName', 'role'] },
       ],
     }),
     MedicalEquipment.findAll({
@@ -133,7 +134,7 @@ const getEquipmentEvents = async (dateFilter, hasDateFilter) => {
       },
       include: [
         { model: Patient, attributes: ['uhid', 'firstName', 'lastName'] },
-        { model: User, as: 'updatedByUser', attributes: ['firstName', 'lastName'] },
+        { model: User, as: 'updatedByUser', attributes: ['firstName', 'lastName', 'role'] },
       ],
     }),
     EquipmentHistory.findAll({
@@ -143,7 +144,7 @@ const getEquipmentEvents = async (dateFilter, hasDateFilter) => {
       },
       include: [
         { model: Patient, attributes: ['uhid', 'firstName', 'lastName'] },
-        { model: User, as: 'archivedByUser', attributes: ['firstName', 'lastName'] },
+        { model: User, as: 'archivedByUser', attributes: ['firstName', 'lastName', 'role'] },
       ],
     }),
   ]);
@@ -151,15 +152,18 @@ const getEquipmentEvents = async (dateFilter, hasDateFilter) => {
   const events = [];
   for (const e of added) {
     const staff = e.addedByUser ? `${e.addedByUser.firstName} ${e.addedByUser.lastName}` : 'Unknown';
-    events.push(makeEvent('equipment_added', 'Added Equipment', staff, `${e.Patient.firstName} ${e.Patient.lastName}`, e.Patient.uhid, e.addedDate, `${e.deviceType} · Serial: ${e.serialNo}`));
+    const role  = e.addedByUser?.role?.toLowerCase() || 'staff';
+    events.push(makeEvent('equipment_added', 'Added Equipment', staff, `${e.Patient.firstName} ${e.Patient.lastName}`, e.Patient.uhid, e.addedDate, `${e.deviceType} · Serial: ${e.serialNo}`, role));
   }
   for (const e of updated) {
     const staff = e.updatedByUser ? `${e.updatedByUser.firstName} ${e.updatedByUser.lastName}` : 'Unknown';
-    events.push(makeEvent('equipment_updated', 'Updated Equipment', staff, `${e.Patient.firstName} ${e.Patient.lastName}`, e.Patient.uhid, e.lastUpdatedDate, `${e.deviceType} · Serial: ${e.serialNo}`));
+    const role  = e.updatedByUser?.role?.toLowerCase() || 'staff';
+    events.push(makeEvent('equipment_updated', 'Updated Equipment', staff, `${e.Patient.firstName} ${e.Patient.lastName}`, e.Patient.uhid, e.lastUpdatedDate, `${e.deviceType} · Serial: ${e.serialNo}`, role));
   }
   for (const e of replaced) {
     const staff = e.archivedByUser ? `${e.archivedByUser.firstName} ${e.archivedByUser.lastName}` : 'Unknown';
-    events.push(makeEvent('equipment_replaced', 'Replaced Equipment', staff, `${e.Patient.firstName} ${e.Patient.lastName}`, e.Patient.uhid, e.archivedDate, e.reason));
+    const role  = e.archivedByUser?.role?.toLowerCase() || 'staff';
+    events.push(makeEvent('equipment_replaced', 'Replaced Equipment', staff, `${e.Patient.firstName} ${e.Patient.lastName}`, e.Patient.uhid, e.archivedDate, e.reason, role));
   }
   return events;
 };
@@ -185,27 +189,27 @@ const getDoctorEvents = async (dateFilter, hasDateFilter) => {
 
   for (const r of prescriptions) {
     const doctor = r.doctor ? `Dr. ${r.doctor.firstName} ${r.doctor.lastName}` : 'Unknown';
-    events.push(makeEvent('prescription_created', 'Wrote Prescription', doctor, `${r.Patient.firstName} ${r.Patient.lastName}`, r.Patient.uhid, r.createdAt));
+    events.push(makeEvent('prescription_created', 'Wrote Prescription', doctor, `${r.Patient.firstName} ${r.Patient.lastName}`, r.Patient.uhid, r.createdAt, null, 'doctor'));
   }
   for (const r of labTests) {
     const doctor = r.orderedBy ? `Dr. ${r.orderedBy.firstName} ${r.orderedBy.lastName}` : 'Unknown';
-    events.push(makeEvent('lab_test_ordered', 'Ordered Lab Test', doctor, `${r.Patient.firstName} ${r.Patient.lastName}`, r.Patient.uhid, r.createdAt, r.testType));
+    events.push(makeEvent('lab_test_ordered', 'Ordered Lab Test', doctor, `${r.Patient.firstName} ${r.Patient.lastName}`, r.Patient.uhid, r.createdAt, r.testType, 'doctor'));
   }
   for (const r of treatmentPlans) {
     const doctor = r.doctor ? `Dr. ${r.doctor.firstName} ${r.doctor.lastName}` : 'Unknown';
-    events.push(makeEvent('treatment_plan_created', 'Created Treatment Plan', doctor, `${r.Patient.firstName} ${r.Patient.lastName}`, r.Patient.uhid, r.createdAt));
+    events.push(makeEvent('treatment_plan_created', 'Created Treatment Plan', doctor, `${r.Patient.firstName} ${r.Patient.lastName}`, r.Patient.uhid, r.createdAt, null, 'doctor'));
   }
   for (const r of consultationNotes) {
     const doctor = r.doctor ? `Dr. ${r.doctor.firstName} ${r.doctor.lastName}` : 'Unknown';
-    events.push(makeEvent('consultation_note', 'Wrote Consultation Note', doctor, `${r.Patient.firstName} ${r.Patient.lastName}`, r.Patient.uhid, r.createdAt));
+    events.push(makeEvent('consultation_note', 'Wrote Consultation Note', doctor, `${r.Patient.firstName} ${r.Patient.lastName}`, r.Patient.uhid, r.createdAt, null, 'doctor'));
   }
   for (const r of physicalExams) {
     const doctor = r.doctor ? `Dr. ${r.doctor.firstName} ${r.doctor.lastName}` : 'Unknown';
-    events.push(makeEvent('physical_exam', 'Recorded Physical Exam', doctor, `${r.Patient.firstName} ${r.Patient.lastName}`, r.Patient.uhid, r.createdAt));
+    events.push(makeEvent('physical_exam', 'Recorded Physical Exam', doctor, `${r.Patient.firstName} ${r.Patient.lastName}`, r.Patient.uhid, r.createdAt, null, 'doctor'));
   }
   for (const r of assessments) {
     const doctor = r.doctor ? `Dr. ${r.doctor.firstName} ${r.doctor.lastName}` : 'Unknown';
-    events.push(makeEvent('initial_assessment', 'Recorded Initial Assessment', doctor, `${r.Patient.firstName} ${r.Patient.lastName}`, r.Patient.uhid, r.createdAt));
+    events.push(makeEvent('initial_assessment', 'Recorded Initial Assessment', doctor, `${r.Patient.firstName} ${r.Patient.lastName}`, r.Patient.uhid, r.createdAt, null, 'doctor'));
   }
 
   return events;
