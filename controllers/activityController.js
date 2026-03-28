@@ -2,7 +2,7 @@ const { Op } = require('sequelize');
 const { success } = require('../utils/response');
 const db = require('../models');
 
-const { Queue, Patient, MedicalDocument, MedicalEquipment, EquipmentHistory, User } = db;
+const { Queue, Patient, MedicalDocument, MedicalEquipment, EquipmentHistory, User, Prescription, LabTest, TreatmentPlan, ConsultationNote, PhysicalExamination, InitialAssessment } = db;
 
 // ── Shared event shape ────────────────────────────────────────────────────────
 
@@ -13,15 +13,23 @@ const makeEvent = (type, label, staff, patient, uhid, timestamp, detail = null) 
 // ── Summary builder ───────────────────────────────────────────────────────────
 
 const SUMMARY_KEYS = {
-  registered:         'registered',
-  added_to_queue:     'addedToQueue',
-  triaged:            'triaged',
-  discharged:         'discharged',
-  removed:            'removed',
-  document_uploaded:  'documentUploaded',
-  equipment_added:    'equipmentAdded',
-  equipment_updated:  'equipmentUpdated',
-  equipment_replaced: 'equipmentReplaced',
+  registered:            'registered',
+  added_to_queue:        'addedToQueue',
+  triaged:               'triaged',
+  discharged:            'discharged',
+  removed:               'removed',
+  document_uploaded:     'documentUploaded',
+  equipment_added:       'equipmentAdded',
+  equipment_updated:     'equipmentUpdated',
+  equipment_replaced:    'equipmentReplaced',
+  prescription_created:    'prescriptionCreated',
+  lab_test_ordered:        'labTestOrdered',
+  treatment_plan_created:  'treatmentPlanCreated',
+  consultation_note:       'consultationNote',
+  consultation_started:    'consultationStarted',
+  consultation_completed:  'consultationCompleted',
+  physical_exam:           'physicalExam',
+  initial_assessment:      'initialAssessment',
 };
 
 const buildSummary = (events) => {
@@ -57,24 +65,33 @@ const getQueueEvents = async (dateFilter, hasDateFilter) => {
   const items = await Queue.findAll({
     where: {
       [Op.or]: [
-        { addedBy:     { [Op.ne]: null } },
-        { triagedBy:   { [Op.ne]: null } },
-        { dischargedBy:{ [Op.ne]: null } },
-        { removedBy:   { [Op.ne]: null } },
+        { addedBy:              { [Op.ne]: null } },
+        { triagedBy:            { [Op.ne]: null } },
+        { dischargedBy:         { [Op.ne]: null } },
+        { removedBy:            { [Op.ne]: null } },
+        { consultationStartTime:{ [Op.ne]: null } },
+        { consultationEndTime:  { [Op.ne]: null } },
       ],
       ...(hasDateFilter ? { createdAt: dateFilter } : {}),
     },
-    include: [{ model: Patient, attributes: ['uhid', 'firstName', 'lastName'] }],
+    include: [
+      { model: Patient, attributes: ['uhid', 'firstName', 'lastName'] },
+      { model: User, as: 'assignedDoctor', attributes: ['firstName', 'lastName'] },
+    ],
   });
 
   const events = [];
   for (const q of items) {
     const patient = `${q.Patient.firstName} ${q.Patient.lastName}`;
     const { uhid } = q.Patient;
-    if (q.addedBy)     events.push(makeEvent('added_to_queue', 'Added to Queue',    q.addedBy,     patient, uhid, q.createdAt));
-    if (q.triagedBy)   events.push(makeEvent('triaged',        'Triaged Patient',   q.triagedBy,   patient, uhid, q.createdAt));
-    if (q.dischargedBy)events.push(makeEvent('discharged',     'Discharged Patient',q.dischargedBy,patient, uhid, q.consultationEndTime || q.updatedAt, q.dischargeComment));
-    if (q.removedBy)   events.push(makeEvent('removed',        'Removed from Queue',q.removedBy,   patient, uhid, q.updatedAt, q.removalReason));
+    const doctor   = q.assignedDoctor ? `Dr. ${q.assignedDoctor.firstName} ${q.assignedDoctor.lastName}` : null;
+
+    if (q.addedBy)            events.push(makeEvent('added_to_queue',       'Added to Queue',        q.addedBy,     patient, uhid, q.createdAt));
+    if (q.triagedBy)          events.push(makeEvent('triaged',               'Triaged Patient',       q.triagedBy,   patient, uhid, q.createdAt));
+    if (q.dischargedBy)       events.push(makeEvent('discharged',            'Discharged Patient',    q.dischargedBy,patient, uhid, q.consultationEndTime || q.updatedAt, q.dischargeComment));
+    if (q.removedBy)          events.push(makeEvent('removed',               'Removed from Queue',    q.removedBy,   patient, uhid, q.updatedAt, q.removalReason));
+    if (q.consultationStartTime && doctor) events.push(makeEvent('consultation_started',   'Started Consultation',   doctor, patient, uhid, q.consultationStartTime));
+    if (q.consultationEndTime   && doctor) events.push(makeEvent('consultation_completed', 'Completed Consultation', doctor, patient, uhid, q.consultationEndTime));
   }
   return events;
 };
@@ -147,6 +164,53 @@ const getEquipmentEvents = async (dateFilter, hasDateFilter) => {
   return events;
 };
 
+const getDoctorEvents = async (dateFilter, hasDateFilter) => {
+  const dateWhere = hasDateFilter ? { createdAt: dateFilter } : {};
+  const doctorAttr = ['firstName', 'lastName'];
+
+  const patientInclude = { model: Patient, attributes: ['uhid', 'firstName', 'lastName'], required: true };
+
+  const doctorInclude = { model: User, as: 'doctor', attributes: doctorAttr };
+
+  const [prescriptions, labTests, treatmentPlans, consultationNotes, physicalExams, assessments] = await Promise.all([
+    Prescription.findAll({       where: dateWhere, include: [patientInclude, doctorInclude] }),
+    LabTest.findAll({            where: dateWhere, include: [patientInclude, { model: User, as: 'orderedBy', attributes: doctorAttr }] }),
+    TreatmentPlan.findAll({      where: dateWhere, include: [patientInclude, doctorInclude] }),
+    ConsultationNote.findAll({   where: dateWhere, include: [patientInclude, doctorInclude] }),
+    PhysicalExamination.findAll({where: dateWhere, include: [patientInclude, doctorInclude] }),
+    InitialAssessment.findAll({  where: dateWhere, include: [patientInclude, doctorInclude] }),
+  ]);
+
+  const events = [];
+
+  for (const r of prescriptions) {
+    const doctor = r.doctor ? `Dr. ${r.doctor.firstName} ${r.doctor.lastName}` : 'Unknown';
+    events.push(makeEvent('prescription_created', 'Wrote Prescription', doctor, `${r.Patient.firstName} ${r.Patient.lastName}`, r.Patient.uhid, r.createdAt));
+  }
+  for (const r of labTests) {
+    const doctor = r.orderedBy ? `Dr. ${r.orderedBy.firstName} ${r.orderedBy.lastName}` : 'Unknown';
+    events.push(makeEvent('lab_test_ordered', 'Ordered Lab Test', doctor, `${r.Patient.firstName} ${r.Patient.lastName}`, r.Patient.uhid, r.createdAt, r.testType));
+  }
+  for (const r of treatmentPlans) {
+    const doctor = r.doctor ? `Dr. ${r.doctor.firstName} ${r.doctor.lastName}` : 'Unknown';
+    events.push(makeEvent('treatment_plan_created', 'Created Treatment Plan', doctor, `${r.Patient.firstName} ${r.Patient.lastName}`, r.Patient.uhid, r.createdAt));
+  }
+  for (const r of consultationNotes) {
+    const doctor = r.doctor ? `Dr. ${r.doctor.firstName} ${r.doctor.lastName}` : 'Unknown';
+    events.push(makeEvent('consultation_note', 'Wrote Consultation Note', doctor, `${r.Patient.firstName} ${r.Patient.lastName}`, r.Patient.uhid, r.createdAt));
+  }
+  for (const r of physicalExams) {
+    const doctor = r.doctor ? `Dr. ${r.doctor.firstName} ${r.doctor.lastName}` : 'Unknown';
+    events.push(makeEvent('physical_exam', 'Recorded Physical Exam', doctor, `${r.Patient.firstName} ${r.Patient.lastName}`, r.Patient.uhid, r.createdAt));
+  }
+  for (const r of assessments) {
+    const doctor = r.doctor ? `Dr. ${r.doctor.firstName} ${r.doctor.lastName}` : 'Unknown';
+    events.push(makeEvent('initial_assessment', 'Recorded Initial Assessment', doctor, `${r.Patient.firstName} ${r.Patient.lastName}`, r.Patient.uhid, r.createdAt));
+  }
+
+  return events;
+};
+
 // ── Controller ────────────────────────────────────────────────────────────────
 
 const getActivityLog = async (req, res) => {
@@ -167,6 +231,7 @@ const getActivityLog = async (req, res) => {
     getQueueEvents(dateFilter, hasDateFilter),
     getDocumentEvents(dateFilter, hasDateFilter),
     getEquipmentEvents(dateFilter, hasDateFilter),
+    getDoctorEvents(dateFilter, hasDateFilter),
   ])).flat();
 
   // Summary uses all events (unfiltered)
