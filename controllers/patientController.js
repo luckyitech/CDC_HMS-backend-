@@ -136,7 +136,7 @@ const create = async (req, res) => {
       isActive: true,
     }, { transaction });
 
-    const patient = await Patient.create({ ...patientFields, uhid, UserId: user.id, registeredBy: req.user.name || 'Unknown' }, { transaction });
+    const patient = await Patient.create({ ...patientFields, uhid, UserId: user.id, registeredBy: req.user.name || 'Unknown', registeredByRole: req.user.role || 'staff' }, { transaction });
     await transaction.commit();
 
     const full = await Patient.findByPk(patient.id, { include: [doctorInclude] });

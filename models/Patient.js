@@ -96,6 +96,10 @@ const Patient = defineModel('Patient', {
     type: DataTypes.STRING,
     defaultValue: null,
   },
+  registeredByRole: {
+    type: DataTypes.STRING,
+    defaultValue: null,
+  },
 }, {
   indexes: [
     { unique: true, fields: ['uhid'], name: 'unique_uhid' },
