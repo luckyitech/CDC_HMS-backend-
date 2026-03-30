@@ -36,6 +36,12 @@ const User = defineModel('User', {
     type: DataTypes.DATE,
     defaultValue: null,
   },
+
+  // --- Accountability ---
+  createdBy: {
+    type: DataTypes.STRING,
+    defaultValue: null,
+  },
 }, {
   indexes: [
     { unique: true, fields: ['email'], name: 'unique_email', where: { email: { [require('sequelize').Op.ne]: null } } },

@@ -104,6 +104,7 @@ const createDoctor = async (req, res) => {
       lastName,
       phone,
       isActive: true,
+      createdBy: req.user.name || 'Unknown',
     }, { transaction });
 
     // Create doctor profile
@@ -187,6 +188,7 @@ const createStaff = async (req, res) => {
       lastName,
       phone,
       isActive: true,
+      createdBy: req.user.name || 'Unknown',
     }, { transaction });
 
     // Create staff profile
@@ -266,6 +268,7 @@ const createLabTech = async (req, res) => {
       lastName,
       phone,
       isActive: true,
+      createdBy: req.user.name || 'Unknown',
     }, { transaction });
 
     // Create lab tech profile

@@ -30,6 +30,7 @@ const SUMMARY_KEYS = {
   consultation_completed:  'consultationCompleted',
   physical_exam:           'physicalExam',
   initial_assessment:      'initialAssessment',
+  account_created:         'accountCreated',
 };
 
 const buildSummary = (events) => {
@@ -212,6 +213,31 @@ const getDoctorEvents = async (dateFilter, hasDateFilter) => {
   return events;
 };
 
+const ACCOUNT_ROLE_LABEL = { doctor: 'Doctor', staff: 'Staff', lab: 'Lab Tech' };
+
+const getAccountCreationEvents = async (dateFilter, hasDateFilter) => {
+  const users = await User.findAll({
+    where: {
+      role: { [Op.in]: ['doctor', 'staff', 'lab'] },
+      ...(hasDateFilter ? { createdAt: dateFilter } : {}),
+    },
+    attributes: ['firstName', 'lastName', 'role', 'createdBy', 'createdAt'],
+  });
+
+  return users.map(u =>
+    makeEvent(
+      'account_created',
+      'Created Account',
+      u.createdBy || 'Unknown',
+      `${u.firstName} ${u.lastName}`,
+      null,
+      u.createdAt,
+      `${ACCOUNT_ROLE_LABEL[u.role] || u.role} account`,
+      'admin'
+    )
+  );
+};
+
 // ── Controller ────────────────────────────────────────────────────────────────
 
 const getActivityLog = async (req, res) => {
@@ -233,6 +259,7 @@ const getActivityLog = async (req, res) => {
     getDocumentEvents(dateFilter, hasDateFilter),
     getEquipmentEvents(dateFilter, hasDateFilter),
     getDoctorEvents(dateFilter, hasDateFilter),
+    getAccountCreationEvents(dateFilter, hasDateFilter),
   ])).flat();
 
   // Summary uses all events (unfiltered)
