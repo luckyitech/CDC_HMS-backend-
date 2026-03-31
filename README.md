@@ -183,67 +183,218 @@ cdc-hms-api/
 
 ## Production Deployment
 
-This guide documents how the CDC HMS API is deployed on the Host Africa VPS (Ubuntu 24.04, IP `102.68.87.18`).
+This guide documents how the CDC HMS API is deployed on the Host Africa VDS (Windows Server 2022, IP `102.68.87.103`).
 
 ### Server Requirements
 
+- Windows Server 2022
+- Node.js 20+
+- MySQL 8+ (with MySQL Workbench)
+- PM2 (process manager)
+- IIS (reverse proxy for `api.cdiabetescentre.com`)
+
+### 1. Install Required Software
+
+Install the following on the Windows Server:
+- Git for Windows: https://git-scm.com/download/win
+- Node.js LTS: https://nodejs.org
+- MySQL 8 + MySQL Workbench: https://dev.mysql.com/downloads/installer/
+- PM2: `npm install -g pm2`
+
+### 2. Clone the Repository
+
+Open Git Bash and run:
+
+```bash
+mkdir /c/Users/Administrator/Desktop/CDC
+cd /c/Users/Administrator/Desktop/CDC
+git clone https://github.com/luckyitech/CDC_HMS-backend-.git back_end
+cd back_end
+```
+
+### 3. Install Dependencies
+
+```cmd
+npm install
+```
+
+### 4. Create the `.env` File
+
+Open Notepad and create `.env` in the project root:
+
+```env
+PORT=3001
+NODE_ENV=production
+
+DB_HOST=localhost
+DB_PORT=3306
+DB_NAME=cdc_hms
+DB_USER=root
+DB_PASSWORD=your_mysql_root_password
+
+JWT_SECRET=your_long_random_secret_here
+JWT_EXPIRES_IN=7d
+
+SMTP_HOST=your_smtp_host
+SMTP_PORT=587
+SMTP_USER=your_email
+SMTP_PASSWORD=your_email_password
+FRONTEND_URL=https://cdiabetescentre.com
+```
+
+### 5. Create the Database
+
+```cmd
+"C:\Program Files\MySQL\MySQL Server 8.0\bin\mysql.exe" -u root -p
+```
+
+```sql
+CREATE DATABASE cdc_hms;
+EXIT;
+```
+
+### 6. Create Tables and Run Migrations
+
+First run sync to create base tables (first deploy only):
+
+```cmd
+node -e "const db = require('./models'); db.sequelize.sync().then(() => { console.log('Done'); process.exit(); })"
+```
+
+Then run migrations:
+
+```cmd
+npm run migrate
+```
+
+### 7. Seed Initial Users (first deploy only)
+
+```cmd
+node seeders/seed.js
+```
+
+This creates the default admin, doctor, staff, lab tech, and patient accounts.
+
+### 8. Start with PM2
+
+```cmd
+pm2 start server.js --name cdc-api
+pm2 save
+```
+
+### 9. Configure IIS Reverse Proxy
+
+In PowerShell as Administrator:
+
+```powershell
+# Enable proxy
+Set-WebConfigurationProperty -pspath 'MACHINE/WEBROOT/APPHOST' -filter "system.webServer/proxy" -name "enabled" -value "True"
+
+# Create API site
+New-Item -ItemType Directory -Path "C:\inetpub\api-proxy" -Force
+New-WebSite -Name "cdc-api" -Port 80 -HostHeader "api.cdiabetescentre.com" -PhysicalPath "C:\inetpub\api-proxy"
+```
+
+Create `C:\inetpub\api-proxy\web.config`:
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration>
+  <system.webServer>
+    <rewrite>
+      <rules>
+        <rule name="ReverseProxy" stopProcessing="true">
+          <match url="(.*)" />
+          <action type="Rewrite" url="http://localhost:3001/{R:1}" />
+        </rule>
+      </rules>
+    </rewrite>
+  </system.webServer>
+</configuration>
+```
+
+### 10. SSL Certificate
+
+Use win-acme for free Let's Encrypt certificates:
+
+```powershell
+C:\win-acme\wacs.exe
+```
+
+Follow the prompts to issue certificates for `api.cdiabetescentre.com`.
+
+### 11. DNS
+
+On your domain registrar (one.com), add an A record:
+
+| Type | Name | Value |
+|------|------|-------|
+| A | api | 102.68.87.103 |
+
+### Updating the Backend
+
+Whenever you push new code, run in Command Prompt:
+
+```cmd
+cd C:\Users\Administrator\Desktop\CDC\back_end
+git pull origin main
+npm install
+npm run migrate
+pm2 restart cdc-api
+```
+
+> No need to re-run sync or seed — those are first-deploy only steps.
+
+---
+
+<!--
+## [ARCHIVED] Previous Deployment — Linux/Ubuntu (Host Africa VPS, IP 102.68.87.18)
+
+> This server is no longer in use. Instructions below are kept for reference only.
+
+### Server Requirements
 - Ubuntu 22.04 / 24.04
 - Node.js 20+ (installed via NodeSource)
 - MySQL 8+
 - PM2 (process manager)
 - Nginx (reverse proxy)
 
-### 1. Install Node.js 20
-
+### Install Node.js 20
 ```bash
 curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
 apt-get install -y nodejs
-node -v   # should print v20.x.x
+node -v
 ```
 
-### 2. Clone the Repository
-
+### Clone & Install
 ```bash
 mkdir -p /var/www/cdc
 cd /var/www/cdc
 git clone https://github.com/luckyitech/CDC_HMS-backend-.git api
 cd api
-```
-
-### 3. Install Dependencies
-
-```bash
 npm install --omit=dev
 ```
 
-### 4. Create the `.env` File
-
-```bash
-nano .env
-```
-
-Paste and fill in your values:
-
+### .env
 ```env
 PORT=3001
 DB_HOST=127.0.0.1
 DB_PORT=3306
 DB_NAME=cdc_hms
-DB_USER=your_db_user
-DB_PASSWORD=your_db_password
-JWT_SECRET=your_long_random_secret_here
+DB_USER=cdc_app
+DB_PASSWORD=your_password
+JWT_SECRET=your_secret
 JWT_EXPIRES_IN=7d
-SMTP_HOST=smtp.gmail.com
+SMTP_HOST=send.one.com
 SMTP_PORT=587
-SMTP_USER=your_email@gmail.com
-SMTP_PASSWORD=your_app_password
-RESET_TOKEN_EXPIRES_IN=3600000
+SMTP_USER=hms@cdiabetescentre.com
+SMTP_PASSWORD=your_password
+FRONTEND_URL=https://cdiabetescentre.com
 ```
 
-> **Note:** Use `DB_HOST=127.0.0.1` not `localhost` — MySQL on Linux listens on IPv4, and `localhost` resolves to IPv6 (`::1`) which will be refused.
+> Note: Use DB_HOST=127.0.0.1 not localhost on Linux.
 
-### 5. Create the Database
-
+### Database
 ```sql
 CREATE DATABASE cdc_hms CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 CREATE USER 'cdc_user'@'localhost' IDENTIFIED BY 'your_password';
@@ -251,38 +402,19 @@ GRANT ALL PRIVILEGES ON cdc_hms.* TO 'cdc_user'@'localhost';
 FLUSH PRIVILEGES;
 ```
 
-### 6. Seed Initial Users (first deploy only)
-
-Tables are created automatically by Sequelize on first start. After the first `pm2 start`, run:
-
-```bash
-node seeders/seed.js
-```
-
-This creates the default admin, doctor, staff, lab tech, and patient accounts.
-
-### 7. Start with PM2
-
+### PM2
 ```bash
 npm install -g pm2
 pm2 start server.js --name cdc-api
 pm2 save
-pm2 startup   # follow the printed command to enable auto-start on reboot
+pm2 startup
 ```
 
-### 8. Configure Nginx
-
-```bash
-nano /etc/nginx/sites-available/cdiabetescentre
-```
-
-Paste:
-
+### Nginx Config
 ```nginx
 server {
     listen 80;
     server_name api.cdiabetescentre.com;
-
     location / {
         proxy_pass http://127.0.0.1:3001;
         proxy_http_version 1.1;
@@ -290,8 +422,6 @@ server {
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
     }
-
-    # SSE endpoint — disable buffering for real-time events
     location /api/sse {
         proxy_pass http://127.0.0.1:3001;
         proxy_buffering off;
@@ -303,37 +433,14 @@ server {
 }
 ```
 
-Enable and reload:
-
-```bash
-ln -s /etc/nginx/sites-available/cdiabetescentre /etc/nginx/sites-enabled/
-nginx -t
-systemctl reload nginx
-```
-
-### 9. DNS
-
-On your domain registrar (one.com), add an A record:
-
-| Type | Name | Value |
-|------|------|-------|
-| A | api | 102.68.87.18 |
-
-### Updating the Backend
-
-Whenever you push new code:
-
+### Update
 ```bash
 cd /var/www/cdc/api
 git pull
 pm2 restart cdc-api --update-env
-```
-
-If the update includes schema changes, run migrations after restarting:
-
-```bash
 npm run migrate
 ```
+-->
 
 ---
 
