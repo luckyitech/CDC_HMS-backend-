@@ -8,7 +8,7 @@ const app = express();
 
 // Trust reverse proxy (IIS/Nginx) — required for express-rate-limit to correctly
 // identify client IPs from the X-Forwarded-For header
-app.set('trust proxy', true);
+app.set('trust proxy', 1);
 
 // CORS — MUST be first to handle preflight OPTIONS requests
 app.use(cors({

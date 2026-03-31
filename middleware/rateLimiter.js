@@ -6,6 +6,17 @@ const rateLimit = require('express-rate-limit');
 // Rate limiting prevents brute force attacks and API abuse
 // by limiting how many requests a client can make in a time window
 
+// Custom key generator — strips port from IP (IIS forwards IP:port format)
+// Handles: "197.248.95.205:58192" → "197.248.95.205"
+// Handles: "::ffff:197.248.95.205" → "197.248.95.205"
+// Safe for IPv6 — only strips port when full IPv4:port pattern is detected
+const keyGenerator = (req) => {
+  const ip = req.ip || req.socket.remoteAddress || '';
+  return ip
+    .replace(/^::ffff:/, '')
+    .replace(/^(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}):\d+$/, '$1');
+};
+
 // ------------------------------------
 // General API Rate Limiter
 // ------------------------------------
@@ -20,8 +31,8 @@ const generalLimiter = rateLimit({
   },
   standardHeaders: true, // Return rate limit info in `RateLimit-*` headers
   legacyHeaders: false, // Disable the `X-RateLimit-*` headers
-  // Skip successful requests (only count failed ones)
   skipSuccessfulRequests: false,
+  keyGenerator,
 });
 
 // ------------------------------------
@@ -39,8 +50,8 @@ const authLimiter = rateLimit({
   },
   standardHeaders: true,
   legacyHeaders: false,
-  // Skip successful requests - only count failed login attempts
   skipSuccessfulRequests: true,
+  keyGenerator,
 });
 
 // ------------------------------------
@@ -57,6 +68,7 @@ const strictLimiter = rateLimit({
   },
   standardHeaders: true,
   legacyHeaders: false,
+  keyGenerator,
 });
 
 // ------------------------------------
@@ -74,6 +86,7 @@ const sseLimiter = rateLimit({
   },
   standardHeaders: true,
   legacyHeaders: false,
+  keyGenerator,
 });
 
 // ------------------------------------
