@@ -6,15 +6,16 @@ const rateLimit = require('express-rate-limit');
 // Rate limiting prevents brute force attacks and API abuse
 // by limiting how many requests a client can make in a time window
 
-// Custom key generator — strips port from IP (IIS forwards IP:port format)
-// Handles: "197.248.95.205:58192" → "197.248.95.205"
-// Handles: "::ffff:197.248.95.205" → "197.248.95.205"
-// Safe for IPv6 — only strips port when full IPv4:port pattern is detected
+// Custom key generator — normalizes IP for rate limiting
+// Handles IIS forwarding IP:port format e.g. "197.248.95.205:58192" → "197.248.95.205"
+// Handles IPv4-mapped IPv6 e.g. "::ffff:197.248.95.205" → "197.248.95.205"
+// Wraps bare IPv6 in brackets as required by express-rate-limit
 const keyGenerator = (req) => {
   const ip = req.ip || req.socket.remoteAddress || '';
-  return ip
-    .replace(/^::ffff:/, '')
-    .replace(/^(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}):\d+$/, '$1');
+  let cleaned = ip.replace(/^::ffff:/, '');
+  cleaned = cleaned.replace(/^(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}):\d+$/, '$1');
+  if (cleaned.includes(':')) return `[${cleaned}]`;
+  return cleaned;
 };
 
 // ------------------------------------
