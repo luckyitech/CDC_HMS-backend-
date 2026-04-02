@@ -54,6 +54,11 @@ router.post('/:uhid/vitals', authenticate, authorize('staff'), findPatient, [
 ], patientController.recordVitals);
 
 // ------------------------------------
+// POST /api/patients/:uhid/vitals/doctor — doctor records/completes vitals (all fields optional)
+// ------------------------------------
+router.post('/:uhid/vitals/doctor', authenticate, authorize('doctor'), findPatient, patientController.recordVitalsDoctor);
+
+// ------------------------------------
 // GET /api/patients/:uhid/vitals — latest vitals
 // ------------------------------------
 router.get('/:uhid/vitals', authenticate, authorize('doctor', 'staff'), findPatient, patientController.getVitals);

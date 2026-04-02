@@ -317,6 +317,31 @@ const recordVitals = async (req, res) => {
 };
 
 // ------------------------------------
+// POST /api/patients/:uhid/vitals/doctor — doctor records/completes vitals
+// All fields optional — doctor fills in what was missed at triage
+// ------------------------------------
+const recordVitalsDoctor = async (req, res) => {
+  const { weight, height, waistCircumference } = req.body;
+
+  const bmi = (weight && height)
+    ? parseFloat((weight / Math.pow(height / 100, 2)).toFixed(1))
+    : null;
+
+  const waistHeightRatio = (waistCircumference && height)
+    ? parseFloat((waistCircumference / height).toFixed(2))
+    : null;
+
+  const vital = await PatientVital.create({
+    ...req.body,
+    PatientId: req.patient.id,
+    bmi:              bmi              ?? req.body.bmi              ?? null,
+    waistHeightRatio: waistHeightRatio ?? req.body.waistHeightRatio ?? null,
+  });
+
+  return success(res, formatVitals(vital), 201);
+};
+
+// ------------------------------------
 // GET /api/patients/:uhid/vitals — latest vitals
 // ------------------------------------
 const getVitals = async (req, res) => {
@@ -328,4 +353,4 @@ const getVitals = async (req, res) => {
   return success(res, formatVitals(latestVital));
 };
 
-module.exports = { create, list, getOne, update, destroy, stats, recordVitals, getVitals };
+module.exports = { create, list, getOne, update, destroy, stats, recordVitals, recordVitalsDoctor, getVitals };

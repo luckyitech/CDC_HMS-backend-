@@ -333,15 +333,17 @@ On your domain registrar (one.com), add an A record:
 
 ### Updating the Backend
 
-Whenever you push new code, run in Command Prompt:
+Whenever you push new code, open **Git Bash** on the server and run:
 
-```cmd
-cd C:\Users\Administrator\Desktop\CDC\back_end
+```bash
+cd /c/Users/Administrator/Desktop/CDC/back_end
 git pull origin main
 npm install
 npm run migrate
 pm2 restart cdc-api
 ```
+
+> **Note:** The backend files are directly inside `back_end/` — there is no `cdc-hms-api` subfolder on the server.
 
 > No need to re-run sync or seed — those are first-deploy only steps.
 
