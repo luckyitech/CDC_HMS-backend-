@@ -25,8 +25,9 @@ const SUMMARY_KEYS = {
   prescription_created:    'prescriptionCreated',
   lab_test_ordered:        'labTestOrdered',
   treatment_plan_created:  'treatmentPlanCreated',
-  consultation_note:       'consultationNote',
-  consultation_started:    'consultationStarted',
+  consultation_note:         'consultationNote',
+  consultation_note_edited:  'consultationNoteEdited',
+  consultation_started:      'consultationStarted',
   consultation_completed:  'consultationCompleted',
   physical_exam:           'physicalExam',
   initial_assessment:      'initialAssessment',
@@ -174,11 +175,17 @@ const getDoctorEvents = async (dateFilter, hasDateFilter) => {
 
   const doctorInclude = { model: User, as: 'doctor', attributes: doctorAttr };
 
-  const [prescriptions, labTests, treatmentPlans, consultationNotes, physicalExams, assessments] = await Promise.all([
+  const editedNoteWhere = {
+    updatedAt: hasDateFilter ? dateFilter : { [Op.ne]: null },
+    [Op.and]: db.sequelize.literal('`ConsultationNote`.`updatedAt` > `ConsultationNote`.`createdAt`'),
+  };
+
+  const [prescriptions, labTests, treatmentPlans, consultationNotes, editedNotes, physicalExams, assessments] = await Promise.all([
     Prescription.findAll({       where: dateWhere, include: [patientInclude, doctorInclude] }),
     LabTest.findAll({            where: dateWhere, include: [patientInclude, { model: User, as: 'orderedBy', attributes: doctorAttr }] }),
     TreatmentPlan.findAll({      where: dateWhere, include: [patientInclude, doctorInclude] }),
     ConsultationNote.findAll({   where: dateWhere, include: [patientInclude, doctorInclude] }),
+    ConsultationNote.findAll({   where: editedNoteWhere, include: [patientInclude, doctorInclude], attributes: ['id', 'updatedAt', 'doctorId'] }),
     PhysicalExamination.findAll({where: dateWhere, include: [patientInclude, doctorInclude] }),
     InitialAssessment.findAll({  where: dateWhere, include: [patientInclude, doctorInclude] }),
   ]);
@@ -200,6 +207,10 @@ const getDoctorEvents = async (dateFilter, hasDateFilter) => {
   for (const r of consultationNotes) {
     const doctor = r.doctor ? `Dr. ${r.doctor.firstName} ${r.doctor.lastName}` : 'Unknown';
     events.push(makeEvent('consultation_note', 'Wrote Consultation Note', doctor, `${r.Patient.firstName} ${r.Patient.lastName}`, r.Patient.uhid, r.createdAt, null, 'doctor'));
+  }
+  for (const r of editedNotes) {
+    const doctor = r.doctor ? `Dr. ${r.doctor.firstName} ${r.doctor.lastName}` : 'Unknown';
+    events.push(makeEvent('consultation_note_edited', 'Edited Consultation Note', doctor, `${r.Patient.firstName} ${r.Patient.lastName}`, r.Patient.uhid, r.updatedAt, null, 'doctor'));
   }
   for (const r of physicalExams) {
     const doctor = r.doctor ? `Dr. ${r.doctor.firstName} ${r.doctor.lastName}` : 'Unknown';
