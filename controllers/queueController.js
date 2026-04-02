@@ -80,11 +80,11 @@ const add = async (req, res) => {
   const patient = await Patient.findOne({ where: { uhid } });
   if (!patient) return error(res, 'Patient not found', 404);
 
-  // Reject if patient is already in the queue and not yet Completed
+  // Reject if patient is already in the queue and not yet Completed or Removed
   const existing = await Queue.findOne({
     where: {
       PatientId: patient.id,
-      status:    { [Op.ne]: 'Completed' },
+      status:    { [Op.notIn]: ['Completed', 'Removed'] },
     },
   });
   if (existing) return error(res, 'Patient is already in the queue', 400);
