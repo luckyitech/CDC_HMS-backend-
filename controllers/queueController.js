@@ -96,7 +96,7 @@ const add = async (req, res) => {
 
   // Compute position among all current Waiting items (Urgent first, then arrival order)
   const waitingItems = await Queue.findAll({
-    where:  { status: 'Waiting' },
+    where:  { status: 'Awaiting Triage' },
     order:  [['priority', 'DESC'], ['createdAt', 'ASC']],
     attributes: ['id'],
   });
@@ -132,7 +132,7 @@ const list = async (req, res) => {
   // Assign sequential positions only to Waiting items (already in correct order)
   let waitingPos = 0;
   const formatted = items.map(item => {
-    if (item.status === 'Waiting') {
+    if (item.status === 'Awaiting Triage') {
       waitingPos++;
       return formatItem(item, waitingPos);
     }
@@ -194,7 +194,7 @@ const stats = async (req, res) => {
   const [total, waiting, inTriage, withDoctor, pendingBilling, completed, urgent] =
     await Promise.all([
       Queue.count(),
-      Queue.count({ where: { status: 'Waiting' } }),
+      Queue.count({ where: { status: 'Awaiting Triage' } }),
       Queue.count({ where: { status: 'In Triage' } }),
       Queue.count({ where: { status: 'With Doctor' } }),
       Queue.count({ where: { status: 'Pending Billing' } }),
@@ -211,7 +211,7 @@ const stats = async (req, res) => {
 const callNext = async (req, res) => {
   // First Waiting item: Urgent patients before Normal, oldest first within each
   const next = await Queue.findOne({
-    where:   { status: 'Waiting' },
+    where:   { status: 'Awaiting Triage' },
     order:   [['priority', 'DESC'], ['createdAt', 'ASC']],
     include: queueIncludes,
   });

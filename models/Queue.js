@@ -5,9 +5,9 @@ const Queue = defineModel('Queue', {
   // assignedDoctorId — added by Queue.belongsTo(User, { as: 'assignedDoctor' }) — nullable
 
   status: {
-    type: DataTypes.ENUM('Waiting', 'In Triage', 'With Doctor', 'Pending Billing', 'Completed', 'Removed'),
+    type: DataTypes.ENUM('Awaiting Triage', 'In Triage', 'Awaiting Doctor', 'With Doctor', 'Pending Billing', 'Completed', 'Removed'),
     allowNull: false,
-    defaultValue: 'Waiting',
+    defaultValue: 'Awaiting Triage',
   },
   priority: {
     type: DataTypes.ENUM('Normal', 'Urgent'),
