@@ -1,4 +1,5 @@
 const rateLimit = require('express-rate-limit');
+const { ipKeyGenerator } = rateLimit;
 
 // ====================================
 // RATE LIMITING CONFIGURATION
@@ -9,13 +10,13 @@ const rateLimit = require('express-rate-limit');
 // Custom key generator — normalizes IP for rate limiting
 // Handles IIS forwarding IP:port format e.g. "197.248.95.205:58192" → "197.248.95.205"
 // Handles IPv4-mapped IPv6 e.g. "::ffff:197.248.95.205" → "197.248.95.205"
-// Wraps bare IPv6 in brackets as required by express-rate-limit
+// Uses ipKeyGenerator helper required by express-rate-limit for IPv6 compliance
 const keyGenerator = (req) => {
   const ip = req.ip || req.socket.remoteAddress || '';
   let cleaned = ip.replace(/^::ffff:/, '');
   cleaned = cleaned.replace(/^(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}):\d+$/, '$1');
-  if (cleaned.includes(':')) return `[${cleaned}]`;
-  return cleaned;
+  req.ip = cleaned;
+  return ipKeyGenerator(req);
 };
 
 // ------------------------------------
