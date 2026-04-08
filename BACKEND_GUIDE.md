@@ -2465,3 +2465,51 @@ RESET_TOKEN_EXPIRES_IN=3600000
 - [ ] Run database migrations/sync on production server
 - [ ] Set up process manager (PM2) to keep the Node.js server running
 
+---
+
+### 23.8 PM2 Auto-Start on Windows Server
+
+> `pm2 startup` does not work on Windows. Use Windows Task Scheduler instead.
+
+**Step 1 — Start the app with PM2 (run once):**
+```bash
+cd C:\Users\Administrator\Desktop\CDC\back_end
+pm2 start server.js --name cdc-hms-api
+```
+
+**Step 2 — Save the process list:**
+```bash
+pm2 save
+```
+
+**Step 3 — Create a Task Scheduler job (run in PowerShell as Administrator):**
+```powershell
+$action = New-ScheduledTaskAction -Execute "cmd.exe" -Argument "/c pm2 resurrect"
+$trigger = New-ScheduledTaskTrigger -AtStartup
+$settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Minutes 5)
+Register-ScheduledTask -TaskName "PM2 Auto Start" -Action $action -Trigger $trigger -RunLevel Highest -Force
+```
+
+You should see `PM2 Auto Start — State: Ready` confirming the task was created.
+
+> **Note:** Do NOT use `pm2-windows-startup` — it is unreliable on Windows Server and will show as `errored`. The Task Scheduler method above is the correct approach.
+
+---
+
+### 23.9 Deploying Updates
+
+Two deploy scripts are saved on the server at `C:\Users\Administrator\Desktop\CDC\`:
+
+**Frontend** — open PowerShell as Administrator and run:
+```powershell
+C:\Users\Administrator\Desktop\CDC\deploy-frontend.ps1
+```
+This pulls latest code from GitHub, runs `npm run build`, and copies `dist/` to `C:\inetpub\wwwroot`.
+
+**Backend** — run in Git Bash:
+```bash
+cd ~/Desktop/CDC/back_end
+git pull origin main
+pm2 restart all
+```
+
