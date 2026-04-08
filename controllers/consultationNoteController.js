@@ -131,7 +131,7 @@ const create = async (req, res) => {
  */
 const list = async (req, res) => {
   try {
-    const { uhid, search, page = 1, limit = 20 } = req.query;
+    const { uhid, search, doctorId, dateFrom, dateTo, page = 1, limit = 20 } = req.query;
 
     // uhid is REQUIRED
     if (!uhid) {
@@ -140,18 +140,32 @@ const list = async (req, res) => {
 
     const offset = (parseInt(page) - 1) * parseInt(limit);
 
-    // Build the WHERE clause for search
+    // Build the WHERE clause
     const where = {};
+
+    // Text search across notes, assessment, plan
     if (search) {
-      // Search across all relevant TEXT fields
       where[Op.or] = [
-        { notes: { [Op.like]: `%${search}%` } },
+        { notes:      { [Op.like]: `%${search}%` } },
         { assessment: { [Op.like]: `%${search}%` } },
-        { plan: { [Op.like]: `%${search}%` } },
+        { plan:       { [Op.like]: `%${search}%` } },
       ];
     }
 
-    // Build includes with patient filter
+    // Date range filter
+    if (dateFrom || dateTo) {
+      where.date = {};
+      if (dateFrom) where.date[Op.gte] = dateFrom;
+      if (dateTo)   where.date[Op.lte] = dateTo;
+    }
+
+    // Doctor filter by ID
+    if (doctorId) {
+      const parsedDoctorId = parseInt(doctorId);
+      if (!isNaN(parsedDoctorId)) where.doctorId = parsedDoctorId;
+    }
+
+    // Build includes with patient filter and optional doctor name filter
     const includes = [
       {
         model: Patient,
