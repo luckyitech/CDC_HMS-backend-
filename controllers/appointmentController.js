@@ -179,7 +179,7 @@ const book = async (req, res) => {
  * Patient role: Automatically filters to their own appointments
  */
 const list = async (req, res) => {
-  const { uhid, doctor, date, status, page = 1, limit = 20 } = req.query;
+  const { uhid, doctor, date, status, search, page = 1, limit = 20 } = req.query;
 
   const offset = (parseInt(page) - 1) * parseInt(limit);
 
@@ -197,6 +197,48 @@ const list = async (req, res) => {
       where.date = new Date().toISOString().split('T')[0];
     } else {
       where.date = date;
+    }
+  }
+
+  // Search across patient name/UHID and doctor name
+  if (search) {
+    const [matchingPatients, matchingDoctors] = await Promise.all([
+      Patient.findAll({
+        where: {
+          [Op.or]: [
+            { firstName: { [Op.like]: `%${search}%` } },
+            { lastName:  { [Op.like]: `%${search}%` } },
+            { uhid:      { [Op.like]: `%${search}%` } },
+          ],
+        },
+        attributes: ['id'],
+      }),
+      User.findAll({
+        where: {
+          role: 'doctor',
+          [Op.or]: [
+            { firstName: { [Op.like]: `%${search}%` } },
+            { lastName:  { [Op.like]: `%${search}%` } },
+          ],
+        },
+        attributes: ['id'],
+      }),
+    ]);
+
+    const patientIds = matchingPatients.map(p => p.id);
+    const doctorIds  = matchingDoctors.map(d => d.id);
+    const searchConditions = [];
+    if (patientIds.length > 0) searchConditions.push({ PatientId: { [Op.in]: patientIds } });
+    if (doctorIds.length  > 0) searchConditions.push({ doctorId:  { [Op.in]: doctorIds  } });
+
+    if (searchConditions.length > 0) {
+      where[Op.or] = searchConditions;
+    } else {
+      // Nothing matched — return empty immediately
+      return success(res, {
+        appointments: [],
+        pagination: { total: 0, page: parseInt(page), totalPages: 0, limit: parseInt(limit) },
+      });
     }
   }
 

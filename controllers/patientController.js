@@ -276,7 +276,10 @@ const destroy = async (req, res) => {
 // GET /api/patients/stats — aggregate counts
 // ------------------------------------
 const stats = async (req, res) => {
-  const [total, active, inactive, highRisk, mediumRisk, lowRisk, type1, type2] =
+  const startOfToday = new Date();
+  startOfToday.setHours(0, 0, 0, 0);
+
+  const [total, active, inactive, highRisk, mediumRisk, lowRisk, type1, type2, registeredToday] =
     await Promise.all([
       Patient.count(),
       Patient.count({ where: { status:      'Active'   } }),
@@ -286,9 +289,10 @@ const stats = async (req, res) => {
       Patient.count({ where: { riskLevel:   'Low'      } }),
       Patient.count({ where: { diagnosis: 'Type 1'  } }),
       Patient.count({ where: { diagnosis: 'Type 2'  } }),
+      Patient.count({ where: { createdAt: { [Op.gte]: startOfToday } } }),
     ]);
 
-  return success(res, { total, active, inactive, highRisk, mediumRisk, lowRisk, type1, type2 });
+  return success(res, { total, active, inactive, highRisk, mediumRisk, lowRisk, type1, type2, registeredToday });
 };
 
 // ------------------------------------
