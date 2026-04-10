@@ -34,6 +34,12 @@ router.post('/', authenticate, authorize('staff'), [
 router.put('/:id', authenticate, authorize('staff', 'doctor'), queueController.update);
 
 // ------------------------------------
+// POST /api/queue/:id/refer — doctor refers a patient (internal or external)
+// Must be defined before /:id to prevent Express matching "refer" as an ID
+// ------------------------------------
+router.post('/:id/refer', authenticate, authorize('doctor'), queueController.refer);
+
+// ------------------------------------
 // DELETE /api/queue/:id — remove from queue
 // ------------------------------------
 router.delete('/:id', authenticate, authorize('staff'), queueController.remove);

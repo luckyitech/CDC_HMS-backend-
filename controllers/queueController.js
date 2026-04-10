@@ -37,7 +37,7 @@ const queueIncludes = [
 ];
 
 // Shape one queue row into the API response.
-// position = 1-based index among Waiting items (null for non-Waiting).
+// position = 1-based index among Awaiting Triage items (null for all other statuses).
 const formatItem = (item, position) => {
   const q = item.dataValues || item;
   return {
@@ -47,7 +47,7 @@ const formatItem = (item, position) => {
     age:                   computeAge(q.Patient.dateOfBirth) ?? q.Patient.age,
     gender:                q.Patient.gender,
     arrivalTime:           formatTime(q.createdAt),
-    createdAt:             q.createdAt,             // raw ISO — used for date filtering on frontend
+    createdAt:             q.createdAt,
     priority:              q.priority,
     status:                q.status,
     reason:                q.reason,
@@ -68,6 +68,13 @@ const formatItem = (item, position) => {
     dischargedBy:          q.dischargedBy          || null,
     removedBy:             q.removedBy             || null,
     removalReason:         q.removalReason         || null,
+    // Referral audit trail — null on non-referred entries
+    referralType:           q.referralType          || null,
+    referralReason:         q.referralReason        || null,
+    referredByDoctorName:   q.referredByDoctorName  || null,
+    referredAt:             q.referredAt            || null,
+    referredToDoctorName:   q.referredToDoctorName  || null,
+    externalReferralTarget: q.externalReferralTarget|| null,
   };
 };
 
@@ -226,4 +233,89 @@ const callNext = async (req, res) => {
   return success(res, formatItem(updated, null));
 };
 
-module.exports = { add, list, update, remove, stats, callNext };
+// ------------------------------------
+// POST /api/queue/:id/refer — doctor refers a patient to another doctor
+// ------------------------------------
+// Internal referral: reassigns the queue entry to a new doctor (status → Awaiting Doctor).
+// External referral: closes the consultation and sends the patient to billing (status → Pending Billing).
+// In both cases, a full audit trail is written to the queue record.
+// ------------------------------------
+const refer = async (req, res) => {
+  const {
+    referralType,
+    referralReason,
+    referredToDoctorId,     // required for Internal
+    referredToDoctorName,   // required for Internal — stored as string for permanent record
+    externalReferralTarget, // required for External
+    selectedCharges    = [],
+    selectedProcedures = [],
+  } = req.body;
+
+  // --- Validate referralType ---
+  if (!referralType || !['Internal', 'External'].includes(referralType)) {
+    return error(res, 'referralType must be "Internal" or "External"', 400);
+  }
+
+  // --- Validate type-specific required fields ---
+  if (referralType === 'Internal' && !referredToDoctorId) {
+    return error(res, 'referredToDoctorId is required for an Internal referral', 400);
+  }
+  if (referralType === 'External' && !externalReferralTarget) {
+    return error(res, 'externalReferralTarget is required for an External referral', 400);
+  }
+
+  const item = await Queue.findByPk(req.params.id);
+  if (!item) return error(res, 'Queue item not found', 404);
+
+  // Only allow referral while the doctor is actively consulting the patient
+  if (item.status !== 'With Doctor') {
+    return error(res, 'Referral can only be made while the patient status is "With Doctor"', 400);
+  }
+
+  // --- Merge charges with any already recorded on this queue entry ---
+  // This handles multi-doctor visits: Doctor A's charges are preserved when
+  // Doctor B later completes their own consultation and adds their own charges.
+  const mergedCharges = [
+    ...new Set([...(item.selectedCharges || []), ...selectedCharges]),
+  ];
+  const mergedProcedures = [
+    ...new Set([...(item.selectedProcedures || []), ...selectedProcedures]),
+  ];
+
+  // --- Build the shared audit fields (same for both types) ---
+  const auditFields = {
+    referralType,
+    referralReason:       referralReason || null,
+    referredByDoctorName: req.user.name  || 'Unknown',
+    referredAt:           new Date(),
+    selectedCharges:      mergedCharges,
+    selectedProcedures:   mergedProcedures,
+  };
+
+  // --- Build the type-specific status transition fields ---
+  const transitionFields = referralType === 'Internal'
+    ? {
+        // Hand off to a different doctor inside the clinic.
+        // assignedDoctorId changes to the new doctor so they see this patient in their queue.
+        // referredToDoctorName is stored permanently — even if the patient is referred again later,
+        // this record stays in place for the audit trail.
+        status:               'Awaiting Doctor',
+        assignedDoctorId:     referredToDoctorId,
+        referredToDoctorName: referredToDoctorName || null,
+        consultationEndTime:  new Date(), // mark current doctor's consultation as ended
+      }
+    : {
+        // Send patient to billing so reception can discharge and issue an external referral letter.
+        status:                 'Pending Billing',
+        externalReferralTarget: externalReferralTarget,
+        consultationEndTime:    new Date(),
+      };
+
+  await item.update({ ...auditFields, ...transitionFields });
+
+  const updated = await Queue.findByPk(item.id, { include: queueIncludes });
+  broadcast('queue_updated');
+  return success(res, formatItem(updated, null));
+};
+
+module.exports = { add, list, update, remove, stats, callNext, refer };

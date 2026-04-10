@@ -3,3 +3,4 @@ node_modules/
 uploads/
 *.log
 nul
+BACKUP_GUIDE.md

@@ -75,6 +75,38 @@ const Queue = defineModel('Queue', {
     type: DataTypes.TEXT,
     defaultValue: null,
   },
+
+  // --- Referral tracking (all nullable — only set when a referral occurs) ---
+  // Gives a permanent, queryable audit trail: who referred, to whom, why, and when.
+
+  referralType: {
+    type: DataTypes.ENUM('Internal', 'External'),
+    defaultValue: null,
+  },
+  referralReason: {
+    type: DataTypes.TEXT,
+    defaultValue: null,
+  },
+  // Stored as a name string (not FK) so the record survives future reassignments
+  referredByDoctorName: {
+    type: DataTypes.STRING,
+    defaultValue: null,
+  },
+  // Exact moment the referral was made — updatedAt is not reliable (changes on every update)
+  referredAt: {
+    type: DataTypes.DATE,
+    defaultValue: null,
+  },
+  // Internal only: name of the doctor the patient is being sent to
+  referredToDoctorName: {
+    type: DataTypes.STRING,
+    defaultValue: null,
+  },
+  // External only: name of the hospital, clinic, or specialist
+  externalReferralTarget: {
+    type: DataTypes.STRING,
+    defaultValue: null,
+  },
 });
 
 module.exports = Queue;
