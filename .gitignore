@@ -4,3 +4,4 @@ uploads/
 *.log
 nul
 BACKUP_GUIDE.md
+seeders/seed-test-patients.js
