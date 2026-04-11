@@ -6,6 +6,9 @@ const { Queue, Patient, MedicalDocument, MedicalEquipment, EquipmentHistory, Use
 
 // ── Shared event shape ────────────────────────────────────────────────────────
 
+// NOTE: `detail` is a single display string — if an event has multiple pieces of context
+// (e.g. type + reason + target), concatenate them before passing: `${a} · ${b} · ${c}`.
+// Do NOT add new fields to this shape; keep the contract stable so the frontend never changes.
 const makeEvent = (type, label, staff, patient, uhid, timestamp, detail = null, role = null) => ({
   type, label, staff, patient, uhid, timestamp, detail, role,
 });
@@ -18,6 +21,7 @@ const SUMMARY_KEYS = {
   triaged:               'triaged',
   discharged:            'discharged',
   removed:               'removed',
+  referred:              'referred',
   document_uploaded:     'documentUploaded',
   equipment_added:       'equipmentAdded',
   equipment_updated:     'equipmentUpdated',
@@ -85,10 +89,16 @@ const getQueueEvents = async (dateFilter, hasDateFilter) => {
     const { uhid } = q.Patient;
     const doctor   = q.assignedDoctor ? `Dr. ${q.assignedDoctor.firstName} ${q.assignedDoctor.lastName}` : null;
 
-    if (q.addedBy)            events.push(makeEvent('added_to_queue',       'Added to Queue',        q.addedBy,     patient, uhid, q.createdAt,                              null,                 'staff'));
-    if (q.triagedBy)          events.push(makeEvent('triaged',               'Triaged Patient',       q.triagedBy,   patient, uhid, q.createdAt,                              null,                 'staff'));
-    if (q.dischargedBy)       events.push(makeEvent('discharged',            'Discharged Patient',    q.dischargedBy,patient, uhid, q.consultationEndTime || q.updatedAt,      q.dischargeComment,   'staff'));
-    if (q.removedBy)          events.push(makeEvent('removed',               'Removed from Queue',    q.removedBy,   patient, uhid, q.updatedAt,                              q.removalReason,      'staff'));
+    if (q.addedBy)            events.push(makeEvent('added_to_queue',       'Added to Queue',        q.addedBy,              patient, uhid, q.createdAt,                          null,               'staff'));
+    if (q.triagedBy)          events.push(makeEvent('triaged',               'Triaged Patient',       q.triagedBy,            patient, uhid, q.createdAt,                          null,               'staff'));
+    if (q.dischargedBy)       events.push(makeEvent('discharged',            'Discharged Patient',    q.dischargedBy,         patient, uhid, q.consultationEndTime || q.updatedAt, q.dischargeComment, 'staff'));
+    if (q.removedBy)          events.push(makeEvent('removed',               'Removed from Queue',    q.removedBy,            patient, uhid, q.updatedAt,                          q.removalReason,    'staff'));
+    if (q.referredByDoctorName && q.referredAt) {
+      const referralDetail = q.referralType === 'Internal'
+        ? `Internal → ${q.referredToDoctorName || 'Another Doctor'}${q.referralReason ? ` · ${q.referralReason}` : ''}`
+        : `External → ${q.externalReferralTarget || 'External Facility'}${q.referralReason ? ` · ${q.referralReason}` : ''}`;
+      events.push(makeEvent('referred', 'Referred Patient', q.referredByDoctorName, patient, uhid, q.referredAt, referralDetail, 'doctor'));
+    }
     if (q.consultationStartTime && doctor) events.push(makeEvent('consultation_started',   'Started Consultation',   doctor, patient, uhid, q.consultationStartTime, null, 'doctor'));
     if (q.consultationEndTime   && doctor) events.push(makeEvent('consultation_completed', 'Completed Consultation', doctor, patient, uhid, q.consultationEndTime,   null, 'doctor'));
   }
@@ -108,8 +118,10 @@ const getDocumentEvents = async (dateFilter, hasDateFilter) => {
   });
 
   return docs.map(d => {
-    const staff = d.uploader ? `${d.uploader.firstName} ${d.uploader.lastName}` : 'Unknown';
     const role  = d.uploadedByRole ? d.uploadedByRole.toLowerCase() : 'staff';
+    const staff = d.uploader
+      ? (role === 'doctor' ? `Dr. ${d.uploader.firstName} ${d.uploader.lastName}` : `${d.uploader.firstName} ${d.uploader.lastName}`)
+      : 'Unknown';
     return makeEvent('document_uploaded', 'Uploaded Document', staff, `${d.Patient.firstName} ${d.Patient.lastName}`, d.Patient.uhid, d.createdAt, d.documentCategory, role);
   });
 };
