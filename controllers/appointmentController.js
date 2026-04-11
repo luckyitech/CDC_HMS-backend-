@@ -102,6 +102,19 @@ const book = async (req, res) => {
     return error(res, 'Doctor not found', 404);
   }
 
+  // Check for conflicting appointment (same doctor, date, time slot, not cancelled)
+  const conflict = await Appointment.findOne({
+    where: {
+      doctorId,
+      date,
+      timeSlot,
+      status: { [Op.ne]: 'cancelled' },
+    },
+  });
+  if (conflict) {
+    return error(res, 'This time slot is already booked. Please choose a different time.', 409);
+  }
+
   // Generate appointment number
   const appointmentNumber = await generateNumber(
     Appointment,

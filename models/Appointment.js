@@ -46,6 +46,7 @@ const Appointment = defineModel('Appointment', {
 }, {
   indexes: [
     { unique: true, fields: ['appointmentNumber'], name: 'unique_appointmentNumber' },
+    { unique: true, fields: ['doctorId', 'date', 'timeSlot'], name: 'unique_doctor_date_timeslot' },
   ],
 });
 
