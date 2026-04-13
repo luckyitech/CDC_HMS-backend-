@@ -264,6 +264,12 @@ const update = async (req, res) => {
       return error(res, 'You can only update your own consultation notes', 403);
     }
 
+    // Medical records law: notes can only be edited on the day they were written
+    const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+    if (consultationNote.date !== today) {
+      return error(res, 'Consultation notes can only be edited on the day they were written', 403);
+    }
+
     // Update only the fields that were provided
     if (notes !== undefined) consultationNote.notes = notes;
     if (vitals !== undefined) consultationNote.vitals = vitals;

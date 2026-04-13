@@ -83,7 +83,7 @@ const formatItem = (item, position) => {
 // ------------------------------------
 const add = async (req, res) => {
   try {
-    const { uhid, priority = 'Normal', reason, isReview = false } = req.body;
+    const { uhid, priority = 'Normal', reason, isReview = false, assignedDoctorId = null } = req.body;
 
     const patient = await Patient.findOne({ where: { uhid } });
     if (!patient) return error(res, 'Patient not found', 404);
@@ -105,6 +105,7 @@ const add = async (req, res) => {
         where: { PatientId: patient.id, status: 'Completed', createdAt: { [Op.gte]: startOfToday } },
       });
       if (!dischargedToday) return error(res, 'Review visit is only allowed if the patient was discharged today', 400);
+      if (!assignedDoctorId) return error(res, 'A doctor must be assigned for review visits', 400);
     }
 
     // Review visits skip triage — patient goes straight to Awaiting Doctor.
@@ -113,11 +114,12 @@ const add = async (req, res) => {
     const initialStatus = isReview ? 'Awaiting Doctor' : 'Awaiting Triage';
 
     const item = await Queue.create({
-      PatientId: patient.id,
+      PatientId:        patient.id,
       priority,
       reason,
-      status: initialStatus,
-      addedBy: req.user.name || 'Unknown',
+      status:           initialStatus,
+      assignedDoctorId: isReview ? assignedDoctorId : null,
+      addedBy:          req.user.name || 'Unknown',
     });
 
     // Re-fetch with joins for the response

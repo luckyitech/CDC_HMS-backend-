@@ -357,4 +357,16 @@ const getVitals = async (req, res) => {
   return success(res, formatVitals(latestVital));
 };
 
-module.exports = { create, list, getOne, update, destroy, stats, recordVitals, recordVitalsDoctor, getVitals };
+// ------------------------------------
+// GET /api/patients/:uhid/vitals/history — all vitals records newest first
+// ------------------------------------
+const getVitalsHistory = async (req, res) => {
+  const vitals = await PatientVital.findAll({
+    where: { PatientId: req.patient.id },
+    order: [['recordedAt', 'DESC']],
+  });
+
+  return success(res, vitals.map(formatVitals));
+};
+
+module.exports = { create, list, getOne, update, destroy, stats, recordVitals, recordVitalsDoctor, getVitals, getVitalsHistory };

@@ -59,6 +59,11 @@ router.post('/:uhid/vitals', authenticate, authorize('staff'), findPatient, [
 router.post('/:uhid/vitals/doctor', authenticate, authorize('doctor'), findPatient, patientController.recordVitalsDoctor);
 
 // ------------------------------------
+// GET /api/patients/:uhid/vitals/history — all vitals records (MUST be before /:uhid/vitals)
+// ------------------------------------
+router.get('/:uhid/vitals/history', authenticate, authorize('doctor', 'staff'), findPatient, patientController.getVitalsHistory);
+
+// ------------------------------------
 // GET /api/patients/:uhid/vitals — latest vitals
 // ------------------------------------
 router.get('/:uhid/vitals', authenticate, authorize('doctor', 'staff'), findPatient, patientController.getVitals);

@@ -271,12 +271,47 @@ const stats = async (req, res) => {
 };
 
 // ====================================
+// UPDATE DIAGNOSIS & PLAN
+// ====================================
+
+/**
+ * PUT /api/treatment-plans/:id
+ * Updates the diagnosis and/or plan text of an existing treatment plan.
+ *
+ * Authorization: Doctor only
+ */
+const update = async (req, res) => {
+  const { diagnosis, plan } = req.body;
+
+  const treatmentPlan = await TreatmentPlan.findByPk(req.params.id);
+  if (!treatmentPlan) return error(res, 'Treatment plan not found', 404);
+
+  // Medical records law: a treatment plan can only be edited on the day it was written.
+  const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+  if (treatmentPlan.date !== today) {
+    return error(res, 'Treatment plans can only be edited on the day they were written', 403);
+  }
+
+  await treatmentPlan.update({
+    ...(diagnosis !== undefined && { diagnosis }),
+    ...(plan      !== undefined && { plan }),
+  });
+
+  const updated = await TreatmentPlan.findByPk(treatmentPlan.id, {
+    include: treatmentPlanIncludes,
+  });
+
+  return success(res, formatTreatmentPlan(updated));
+};
+
+// ====================================
 // EXPORTS
 // ====================================
 module.exports = {
   create,
   list,
   getOne,
+  update,
   updateStatus,
   destroy,
   stats,

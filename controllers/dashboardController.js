@@ -106,7 +106,7 @@ const getDoctorStats = async (doctorId) => {
 
   // Next patient in queue (Urgent first, then oldest arrival)
   const nextPatient = await Queue.findOne({
-    where: { assignedDoctorId: doctorId, createdAt: todayRange, status: 'Waiting' },
+    where: { assignedDoctorId: doctorId, createdAt: todayRange, status: 'Awaiting Doctor' },
     include: [{ model: Patient, attributes: ['uhid', 'firstName', 'lastName'] }],
     order: [['priority', 'DESC'], ['createdAt', 'ASC']],
   });
@@ -147,7 +147,7 @@ const getStaffStats = async () => {
     pendingDocuments,
     appointmentsToday,
   ] = await Promise.all([
-    Queue.count({ where: { createdAt: todayRange, status: 'Waiting' } }),
+    Queue.count({ where: { createdAt: todayRange, status: 'Awaiting Triage' } }),
     Queue.count({ where: { createdAt: todayRange, status: 'In Triage' } }),
     Queue.count({ where: { createdAt: todayRange, status: 'With Doctor' } }),
     Queue.count({ where: { createdAt: todayRange, status: 'Completed' } }),

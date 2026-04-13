@@ -79,6 +79,23 @@ router.get(
 );
 
 // ------------------------------------
+// PUT /api/treatment-plans/:id — Update diagnosis and/or plan text
+// ------------------------------------
+// Authorization: Doctor only
+// MUST be before /:id/status so Express doesn't treat "status" as the :id param
+router.put(
+  '/:id',
+  authenticate,
+  authorize('doctor'),
+  [
+    body('diagnosis').optional().notEmpty().withMessage('Diagnosis cannot be empty'),
+    body('plan').optional().notEmpty().withMessage('Treatment plan cannot be empty'),
+    validate,
+  ],
+  treatmentPlanController.update
+);
+
+// ------------------------------------
 // PUT /api/treatment-plans/:id/status — Update status
 // ------------------------------------
 // Authorization: Doctor only
