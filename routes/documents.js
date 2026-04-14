@@ -9,7 +9,17 @@ const documentController = require('../controllers/documentController');
 // ------------------------------------
 // POST /api/documents — upload document
 // ------------------------------------
-router.post('/', authenticate, authorize('patient', 'doctor', 'staff', 'admin'), upload.single('file'), [
+router.post('/', authenticate, authorize('patient', 'doctor', 'staff', 'admin'), (req, res, next) => {
+  upload.single('file')(req, res, (err) => {
+    if (err) {
+      if (err.code === 'LIMIT_FILE_SIZE') {
+        return res.status(400).json({ success: false, message: 'File is too large. Maximum allowed size is 25MB.' });
+      }
+      return res.status(400).json({ success: false, message: err.message || 'File upload failed.' });
+    }
+    next();
+  });
+}, [
   body('uhid').notEmpty().withMessage('Patient UHID is required'),
   body('documentCategory').notEmpty().withMessage('Document category is required'),
   validate,

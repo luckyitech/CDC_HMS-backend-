@@ -33,8 +33,7 @@ router.post(
       .isInt()
       .withMessage('Patient ID is required and must be a number'),
     body('diagnosis')
-      .notEmpty()
-      .withMessage('Diagnosis is required'),
+      .optional({ nullable: true, checkFalsy: true }),
     body('medications')
       .isArray({ min: 1 })
       .withMessage('At least one medication is required'),
