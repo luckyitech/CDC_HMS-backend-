@@ -8,10 +8,10 @@ const consultationNoteController = require('../controllers/consultationNoteContr
 // ====================================
 // UNDERSTANDING AUTHORIZATION
 // ====================================
-// Consultation Notes are doctor-only:
-//
 // CREATE (POST):     Only DOCTORS can create consultation notes
-// LIST (GET):        Only DOCTORS can view consultation notes
+// LIST / GET (GET):  DOCTORS and STAFF can read (staff = read-only view in patient profile)
+// UPDATE (PUT):      Only DOCTORS can edit their own notes
+// DELETE (DELETE):   DOCTORS and ADMINS only
 
 // ------------------------------------
 // POST /api/consultation-notes — Create new consultation note
@@ -56,25 +56,22 @@ router.post(
 // ------------------------------------
 // GET /api/consultation-notes — List consultation notes
 // ------------------------------------
-// Authorization: Doctor only
-// REQUIRED query parameter: uhid (Patient UHID)
-// OPTIONAL query parameter: search (searches notes, assessment, plan)
-// Example: GET /api/consultation-notes?uhid=CDC001&search=diabetes
+// Authorization: Doctor, Staff (staff view is read-only — enforced on frontend)
 router.get(
   '/',
   authenticate,
-  authorize('doctor'),
+  authorize('doctor', 'staff'),
   consultationNoteController.list
 );
 
 // ------------------------------------
 // GET /api/consultation-notes/:id — Get single consultation note
 // ------------------------------------
-// Authorization: Doctor only
+// Authorization: Doctor, Staff
 router.get(
   '/:id',
   authenticate,
-  authorize('doctor'),
+  authorize('doctor', 'staff'),
   consultationNoteController.getById
 );
 
