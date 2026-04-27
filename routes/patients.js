@@ -79,7 +79,7 @@ router.post('/:uhid/blood-sugar', authenticate, authorize('patient'), findPatien
 // ------------------------------------
 // GET /api/patients/:uhid/blood-sugar — readings with date filters
 // ------------------------------------
-router.get('/:uhid/blood-sugar', authenticate, authorize('patient', 'doctor'), findPatient, bloodSugarController.get);
+router.get('/:uhid/blood-sugar', authenticate, authorize('patient', 'doctor', 'staff'), findPatient, bloodSugarController.get);
 
 // ====================================
 // MEDICAL EQUIPMENT ENDPOINTS
