@@ -7,6 +7,7 @@ const { sendPasswordResetEmail } = require('../utils/emailService');
 const db = require('../models');
 
 const { User, DoctorProfile, StaffProfile, LabTechProfile, Patient } = db;
+const { logLogin } = require('../services/activityLogService');
 
 // Maps the three staff-type roles to their profile models.
 // Keeps buildUserResponse DRY — no if/else chain needed.
@@ -55,11 +56,11 @@ const buildUserResponse = async (user) => {
 // POST /api/auth/login
 // ------------------------------------
 const login = async (req, res) => {
-  const { email, password, role } = req.body;
+  const { email, password } = req.body;
 
-  // 1. Find user by email + role + active
-  const user = await User.findOne({ where: { email, role, isActive: true } });
-  if (!user) return error(res, 'User not found or account is inactive', 401);
+  // 1. Find user by email (role is determined by the account, not supplied by the client)
+  const user = await User.findOne({ where: { email, isActive: true } });
+  if (!user) return error(res, 'Invalid credentials or account is inactive', 401);
 
   // 2. Compare password
   const match = await bcrypt.compare(password, user.password);
@@ -72,7 +73,11 @@ const login = async (req, res) => {
     { expiresIn: process.env.JWT_EXPIRES_IN }
   );
 
-  // 4. Build response with profile
+  // 4. Record login event (staff / doctor / lab only — fire-and-forget)
+  const ip = req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.socket?.remoteAddress || null;
+  logLogin(user, ip);
+
+  // 5. Build response with profile
   const userData = await buildUserResponse(user);
 
   return success(res, { token, user: userData });

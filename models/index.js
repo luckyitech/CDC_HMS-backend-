@@ -20,6 +20,7 @@ const MedicalDocument     = require('./MedicalDocument');
 const Appointment         = require('./Appointment');
 const MedicalEquipment    = require('./MedicalEquipment');
 const EquipmentHistory    = require('./EquipmentHistory');
+const UserLoginLog        = require('./UserLoginLog');
 
 // =============================================
 // ASSOCIATIONS
@@ -127,6 +128,7 @@ const db = {
   Appointment,
   MedicalEquipment,
   EquipmentHistory,
+  UserLoginLog,
 };
 
 module.exports = db;

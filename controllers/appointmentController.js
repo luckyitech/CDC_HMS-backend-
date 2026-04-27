@@ -88,12 +88,14 @@ const appointmentIncludes = [
  * - bookedAt: Current timestamp
  */
 const book = async (req, res) => {
-  const { doctorId, date, timeSlot, appointmentType, reason, notes } = req.body;
+  const { doctorId, date, timeSlot, appointmentType, reason, notes, uhid } = req.body;
 
-  // Find patient from logged-in user
-  const patient = await Patient.findOne({ where: { userId: req.user.id } });
+  // Patients book for themselves; doctors/staff supply a uhid to book for a patient
+  const patient = req.user.role === 'patient'
+    ? await Patient.findOne({ where: { userId: req.user.id } })
+    : await Patient.findOne({ where: { uhid } });
   if (!patient) {
-    return error(res, 'Patient profile not found', 404);
+    return error(res, 'Patient not found', 404);
   }
 
   // Verify doctor exists

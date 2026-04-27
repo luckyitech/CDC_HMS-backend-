@@ -2,7 +2,7 @@ const { Op } = require('sequelize');
 const { success } = require('../utils/response');
 const db = require('../models');
 
-const { Queue, Patient, MedicalDocument, MedicalEquipment, EquipmentHistory, User, Prescription, LabTest, TreatmentPlan, ConsultationNote, PhysicalExamination, InitialAssessment } = db;
+const { Queue, Patient, MedicalDocument, MedicalEquipment, EquipmentHistory, User, Prescription, LabTest, TreatmentPlan, ConsultationNote, PhysicalExamination, InitialAssessment, UserLoginLog } = db;
 
 // ── Shared event shape ────────────────────────────────────────────────────────
 
@@ -36,6 +36,7 @@ const SUMMARY_KEYS = {
   physical_exam:           'physicalExam',
   initial_assessment:      'initialAssessment',
   account_created:         'accountCreated',
+  user_login:              'userLogin',
 };
 
 const buildSummary = (events) => {
@@ -261,6 +262,18 @@ const getAccountCreationEvents = async (dateFilter, hasDateFilter) => {
   );
 };
 
+const getLoginEvents = async (dateFilter, hasDateFilter) => {
+  const logs = await UserLoginLog.findAll({
+    where: hasDateFilter ? { loginAt: dateFilter } : {},
+    attributes: ['userId', 'name', 'role', 'ipAddress', 'loginAt'],
+    order: [['loginAt', 'DESC']],
+  });
+
+  return logs.map(l =>
+    makeEvent('user_login', 'Logged In', l.name, null, null, l.loginAt, l.ipAddress || null, l.role)
+  );
+};
+
 // ── Controller ────────────────────────────────────────────────────────────────
 
 const getActivityLog = async (req, res) => {
@@ -283,6 +296,7 @@ const getActivityLog = async (req, res) => {
     getEquipmentEvents(dateFilter, hasDateFilter),
     getDoctorEvents(dateFilter, hasDateFilter),
     getAccountCreationEvents(dateFilter, hasDateFilter),
+    getLoginEvents(dateFilter, hasDateFilter),
   ])).flat();
 
   // Summary uses all events (unfiltered)

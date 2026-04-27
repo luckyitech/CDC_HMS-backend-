@@ -60,6 +60,7 @@ const formatItem = (item, position) => {
     consultationEndTime:   q.consultationEndTime   || null,
     selectedCharges:       q.selectedCharges       || [],
     selectedProcedures:    q.selectedProcedures    || [],
+    doctorNotes:           q.doctorNotes           || null,
     finalCharges:          q.finalCharges          || [],
     finalProcedures:       q.finalProcedures       || [],
     dischargeComment:      q.dischargeComment      || null,

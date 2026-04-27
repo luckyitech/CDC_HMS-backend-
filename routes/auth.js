@@ -11,7 +11,6 @@ const authController = require('../controllers/authController');
 router.post('/login', authLimiter, [
   body('email').isEmail().withMessage('Valid email is required'),
   body('password').notEmpty().withMessage('Password is required'),
-  body('role').isIn(['doctor', 'staff', 'lab', 'patient', 'admin']).withMessage('Valid role is required'),
   validate,
 ], authController.login);
 

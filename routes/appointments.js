@@ -10,7 +10,7 @@ const appointmentController = require('../controllers/appointmentController');
 // ====================================
 // Appointment routes have specific role requirements:
 //
-// BOOK (POST):        Only PATIENTS can book appointments
+// BOOK (POST):        Patients (own), Doctors / Staff / Admin (on behalf of patient via uhid)
 // LIST (GET):         PATIENTS (own only), DOCTORS, STAFF can view
 // UPDATE STATUS (PUT): STAFF, DOCTORS, PATIENTS can update status
 // STATS (GET):        Only DOCTORS and ADMINS can view stats
@@ -30,30 +30,25 @@ router.get(
 // ------------------------------------
 // POST /api/appointments — Book appointment
 // ------------------------------------
-// Authorization: Patient only
-// Why? Only patients book their own appointments
+// Patients book for themselves.
+// Doctors / staff / admin book on behalf of a patient by passing uhid.
 router.post(
   '/',
   authenticate,
-  authorize('patient'),
+  authorize('patient', 'doctor', 'staff', 'admin'),
   [
-    body('doctorId')
-      .isInt()
-      .withMessage('Doctor ID is required'),
-    body('date')
-      .isDate()
-      .withMessage('Valid appointment date is required (YYYY-MM-DD)'),
-    body('timeSlot')
-      .notEmpty()
-      .withMessage('Time slot is required'),
+    body('doctorId').isInt().withMessage('Doctor ID is required'),
+    body('date').isDate().withMessage('Valid appointment date is required (YYYY-MM-DD)'),
+    body('timeSlot').notEmpty().withMessage('Time slot is required'),
     body('appointmentType')
       .isIn(['consultation', 'follow-up', 'check-up', 'emergency'])
       .withMessage('Valid appointment type is required'),
-    body('reason')
+    body('reason').notEmpty().withMessage('Reason for appointment is required'),
+    body('uhid')
+      .if((_, { req }) => req.user?.role !== 'patient')
       .notEmpty()
-      .withMessage('Reason for appointment is required'),
-    body('notes')
-      .optional(),
+      .withMessage('Patient UHID is required'),
+    body('notes').optional(),
     validate,
   ],
   appointmentController.book

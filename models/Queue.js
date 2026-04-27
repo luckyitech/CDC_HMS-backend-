@@ -37,6 +37,10 @@ const Queue = defineModel('Queue', {
     type: DataTypes.JSON,
     defaultValue: null,
   },
+  doctorNotes: {
+    type: DataTypes.TEXT,
+    defaultValue: null,
+  },
 
   // --- Accountability ---
   addedBy: {
