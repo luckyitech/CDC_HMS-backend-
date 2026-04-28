@@ -223,14 +223,26 @@ const list = async (req, res) => {
       patientWhere.uhid = uhid;
     }
 
-    // If user is a patient, only show their own documents and hide internal categories
+    // If user is a patient, restrict to their own documents
     if (req.user.role === 'patient') {
       const patient = await Patient.findOne({ where: { UserId: req.user.id } });
       if (!patient) {
         return error(res, 'Your patient profile is not linked to your account. Please contact support.', 404);
       }
       where.PatientId = patient.id;
-      where.documentCategory = { [db.Sequelize.Op.notIn]: PATIENT_HIDDEN_CATEGORIES };
+
+      // Patients see only documents they uploaded themselves
+      where.uploadedByRole = 'patient';
+
+      // ── COMMENTED OUT ──────────────────────────────────────────────────────
+      // Previous behaviour: patient could see all their documents across all
+      // uploaders, but with certain categories hidden (Patient File,
+      // Specialist Consultation Report). Re-enable this block and remove the
+      // uploadedByRole filter above when selling to hospitals that want patients
+      // to view staff/doctor-uploaded documents with category restrictions.
+      //
+      // where.documentCategory = { [db.Sequelize.Op.notIn]: PATIENT_HIDDEN_CATEGORIES };
+      // ──────────────────────────────────────────────────────────────────────
     }
 
     // Fetch documents
