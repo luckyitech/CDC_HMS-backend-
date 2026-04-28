@@ -26,6 +26,9 @@ const ALLOWED_CATEGORIES = [
 // Categories that only accept PDF files
 const PDF_ONLY_CATEGORIES = ['Patient File'];
 
+// Categories hidden from patients — internal clinical documents
+const PATIENT_HIDDEN_CATEGORIES = ['Patient File', 'Specialist Consultation Report'];
+
 // ====================================
 // HELPER FUNCTIONS
 // ====================================
@@ -220,14 +223,14 @@ const list = async (req, res) => {
       patientWhere.uhid = uhid;
     }
 
-    // If user is a patient, only show their own documents
+    // If user is a patient, only show their own documents and hide internal categories
     if (req.user.role === 'patient') {
-      // Find the patient record linked to this user
       const patient = await Patient.findOne({ where: { UserId: req.user.id } });
       if (!patient) {
         return error(res, 'Your patient profile is not linked to your account. Please contact support.', 404);
       }
       where.PatientId = patient.id;
+      where.documentCategory = { [db.Sequelize.Op.notIn]: PATIENT_HIDDEN_CATEGORIES };
     }
 
     // Fetch documents
