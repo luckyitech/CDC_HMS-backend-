@@ -7,7 +7,7 @@ const crypto = require('crypto');
 const { generateUHID } = require('../utils/generateId');
 const { sendPatientWelcomeEmail } = require('../utils/emailService');
 
-const { Patient, User, PatientVital } = db;
+const { Patient, User, PatientVital, Appointment, Queue } = db;
 
 // ------------------------------------
 // Helpers
@@ -46,8 +46,14 @@ const computeAge = (dateOfBirth) => {
 };
 
 // Shapes a Patient row (with primaryDoctor included) into the full API response.
-const formatPatient = (patient, latestVital) => {
+const formatPatient = (patient, latestVital, nextAppointment = null, lastQueue = null) => {
   const p = patient.dataValues || patient;
+
+  // Derive last visit date from the most recent completed queue entry
+  const lastVisitDate = lastQueue
+    ? new Date(lastQueue.createdAt).toISOString().split('T')[0]
+    : p.lastVisit || null;
+
   return {
     id:               p.id,
     uhid:             p.uhid,
@@ -68,8 +74,9 @@ const formatPatient = (patient, latestVital) => {
     referredBy:       p.referredBy,
     status:           p.status,
     riskLevel:        p.riskLevel,
-    lastVisit:        p.lastVisit,
-    nextVisit:        p.nextVisit,
+    lastVisit:        lastVisitDate,
+    nextVisit:        nextAppointment?.date      || p.nextVisit  || null,
+    nextVisitBooked:  nextAppointment?.bookedAt  || null,
     emergencyContact: p.emergencyContact,
     insurance:        p.insurance,
     vitals:           formatVitals(latestVital),
@@ -208,20 +215,58 @@ const list = async (req, res) => {
     distinct: true, // count unique patients, not joined rows
   });
 
-  // Bulk-fetch latest vitals for every patient on this page in one query
   const patientIds = rows.map(p => p.id);
-  const vitals     = await PatientVital.findAll({
-    where: { PatientId: patientIds },
-    order: [['recordedAt', 'DESC']],
-  });
+  const today      = new Date().toISOString().split('T')[0];
 
-  // Keep only the first (most-recent) vital per patient
+  // Bulk-fetch vitals, next scheduled appointments, and last completed queue visits in parallel
+  const [vitals, nextAppts, lastQueues] = await Promise.all([
+    PatientVital.findAll({
+      where: { PatientId: patientIds },
+      order: [['recordedAt', 'DESC']],
+    }),
+    Appointment.findAll({
+      where: {
+        PatientId: patientIds,
+        status:    'scheduled',
+        date:      { [Op.gte]: today },
+      },
+      order:      [['date', 'ASC']],
+      attributes: ['PatientId', 'date', 'bookedAt'],
+    }),
+    Queue.findAll({
+      where: {
+        PatientId: patientIds,
+        status:    'Completed',
+      },
+      order:      [['createdAt', 'DESC']],
+      attributes: ['PatientId', 'createdAt'],
+    }),
+  ]);
+
+  // Keep only the most-recent vital per patient
   const vitalMap = {};
   vitals.forEach(v => {
     if (!vitalMap[v.PatientId]) vitalMap[v.PatientId] = v;
   });
 
-  const patients = rows.map(p => formatPatient(p, vitalMap[p.id] || null));
+  // Keep only the earliest upcoming appointment per patient
+  const nextApptMap = {};
+  nextAppts.forEach(a => {
+    if (!nextApptMap[a.PatientId]) nextApptMap[a.PatientId] = a;
+  });
+
+  // Keep only the most recent completed queue visit per patient
+  const lastQueueMap = {};
+  lastQueues.forEach(q => {
+    if (!lastQueueMap[q.PatientId]) lastQueueMap[q.PatientId] = q;
+  });
+
+  const patients = rows.map(p => formatPatient(
+    p,
+    vitalMap[p.id]     || null,
+    nextApptMap[p.id]  || null,
+    lastQueueMap[p.id] || null,
+  ));
 
   return success(res, {
     patients,
@@ -238,14 +283,27 @@ const list = async (req, res) => {
 // GET /api/patients/:uhid — single patient
 // ------------------------------------
 const getOne = async (req, res) => {
-  const patient = await Patient.findByPk(req.patient.id, { include: [doctorInclude] });
+  const today = new Date().toISOString().split('T')[0];
 
-  const latestVital = await PatientVital.findOne({
-    where: { PatientId: req.patient.id },
-    order: [['recordedAt', 'DESC']],
-  });
+  const [patient, latestVital, nextAppt, lastQueue] = await Promise.all([
+    Patient.findByPk(req.patient.id, { include: [doctorInclude] }),
+    PatientVital.findOne({
+      where: { PatientId: req.patient.id },
+      order: [['recordedAt', 'DESC']],
+    }),
+    Appointment.findOne({
+      where: { PatientId: req.patient.id, status: 'scheduled', date: { [Op.gte]: today } },
+      order: [['date', 'ASC']],
+      attributes: ['PatientId', 'date', 'bookedAt'],
+    }),
+    Queue.findOne({
+      where: { PatientId: req.patient.id, status: 'Completed' },
+      order: [['createdAt', 'DESC']],
+      attributes: ['PatientId', 'createdAt'],
+    }),
+  ]);
 
-  return success(res, formatPatient(patient, latestVital));
+  return success(res, formatPatient(patient, latestVital, nextAppt, lastQueue));
 };
 
 // ------------------------------------
@@ -253,15 +311,27 @@ const getOne = async (req, res) => {
 // ------------------------------------
 const update = async (req, res) => {
   await req.patient.update(req.body);
+  const today = new Date().toISOString().split('T')[0];
 
-  // Re-fetch full response
-  const full = await Patient.findByPk(req.patient.id, { include: [doctorInclude] });
-  const latestVital = await PatientVital.findOne({
-    where: { PatientId: req.patient.id },
-    order: [['recordedAt', 'DESC']],
-  });
+  const [full, latestVital, nextAppt, lastQueue] = await Promise.all([
+    Patient.findByPk(req.patient.id, { include: [doctorInclude] }),
+    PatientVital.findOne({
+      where: { PatientId: req.patient.id },
+      order: [['recordedAt', 'DESC']],
+    }),
+    Appointment.findOne({
+      where: { PatientId: req.patient.id, status: 'scheduled', date: { [Op.gte]: today } },
+      order: [['date', 'ASC']],
+      attributes: ['PatientId', 'date', 'bookedAt'],
+    }),
+    Queue.findOne({
+      where: { PatientId: req.patient.id, status: 'Completed' },
+      order: [['createdAt', 'DESC']],
+      attributes: ['PatientId', 'createdAt'],
+    }),
+  ]);
 
-  return success(res, formatPatient(full, latestVital));
+  return success(res, formatPatient(full, latestVital, nextAppt, lastQueue));
 };
 
 // ------------------------------------
