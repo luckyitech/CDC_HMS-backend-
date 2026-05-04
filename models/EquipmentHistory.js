@@ -8,6 +8,10 @@ const EquipmentHistory = defineModel('EquipmentHistory', {
     type: DataTypes.ENUM('pump', 'transmitter'),
     allowNull: false,
   },
+  type: {
+    type: DataTypes.STRING,   // new / upgrade / replacement
+    defaultValue: null,
+  },
   serialNo: {
     type: DataTypes.STRING,
   },
@@ -27,6 +31,28 @@ const EquipmentHistory = defineModel('EquipmentHistory', {
     defaultValue: null,
   },
   warrantyEndDate: {
+    type: DataTypes.DATE,
+    defaultValue: null,
+  },
+  // CareLink account snapshot — pump only
+  careLinkCountry: {
+    type: DataTypes.STRING,
+    defaultValue: null,
+  },
+  careLinkEmail: {
+    type: DataTypes.STRING,
+    defaultValue: null,
+  },
+  careLinkPassword: {
+    type: DataTypes.STRING,   // stored AES-256 encrypted
+    defaultValue: null,
+  },
+
+  addedBy: {
+    type: DataTypes.INTEGER,   // User ID who originally added this device
+    defaultValue: null,
+  },
+  addedDate: {
     type: DataTypes.DATE,
     defaultValue: null,
   },

@@ -20,7 +20,9 @@ const MedicalDocument     = require('./MedicalDocument');
 const Appointment         = require('./Appointment');
 const MedicalEquipment    = require('./MedicalEquipment');
 const EquipmentHistory    = require('./EquipmentHistory');
+const EquipmentAuditLog   = require('./EquipmentAuditLog');
 const UserLoginLog        = require('./UserLoginLog');
+const CareLinkPartner     = require('./CareLinkPartner');
 
 // =============================================
 // ASSOCIATIONS
@@ -101,8 +103,25 @@ MedicalEquipment.belongsTo(User, { foreignKey: 'addedBy', as: 'addedByUser' });
 User.hasMany(MedicalEquipment, { foreignKey: 'lastUpdatedBy', as: 'updatedEquipment' });
 MedicalEquipment.belongsTo(User, { foreignKey: 'lastUpdatedBy', as: 'updatedByUser' });
 
+User.hasMany(EquipmentHistory, { foreignKey: 'addedBy',    as: 'historyAddedEquipment' });
+EquipmentHistory.belongsTo(User, { foreignKey: 'addedBy',    as: 'historyAddedByUser' });
+
 User.hasMany(EquipmentHistory, { foreignKey: 'archivedBy', as: 'archivedEquipment' });
 EquipmentHistory.belongsTo(User, { foreignKey: 'archivedBy', as: 'archivedByUser' });
+
+// --- Equipment audit log ---
+Patient.hasMany(EquipmentAuditLog);
+EquipmentAuditLog.belongsTo(Patient);
+
+User.hasMany(EquipmentAuditLog, { foreignKey: 'changedBy', as: 'equipmentAuditChanges' });
+EquipmentAuditLog.belongsTo(User, { foreignKey: 'changedBy', as: 'changedByUser' });
+
+// --- CareLink partners ---
+Patient.hasMany(CareLinkPartner);
+CareLinkPartner.belongsTo(Patient);
+
+User.hasMany(CareLinkPartner, { foreignKey: 'addedBy', as: 'addedCareLinkPartners' });
+CareLinkPartner.belongsTo(User, { foreignKey: 'addedBy', as: 'addedByUser' });
 
 // =============================================
 // EXPORTS
@@ -128,7 +147,9 @@ const db = {
   Appointment,
   MedicalEquipment,
   EquipmentHistory,
+  EquipmentAuditLog,
   UserLoginLog,
+  CareLinkPartner,
 };
 
 module.exports = db;

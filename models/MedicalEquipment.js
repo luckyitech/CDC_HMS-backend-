@@ -36,6 +36,21 @@ const MedicalEquipment = defineModel('MedicalEquipment', {
     type: DataTypes.DATE,
     defaultValue: null,
   },
+
+  // CareLink account — pump only
+  careLinkCountry: {
+    type: DataTypes.STRING,
+    defaultValue: null,
+  },
+  careLinkEmail: {
+    type: DataTypes.STRING,
+    defaultValue: null,
+  },
+  careLinkPassword: {
+    type: DataTypes.STRING,   // stored AES-256 encrypted
+    defaultValue: null,
+  },
+
   addedBy: {
     type: DataTypes.INTEGER,   // Must match User PK type (SIGNED — Sequelize default)
   },

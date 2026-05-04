@@ -11,7 +11,7 @@ const TreatmentPlan = defineModel('TreatmentPlan', {
     type: DataTypes.STRING,   // "10:30 AM"
   },
   diagnosis: {
-    type: DataTypes.STRING,
+    type: DataTypes.TEXT,   // stores JSON array of {code, description} objects
   },
   plan: {
     type: DataTypes.TEXT,     // multi-line detailed plan

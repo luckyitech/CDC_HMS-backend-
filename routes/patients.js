@@ -4,9 +4,10 @@ const { body } = require('express-validator');
 const validate = require('../middleware/validate');
 const { authenticate, authorize } = require('../middleware/auth');
 const findPatient = require('../middleware/findPatient');
-const patientController     = require('../controllers/patientController');
-const bloodSugarController  = require('../controllers/bloodSugarController');
-const equipmentController   = require('../controllers/equipmentController');
+const patientController          = require('../controllers/patientController');
+const bloodSugarController       = require('../controllers/bloodSugarController');
+const equipmentController        = require('../controllers/equipmentController');
+const careLinkPartnerController  = require('../controllers/careLinkPartnerController');
 
 // ------------------------------------
 // POST /api/patients — create patient
@@ -88,7 +89,12 @@ router.get('/:uhid/blood-sugar', authenticate, authorize('patient', 'doctor', 's
 // ------------------------------------
 // GET /api/patients/:uhid/equipment/history — MUST be before /:uhid/equipment/:id
 // ------------------------------------
-router.get('/:uhid/equipment/history', authenticate, authorize('doctor', 'staff'), equipmentController.getHistory);
+router.get('/:uhid/equipment/history',   authenticate, authorize('doctor', 'staff'), equipmentController.getHistory);
+
+// ------------------------------------
+// GET /api/patients/:uhid/equipment/audit-log — MUST be before /:uhid/equipment/:id
+// ------------------------------------
+router.get('/:uhid/equipment/audit-log', authenticate, authorize('doctor', 'staff'), equipmentController.getAuditLog);
 
 // ------------------------------------
 // GET /api/patients/:uhid/equipment — current equipment
@@ -100,7 +106,7 @@ router.get('/:uhid/equipment', authenticate, authorize('doctor', 'staff'), equip
 // ------------------------------------
 router.post('/:uhid/equipment', authenticate, authorize('doctor', 'staff'), [
   body('deviceType').isIn(['pump', 'transmitter']).withMessage('Device type must be pump or transmitter'),
-  body('type').isIn(['new', 'replacement', 'loaner']).withMessage('Type must be new, replacement, or loaner'),
+  body('type').isIn(['new', 'pre-owned', 'replacement', 'upgrade']).withMessage('Invalid equipment type'),
   body('serialNo').notEmpty().withMessage('Serial number is required'),
   body('startDate').isDate().withMessage('Valid start date is required'),
   body('warrantyStartDate').isDate().withMessage('Valid warranty start date is required'),
@@ -114,13 +120,43 @@ router.post('/:uhid/equipment', authenticate, authorize('doctor', 'staff'), [
 router.post('/:uhid/equipment/:id/replace', authenticate, authorize('doctor', 'staff'), [
   body('deviceType').isIn(['pump', 'transmitter']).withMessage('Device type must be pump or transmitter'),
   body('reason').notEmpty().withMessage('Reason for replacement is required'),
-  body('type').isIn(['new', 'replacement', 'loaner']).withMessage('Type must be new, replacement, or loaner'),
+  body('type').isIn(['new', 'pre-owned', 'replacement', 'upgrade']).withMessage('Invalid equipment type'),
   body('serialNo').notEmpty().withMessage('Serial number is required'),
   body('startDate').isDate().withMessage('Valid start date is required'),
   body('warrantyStartDate').isDate().withMessage('Valid warranty start date is required'),
   body('warrantyEndDate').isDate().withMessage('Valid warranty end date is required'),
   validate,
 ], equipmentController.replace);
+
+// ====================================
+// CARELINK PARTNER ENDPOINTS
+// ====================================
+
+// ------------------------------------
+// GET /api/patients/:uhid/carelink-partners
+// ------------------------------------
+router.get('/:uhid/carelink-partners', authenticate, authorize('doctor', 'staff'), careLinkPartnerController.getAll);
+
+// ------------------------------------
+// POST /api/patients/:uhid/carelink-partners
+// ------------------------------------
+router.post('/:uhid/carelink-partners', authenticate, authorize('doctor', 'staff'), [
+  body('firstName').notEmpty().withMessage('First name is required'),
+  body('lastName').notEmpty().withMessage('Last name is required'),
+  body('email').isEmail().withMessage('Valid email is required'),
+  body('relationship').notEmpty().withMessage('Relationship is required'),
+  validate,
+], careLinkPartnerController.add);
+
+// ------------------------------------
+// PUT /api/patients/:uhid/carelink-partners/:id
+// ------------------------------------
+router.put('/:uhid/carelink-partners/:id', authenticate, authorize('doctor', 'staff'), careLinkPartnerController.update);
+
+// ------------------------------------
+// DELETE /api/patients/:uhid/carelink-partners/:id
+// ------------------------------------
+router.delete('/:uhid/carelink-partners/:id', authenticate, authorize('doctor', 'staff'), careLinkPartnerController.remove);
 
 // ------------------------------------
 // PUT /api/patients/:uhid/equipment/:id — update equipment
