@@ -18,6 +18,16 @@ const Queue = defineModel('Queue', {
     type: DataTypes.TEXT,
   },
 
+  // Set by the controller when triage starts / ends
+  triageStartTime: {
+    type: DataTypes.DATE,
+    defaultValue: null,
+  },
+  triageEndTime: {
+    type: DataTypes.DATE,
+    defaultValue: null,
+  },
+
   // Set by the controller when consultation starts / ends
   consultationStartTime: {
     type: DataTypes.DATE,
@@ -25,6 +35,12 @@ const Queue = defineModel('Queue', {
   },
   consultationEndTime: {
     type: DataTypes.DATE,
+    defaultValue: null,
+  },
+  // Array of { doctorId, doctorName, startTime, endTime } — one entry per doctor.
+  // Accurate per-doctor timing even when referrals occur across multiple doctors.
+  consultationSessions: {
+    type: DataTypes.JSON,
     defaultValue: null,
   },
 
@@ -53,6 +69,10 @@ const Queue = defineModel('Queue', {
   },
 
   // Set by receptionist at discharge
+  dischargedAt: {
+    type: DataTypes.DATE,
+    defaultValue: null,
+  },
   finalCharges: {
     type: DataTypes.JSON,
     defaultValue: null,

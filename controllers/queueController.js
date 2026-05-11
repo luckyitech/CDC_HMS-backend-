@@ -6,6 +6,26 @@ const db = require('../models');
 const { Queue, Patient, User } = db;
 
 // ------------------------------------
+// Consultation session helpers
+// ------------------------------------
+
+// Opens a new session for the given doctor on the queue item.
+const pushSession = (item, doctorId, doctorName) => {
+  const sessions = Array.isArray(item.consultationSessions) ? [...item.consultationSessions] : [];
+  sessions.push({ doctorId, doctorName, startTime: new Date(), endTime: null });
+  return sessions;
+};
+
+// Closes the most recent open session (endTime === null).
+const closeLastSession = (item) => {
+  if (!Array.isArray(item.consultationSessions)) return item.consultationSessions;
+  const sessions = [...item.consultationSessions];
+  const last = sessions.findLastIndex(s => !s.endTime);
+  if (last !== -1) sessions[last] = { ...sessions[last], endTime: new Date() };
+  return sessions;
+};
+
+// ------------------------------------
 // Helpers
 // ------------------------------------
 
@@ -56,8 +76,11 @@ const formatItem = (item, position) => {
     assignedDoctorName:    q.assignedDoctor
                              ? `Dr. ${q.assignedDoctor.firstName} ${q.assignedDoctor.lastName}`
                              : null,
-    consultationStartTime: q.consultationStartTime || null,
-    consultationEndTime:   q.consultationEndTime   || null,
+    triageStartTime:        q.triageStartTime        || null,
+    triageEndTime:          q.triageEndTime          || null,
+    consultationStartTime:  q.consultationStartTime  || null,
+    consultationEndTime:    q.consultationEndTime    || null,
+    consultationSessions:   q.consultationSessions   || [],
     selectedCharges:       q.selectedCharges       || [],
     selectedProcedures:    q.selectedProcedures    || [],
     doctorNotes:           q.doctorNotes           || null,
@@ -198,13 +221,29 @@ const update = async (req, res) => {
     const { assignedDoctorName, ...updates } = req.body;
 
     // Auto-set timestamps on status transitions
-    // consultationStartTime is NOT set here — it is set explicitly by the doctor
-    // when they click "Start Consultation" on the frontend (via startConsultation in QueueContext)
-    if (updates.status === 'In Triage') updates.triagedBy = req.user.name || 'Unknown';
-    if (updates.status === 'Pending Billing') updates.consultationEndTime = new Date();
+    if (updates.status === 'In Triage') {
+      updates.triagedBy       = req.user.name || 'Unknown';
+      updates.triageStartTime = new Date();
+    }
+    // Capture when triage ends — any transition away from 'In Triage'
+    if (item.status === 'In Triage' && updates.status && updates.status !== 'In Triage') {
+      updates.triageEndTime = new Date();
+    }
+    // Doctor starts consulting — open a new session entry
+    // consultationStartTime is sent from the frontend (QueueContext.startConsultation)
+    if (updates.consultationStartTime && !item.consultationStartTime) {
+      updates.consultationSessions = pushSession(item, req.user.id, req.user.name);
+    }
+    // Consultation ends at billing or completion — close the open session
+    if (updates.status === 'Pending Billing') {
+      updates.consultationEndTime  = new Date();
+      updates.consultationSessions = closeLastSession(item);
+    }
     if (updates.status === 'Completed') {
-      updates.consultationEndTime = updates.consultationEndTime || new Date();
-      updates.dischargedBy = req.user.name || 'Unknown';
+      updates.consultationEndTime  = updates.consultationEndTime || new Date();
+      updates.consultationSessions = closeLastSession(item);
+      updates.dischargedBy         = req.user.name || 'Unknown';
+      updates.dischargedAt         = new Date();
     }
 
     await item.update(updates);
@@ -228,9 +267,10 @@ const remove = async (req, res) => {
     if (!item) return error(res, 'Queue item not found', 404);
 
     await item.update({
-      status: 'Removed',
-      removedBy: req.user.name || 'Unknown',
+      status:        'Removed',
+      removedBy:     req.user.name || 'Unknown',
       removalReason: req.body.reason || null,
+      dischargedAt:  new Date(),
     });
 
     broadcast('queue_updated');
@@ -355,22 +395,24 @@ const refer = async (req, res) => {
     };
 
     // --- Build the type-specific status transition fields ---
+    // In both cases: close the referring doctor's open session before handing off.
+    const sessionsAfterReferral = closeLastSession(item);
+
     const transitionFields = referralType === 'Internal'
       ? {
-          // Hand off to a different doctor inside the clinic.
-          // assignedDoctorId changes to the new doctor so they see this patient in their queue.
-          // referredToDoctorName is stored permanently — even if the patient is referred again later,
-          // this record stays in place for the audit trail.
-          status:               'Awaiting Doctor',
-          assignedDoctorId:     referredToDoctorId,
-          referredToDoctorName: referredToDoctorName || null,
-          consultationEndTime:  new Date(), // mark current doctor's consultation as ended
+          // Hand off to a different doctor — Doctor B will open a fresh session when they start.
+          status:                  'Awaiting Doctor',
+          assignedDoctorId:        referredToDoctorId,
+          referredToDoctorName:    referredToDoctorName || null,
+          consultationEndTime:     new Date(),
+          consultationSessions:    sessionsAfterReferral,
         }
       : {
-          // Send patient to billing so reception can discharge and issue an external referral letter.
-          status:                 'Pending Billing',
-          externalReferralTarget: externalReferralTarget,
-          consultationEndTime:    new Date(),
+          // Send patient to billing.
+          status:                  'Pending Billing',
+          externalReferralTarget:  externalReferralTarget,
+          consultationEndTime:     new Date(),
+          consultationSessions:    sessionsAfterReferral,
         };
 
     await item.update({ ...auditFields, ...transitionFields });

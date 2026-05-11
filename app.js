@@ -55,6 +55,7 @@ app.use('/api/appointments',       require('./routes/appointments'));
 app.use('/api/users',              require('./routes/users'));
 app.use('/api/documents',          require('./routes/documents'));
 app.use('/api/reports',            require('./routes/reports'));
+app.use('/api/analytics',          require('./routes/analytics'));
 app.use('/api/dashboard',          require('./routes/dashboard'));
 app.use('/api/activity',           require('./routes/activity'));
 
