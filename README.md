@@ -240,7 +240,17 @@ SMTP_PORT=587
 SMTP_USER=your_email
 SMTP_PASSWORD=your_email_password
 FRONTEND_URL=https://cdiabetescentre.com
+
+CARELINK_ENCRYPTION_KEY=generate_with_command_below
 ```
+
+> **Important:** `CARELINK_ENCRYPTION_KEY` must be a random 64-character hex string. Generate it once and never change it — changing it will make existing encrypted CareLink data unreadable. Generate it with:
+>
+> ```cmd
+> node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+> ```
+>
+> Paste the output as the value. This key must never be committed to git.
 
 ### 5. Create the Database
 
@@ -278,9 +288,11 @@ This creates the default admin, doctor, staff, lab tech, and patient accounts.
 ### 8. Start with PM2
 
 ```cmd
-pm2 start server.js --name cdc-api
+pm2 start server.js --name cdc-hms-api
 pm2 save
 ```
+
+> **Important:** The PM2 process name is `cdc-hms-api`. Always use this exact name in all PM2 commands (`restart`, `stop`, `logs`). Using a different name will fail silently.
 
 ### 9. Configure IIS Reverse Proxy
 
@@ -340,12 +352,110 @@ cd /c/Users/Administrator/Desktop/CDC/back_end
 git pull origin main
 npm install
 npm run migrate
-pm2 restart cdc-api
+pm2 restart cdc-hms-api
 ```
 
 > **Note:** The backend files are directly inside `back_end/` — there is no `cdc-hms-api` subfolder on the server.
 
 > No need to re-run sync or seed — those are first-deploy only steps.
+
+---
+
+## Troubleshooting
+
+### CORS errors on the frontend
+
+**Symptom:** Browser shows `No 'Access-Control-Allow-Origin' header is present`.
+
+**Cause:** This almost always means the backend server is down, not an actual CORS configuration problem. When Node.js is not running, IIS returns its own error page which has no CORS headers.
+
+**Fix:** Check PM2 and restart if needed (see "PM2 process missing" below).
+
+---
+
+### PM2 process missing / app not in `pm2 status`
+
+**Symptom:** `pm2 status` shows an empty app list or `pm2 restart cdc-hms-api` returns "Process not found".
+
+**Cause:** PM2 lost its process list after a crash or server reboot.
+
+**Fix:**
+
+```bash
+cd /c/Users/Administrator/Desktop/CDC/back_end
+pm2 start server.js --name cdc-hms-api
+pm2 save
+```
+
+Then verify it is running:
+
+```bash
+pm2 status
+pm2 logs cdc-hms-api --lines 30
+```
+
+> Data is never lost when PM2 crashes — all records live in MySQL which runs independently.
+
+---
+
+### Server crashes on startup with `ERR_INVALID_ARG_TYPE` in `utils/crypto.js`
+
+**Symptom:** PM2 logs show `TypeError [ERR_INVALID_ARG_TYPE]` pointing to `utils/crypto.js:4`.
+
+**Cause:** `CARELINK_ENCRYPTION_KEY` is missing from the production `.env` file.
+
+**Fix:** Generate the key and add it to `.env`:
+
+```cmd
+node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+```
+
+Add the output to `.env`:
+
+```env
+CARELINK_ENCRYPTION_KEY=paste_generated_key_here
+```
+
+Then restart:
+
+```bash
+pm2 restart cdc-hms-api
+```
+
+---
+
+### Queue appears empty after a deployment
+
+**Symptom:** Doctors or staff see an empty queue immediately after a deployment.
+
+**Cause 1:** The SSE (real-time) connection breaks when the server restarts. The frontend may be showing stale state.
+
+**Fix:** Have all users do a hard refresh (`Ctrl + Shift + R`).
+
+**Cause 2:** A new database column exists in the model but the migration did not run, causing every queue query to fail.
+
+**Fix:** Run migrations and restart:
+
+```bash
+npm run migrate
+pm2 restart cdc-hms-api
+```
+
+---
+
+### `npm install` breaks the server after a deployment
+
+**Symptom:** Server was working before deployment but crashes after `npm install`.
+
+**Cause:** A dependency using the `^` version prefix auto-upgraded to a new major version with breaking changes.
+
+**Fix:** Check PM2 logs to identify which module is crashing, then pin that package to the previously working version in `package.json`. Example:
+
+```bash
+npm install dotenv@16
+```
+
+Then redeploy.
 
 ---
 
