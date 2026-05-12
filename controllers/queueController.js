@@ -64,7 +64,7 @@ const formatItem = (item, position) => {
     id:                    q.id,
     uhid:                  q.Patient.uhid,
     name:                  `${q.Patient.firstName} ${q.Patient.lastName}`,
-    age:                   computeAge(q.Patient.dateOfBirth) ?? q.Patient.age,
+    age:                   computeAge(q.Patient.dateOfBirth),
     gender:                q.Patient.gender,
     arrivalTime:           formatTime(q.createdAt),
     createdAt:             q.createdAt,

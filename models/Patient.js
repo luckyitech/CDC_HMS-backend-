@@ -16,9 +16,6 @@ const Patient = defineModel('Patient', {
     type: DataTypes.STRING,
     allowNull: false,
   },
-  age: {
-    type: DataTypes.INTEGER,
-  },
   gender: {
     type: DataTypes.ENUM('Male', 'Female', 'Other'),
   },

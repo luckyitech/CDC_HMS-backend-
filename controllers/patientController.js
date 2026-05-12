@@ -58,7 +58,7 @@ const formatPatient = (patient, latestVital, nextAppointment = null, lastQueue =
     id:               p.id,
     uhid:             p.uhid,
     name:             `${p.firstName} ${p.lastName}`,
-    age:              computeAge(p.dateOfBirth) ?? p.age,
+    age:              computeAge(p.dateOfBirth),
     gender:           p.gender,
     phone:            p.phone,
     email:            p.email,

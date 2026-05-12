@@ -23,7 +23,12 @@ const authenticate = async (req, res, next) => {
   }
 
   // Verify the account is still active in the database
-  const user = await User.findByPk(decoded.id, { attributes: ['id', 'isActive'] });
+  let user;
+  try {
+    user = await User.findByPk(decoded.id, { attributes: ['id', 'isActive'] });
+  } catch {
+    return error(res, 'Authentication service unavailable. Please try again.', 503);
+  }
   if (!user || !user.isActive) {
     return error(res, 'Your account has been deactivated. Please contact the administrator.', 401);
   }

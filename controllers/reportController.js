@@ -186,7 +186,7 @@ const getGlycemicReport = async (req, res) => {
         patient: {
           uhid: patient.uhid,
           name: formatPatientName(patient),
-          age: computeAge(patient.dateOfBirth) ?? patient.age,
+          age: computeAge(patient.dateOfBirth),
           diagnosis: patient.diagnosis,
           primaryDoctor: formatDoctorName(patient.primaryDoctor),
         },
@@ -335,7 +335,7 @@ const getPatientSummary = async (req, res) => {
         patient: {
           uhid: patient.uhid,
           name: formatPatientName(patient),
-          age: computeAge(patient.dateOfBirth) ?? patient.age,
+          age: computeAge(patient.dateOfBirth),
           gender: patient.gender,
           diagnosis: patient.diagnosis,
           diagnosisDate: patient.diagnosisDate,
@@ -547,7 +547,7 @@ const getHighRiskPatients = async (req, res) => {
       return {
         uhid: patient.uhid,
         name: formatPatientName(patient),
-        age: patient.age,
+        age: computeAge(patient.dateOfBirth),
         diagnosis: patient.diagnosis,
         hba1c: patient.hba1c,
         riskLevel,

@@ -61,7 +61,7 @@ const formatLabTest = (labTest, includePatientDetails = false) => {
 
   // For pending tests view, include patient demographics
   if (includePatientDetails && lt.Patient) {
-    formatted.age = computeAge(lt.Patient.dateOfBirth) ?? lt.Patient.age;
+    formatted.age = computeAge(lt.Patient.dateOfBirth);
     formatted.gender = lt.Patient.gender;
   }
 

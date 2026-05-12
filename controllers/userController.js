@@ -405,10 +405,11 @@ const ROLE_PROFILE_MODEL = {
 // Build a changes object: { field: { from, to } } — only fields that actually changed
 const buildChanges = (before, after) => {
   const changes = {};
+  const serialize = (v) => (v !== null && typeof v === 'object' ? JSON.stringify(v) : String(v ?? ''));
   Object.keys(after).forEach((field) => {
-    const prev = String(before[field] ?? '');
-    const next = String(after[field] ?? '');
-    if (prev !== next) changes[field] = { from: before[field] ?? null, to: after[field] };
+    if (serialize(before[field]) !== serialize(after[field])) {
+      changes[field] = { from: before[field] ?? null, to: after[field] };
+    }
   });
   return changes;
 };
@@ -514,6 +515,11 @@ const updateStatus = async (req, res) => {
     await user.update({ isActive });
     const newStatus = isActive ? 'Active' : 'Inactive';
 
+    // Keep Patient.status in sync for patient accounts
+    if (user.role === 'patient') {
+      await Patient.update({ status: newStatus }, { where: { UserId: user.id } });
+    }
+
     return success(res, {
       message: `User ${newStatus.toLowerCase()} successfully`,
       user: {
@@ -605,6 +611,8 @@ const deleteUser = async (req, res) => {
       await StaffProfile.destroy({ where: { UserId: user.id }, transaction });
     } else if (user.role === 'lab') {
       await LabTechProfile.destroy({ where: { UserId: user.id }, transaction });
+    } else if (user.role === 'patient') {
+      await Patient.destroy({ where: { UserId: user.id }, transaction });
     }
 
     // Delete user

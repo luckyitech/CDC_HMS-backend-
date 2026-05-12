@@ -72,17 +72,28 @@ const classifyHbA1c = (value) => {
 
 /**
  * Calculate risk level based on patient data
- * @param {Object} patient - Patient object with age, comorbidities
+ * @param {Object} patient - Patient object with dateOfBirth, comorbidities
  * @param {number[]} recentBloodSugar - Array of recent blood sugar values
  * @param {number} recentHbA1c - Recent HbA1c value
  * @returns {string} Risk level: 'High', 'Medium', or 'Low'
  */
+const computeAgeFromDob = (dateOfBirth) => {
+  if (!dateOfBirth) return 0;
+  const today = new Date();
+  const dob = new Date(dateOfBirth);
+  let age = today.getFullYear() - dob.getFullYear();
+  const m = today.getMonth() - dob.getMonth();
+  if (m < 0 || (m === 0 && today.getDate() < dob.getDate())) age--;
+  return age;
+};
+
 const calculateRiskLevel = (patient, recentBloodSugar, recentHbA1c) => {
   let riskScore = 0;
+  const age = computeAgeFromDob(patient.dateOfBirth);
 
   // Age factor
-  if (patient.age > RISK.AGE_HIGH) riskScore += 2;
-  else if (patient.age > RISK.AGE_MODERATE) riskScore += 1;
+  if (age > RISK.AGE_HIGH) riskScore += 2;
+  else if (age > RISK.AGE_MODERATE) riskScore += 1;
 
   // HbA1c factor
   if (recentHbA1c >= HBA1C.POOR) riskScore += 3;
@@ -114,6 +125,7 @@ const calculateRiskLevel = (patient, recentBloodSugar, recentHbA1c) => {
 const getRiskFactors = (patient, bloodSugarValues) => {
   const riskFactors = [];
   const hba1c = parseFloat(patient.hba1c);
+  const age = computeAgeFromDob(patient.dateOfBirth);
 
   if (hba1c >= HBA1C.POOR) riskFactors.push('Very high HbA1c');
   else if (hba1c >= HBA1C.MODERATE) riskFactors.push('High HbA1c');
@@ -127,7 +139,7 @@ const getRiskFactors = (patient, bloodSugarValues) => {
   if ((patient.comorbidities || []).length > RISK.COMORBIDITY_HIGH) {
     riskFactors.push('Multiple comorbidities');
   }
-  if (patient.age > RISK.AGE_HIGH) {
+  if (age > RISK.AGE_HIGH) {
     riskFactors.push('Advanced age');
   }
 
