@@ -88,6 +88,11 @@ router.put('/:id/status', authenticate, authorize('admin'), [
 router.get('/:id', authenticate, authorize('admin'), userController.getById);
 
 // ------------------------------------
+// GET /api/users/:id/edit-logs — get edit history for a user
+// ------------------------------------
+router.get('/:id/edit-logs', authenticate, authorize('admin'), userController.getEditLogs);
+
+// ------------------------------------
 // DELETE /api/users/:id — delete user
 // ------------------------------------
 router.delete('/:id', authenticate, authorize('admin'), userController.deleteUser);

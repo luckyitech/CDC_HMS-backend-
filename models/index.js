@@ -22,6 +22,7 @@ const MedicalEquipment    = require('./MedicalEquipment');
 const EquipmentHistory    = require('./EquipmentHistory');
 const EquipmentAuditLog   = require('./EquipmentAuditLog');
 const UserLoginLog        = require('./UserLoginLog');
+const UserEditLog         = require('./UserEditLog');
 const CareLinkPartner     = require('./CareLinkPartner');
 
 // =============================================
@@ -116,6 +117,10 @@ EquipmentAuditLog.belongsTo(Patient);
 User.hasMany(EquipmentAuditLog, { foreignKey: 'changedBy', as: 'equipmentAuditChanges' });
 EquipmentAuditLog.belongsTo(User, { foreignKey: 'changedBy', as: 'changedByUser' });
 
+// --- User edit audit log ---
+User.hasMany(UserEditLog, { foreignKey: 'targetUserId', as: 'editLogs' });
+UserEditLog.belongsTo(User, { foreignKey: 'targetUserId', as: 'targetUser' });
+
 // --- CareLink partners ---
 Patient.hasMany(CareLinkPartner);
 CareLinkPartner.belongsTo(Patient);
@@ -149,6 +154,7 @@ const db = {
   EquipmentHistory,
   EquipmentAuditLog,
   UserLoginLog,
+  UserEditLog,
   CareLinkPartner,
 };
 

@@ -1,9 +1,12 @@
 const jwt = require('jsonwebtoken');
 const { error } = require('../utils/response');
 const { isTokenBlacklisted } = require('../controllers/authController');
+const db = require('../models');
+const { User } = db;
 
-// Verifies the JWT token and attaches the decoded payload to req.user
-const authenticate = (req, res, next) => {
+// Verifies the JWT token and attaches the decoded payload to req.user.
+// Also checks isActive on every request so deactivation takes effect immediately.
+const authenticate = async (req, res, next) => {
   const token = req.headers.authorization?.split(' ')[1]; // expects "Bearer <token>"
   if (!token) return error(res, 'No token provided', 401);
 
@@ -12,12 +15,21 @@ const authenticate = (req, res, next) => {
     return error(res, 'Token has been invalidated. Please login again.', 401);
   }
 
+  let decoded;
   try {
-    req.user = jwt.verify(token, process.env.JWT_SECRET);
-    next();
+    decoded = jwt.verify(token, process.env.JWT_SECRET);
   } catch {
     return error(res, 'Invalid or expired token', 401);
   }
+
+  // Verify the account is still active in the database
+  const user = await User.findByPk(decoded.id, { attributes: ['id', 'isActive'] });
+  if (!user || !user.isActive) {
+    return error(res, 'Your account has been deactivated. Please contact the administrator.', 401);
+  }
+
+  req.user = decoded;
+  next();
 };
 
 // Checks req.user.role against the allowed roles passed in

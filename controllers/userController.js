@@ -5,7 +5,7 @@ const bcrypt = require('bcryptjs');
 const crypto = require('crypto');
 const { sendStaffWelcomeEmail } = require('../utils/emailService');
 
-const { User, DoctorProfile, StaffProfile, LabTechProfile } = db;
+const { User, DoctorProfile, StaffProfile, LabTechProfile, Patient, UserEditLog } = db;
 
 // ====================================
 // HELPER FUNCTIONS
@@ -23,28 +23,57 @@ const generateTempPassword = () => {
  */
 const formatUserResponse = (user, profile) => {
   const baseData = {
-    id: user.id,
-    name: `${user.firstName} ${user.lastName}`,
-    email: user.email,
-    phone: user.phone,
-    role: user.role,
-    status: user.isActive ? 'Active' : 'Inactive',
+    id:        user.id,
+    firstName: user.firstName,
+    lastName:  user.lastName,
+    name:      `${user.firstName} ${user.lastName}`,
+    email:     user.email,
+    phone:     user.phone,
+    role:      user.role,
+    status:    user.isActive ? 'Active' : 'Inactive',
     createdAt: user.createdAt,
   };
 
-  // Add role-specific fields
   if (user.role === 'doctor' && profile) {
-    baseData.specialty = profile.specialty;
-    baseData.department = profile.department;
-    baseData.licenseNumber = profile.licenseNumber;
+    Object.assign(baseData, {
+      specialty:      profile.specialty,
+      subSpecialty:   profile.subSpecialty,
+      department:     profile.department,
+      licenseNumber:  profile.licenseNumber,
+      qualification:  profile.qualification,
+      medicalSchool:  profile.medicalSchool,
+      yearsExperience:profile.yearsExperience,
+      employmentType: profile.employmentType,
+      address:        profile.address,
+      city:           profile.city,
+    });
   } else if (user.role === 'staff' && profile) {
-    baseData.position = profile.position;
-    baseData.department = profile.department;
-    baseData.shift = profile.shift;
+    Object.assign(baseData, {
+      position:   profile.position,
+      department: profile.department,
+      shift:      profile.shift,
+    });
   } else if (user.role === 'lab' && profile) {
-    baseData.specialization = profile.specialization;
-    baseData.certificationNumber = profile.certificationNumber;
-    baseData.shift = profile.shift;
+    Object.assign(baseData, {
+      specialization:      profile.specialization,
+      certificationNumber: profile.certificationNumber,
+      qualification:       profile.qualification,
+      institution:         profile.institution,
+      yearsExperience:     profile.yearsExperience,
+      shift:               profile.shift,
+    });
+  } else if (user.role === 'patient' && profile) {
+    Object.assign(baseData, {
+      dateOfBirth:      profile.dateOfBirth,
+      gender:           profile.gender,
+      address:          profile.address,
+      diagnosis:        profile.diagnosis,
+      diagnosisDate:    profile.diagnosisDate,
+      hba1c:            profile.hba1c,
+      riskLevel:        profile.riskLevel,
+      emergencyContact: profile.emergencyContact,
+      insurance:        profile.insurance,
+    });
   }
 
   return baseData;
@@ -358,101 +387,109 @@ const listUsers = async (req, res) => {
  *
  * Authorization: Admin only
  */
+// Fields allowed per role for updateUser
+const ROLE_PROFILE_FIELDS = {
+  doctor:  ['licenseNumber', 'specialty', 'subSpecialty', 'department', 'qualification', 'medicalSchool', 'yearsExperience', 'employmentType', 'address', 'city'],
+  staff:   ['position', 'department', 'shift'],
+  lab:     ['specialization', 'certificationNumber', 'qualification', 'institution', 'yearsExperience', 'shift'],
+  patient: ['firstName', 'lastName', 'email', 'phone', 'dateOfBirth', 'gender', 'address', 'diagnosis', 'diagnosisDate', 'hba1c', 'emergencyContact', 'insurance'],
+};
+
+const ROLE_PROFILE_MODEL = {
+  doctor:  (userId) => DoctorProfile.findOne({ where: { UserId: userId } }),
+  staff:   (userId) => StaffProfile.findOne({ where: { UserId: userId } }),
+  lab:     (userId) => LabTechProfile.findOne({ where: { UserId: userId } }),
+  patient: (userId) => Patient.findOne({ where: { UserId: userId } }),
+};
+
+// Build a changes object: { field: { from, to } } — only fields that actually changed
+const buildChanges = (before, after) => {
+  const changes = {};
+  Object.keys(after).forEach((field) => {
+    const prev = String(before[field] ?? '');
+    const next = String(after[field] ?? '');
+    if (prev !== next) changes[field] = { from: before[field] ?? null, to: after[field] };
+  });
+  return changes;
+};
+
 const updateUser = async (req, res) => {
   const { id } = req.params;
   const updates = req.body;
 
   try {
-    // Find user
     const user = await User.findByPk(id);
-    if (!user) {
-      return error(res, 'User not found', 404);
-    }
+    if (!user) return error(res, 'User not found', 404);
 
-    // Update user fields
+    // ── Common user fields (User table) ─────────────────────────────────────
     const userFields = ['firstName', 'lastName', 'phone', 'email'];
     const userUpdates = {};
     userFields.forEach((field) => {
-      if (updates[field] !== undefined) {
-        userUpdates[field] = updates[field];
-      }
+      if (updates[field] !== undefined) userUpdates[field] = updates[field];
     });
 
-    if (Object.keys(userUpdates).length > 0) {
-      await user.update(userUpdates);
-    }
+    const userBefore = {};
+    userFields.forEach((f) => { userBefore[f] = user[f]; });
 
-    // Update role-specific profile
+    if (Object.keys(userUpdates).length > 0) await user.update(userUpdates);
+
+    // ── Role-specific profile fields ─────────────────────────────────────────
     let profile = null;
-    if (user.role === 'doctor') {
-      profile = await DoctorProfile.findOne({ where: { UserId: user.id } });
+    let profileChanges = {};
+    const profileFields = ROLE_PROFILE_FIELDS[user.role] || [];
+
+    if (profileFields.length > 0 && ROLE_PROFILE_MODEL[user.role]) {
+      profile = await ROLE_PROFILE_MODEL[user.role](user.id);
       if (profile) {
-        const profileFields = [
-          'licenseNumber',
-          'specialty',
-          'subSpecialty',
-          'department',
-          'qualification',
-          'medicalSchool',
-          'yearsExperience',
-          'employmentType',
-          'address',
-          'city',
-        ];
         const profileUpdates = {};
         profileFields.forEach((field) => {
-          if (updates[field] !== undefined) {
-            profileUpdates[field] = updates[field];
-          }
+          if (updates[field] !== undefined) profileUpdates[field] = updates[field];
         });
+
         if (Object.keys(profileUpdates).length > 0) {
+          const profileBefore = {};
+          profileFields.forEach((f) => { profileBefore[f] = profile[f]; });
           await profile.update(profileUpdates);
-        }
-      }
-    } else if (user.role === 'staff') {
-      profile = await StaffProfile.findOne({ where: { UserId: user.id } });
-      if (profile) {
-        const profileFields = ['position', 'department', 'shift'];
-        const profileUpdates = {};
-        profileFields.forEach((field) => {
-          if (updates[field] !== undefined) {
-            profileUpdates[field] = updates[field];
-          }
-        });
-        if (Object.keys(profileUpdates).length > 0) {
-          await profile.update(profileUpdates);
-        }
-      }
-    } else if (user.role === 'lab') {
-      profile = await LabTechProfile.findOne({ where: { UserId: user.id } });
-      if (profile) {
-        const profileFields = [
-          'specialization',
-          'certificationNumber',
-          'qualification',
-          'institution',
-          'yearsExperience',
-          'shift',
-        ];
-        const profileUpdates = {};
-        profileFields.forEach((field) => {
-          if (updates[field] !== undefined) {
-            profileUpdates[field] = updates[field];
-          }
-        });
-        if (Object.keys(profileUpdates).length > 0) {
-          await profile.update(profileUpdates);
+          profileChanges = buildChanges(profileBefore, profileUpdates);
         }
       }
     }
 
-    // Refresh user data
-    await user.reload();
+    // ── Record audit log ─────────────────────────────────────────────────────
+    const allChanges = {
+      ...buildChanges(userBefore, userUpdates),
+      ...profileChanges,
+    };
 
+    if (Object.keys(allChanges).length > 0) {
+      await UserEditLog.create({
+        targetUserId: user.id,
+        editedBy:     req.user.id,
+        editedByName: `${req.user.firstName} ${req.user.lastName}`,
+        changes:      allChanges,
+        editedAt:     new Date(),
+      });
+    }
+
+    await user.reload();
     return success(res, { user: formatUserResponse(user, profile) });
   } catch (err) {
     console.error('Update user error:', err.message);
     return error(res, 'Failed to update user. Please try again.', 500);
+  }
+};
+
+const getEditLogs = async (req, res) => {
+  const { id } = req.params;
+  try {
+    const logs = await UserEditLog.findAll({
+      where: { targetUserId: id },
+      order: [['editedAt', 'DESC']],
+    });
+    return success(res, { logs });
+  } catch (err) {
+    console.error('Get edit logs error:', err.message);
+    return error(res, 'Failed to retrieve edit history.', 500);
   }
 };
 
@@ -518,6 +555,8 @@ const getById = async (req, res) => {
       profile = await StaffProfile.findOne({ where: { UserId: user.id } });
     } else if (user.role === 'lab') {
       profile = await LabTechProfile.findOne({ where: { UserId: user.id } });
+    } else if (user.role === 'patient') {
+      profile = await Patient.findOne({ where: { UserId: user.id } });
     }
 
     return success(res, { user: formatUserResponse(user, profile) });
@@ -624,4 +663,5 @@ module.exports = {
   updateUser,
   updateStatus,
   deleteUser,
+  getEditLogs,
 };
