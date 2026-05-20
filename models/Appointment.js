@@ -43,6 +43,30 @@ const Appointment = defineModel('Appointment', {
     type: DataTypes.DATE,
     defaultValue: DataTypes.NOW,
   },
+  bookedBy: {
+    type: DataTypes.STRING,
+    defaultValue: null,   // display name of whoever made the booking
+  },
+  bookedByRole: {
+    type: DataTypes.STRING,
+    defaultValue: null,   // 'staff' | 'doctor' | 'patient'
+  },
+  bookedById: {
+    type: DataTypes.INTEGER,
+    defaultValue: null,   // Users.id of the booker
+  },
+  cancelledBy: {
+    type: DataTypes.STRING,
+    defaultValue: null,   // display name of whoever cancelled
+  },
+  cancelledByRole: {
+    type: DataTypes.STRING,
+    defaultValue: null,   // 'staff' | 'doctor' | 'patient'
+  },
+  cancelledAt: {
+    type: DataTypes.DATE,
+    defaultValue: null,
+  },
 }, {
   indexes: [
     { unique: true, fields: ['appointmentNumber'], name: 'unique_appointmentNumber' },

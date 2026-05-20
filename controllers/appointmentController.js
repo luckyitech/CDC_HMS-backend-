@@ -9,7 +9,9 @@ const {
   sendDoctorAppointmentCancellationEmail,
 } = require('../utils/emailService');
 
-const { Appointment, Patient, User, DoctorProfile } = db;
+const { Appointment, Patient, User, DoctorProfile, DoctorBlock } = db;
+
+const FULL_DAY = 'ALL_DAY';
 
 // ====================================
 // HELPER FUNCTIONS
@@ -104,6 +106,18 @@ const book = async (req, res) => {
     return error(res, 'Doctor not found', 404);
   }
 
+  // Check if the slot or day is blocked by the doctor
+  const block = await DoctorBlock.findOne({
+    where: {
+      doctorId,
+      date,
+      timeSlot: { [Op.in]: [FULL_DAY, timeSlot] },
+    },
+  });
+  if (block) {
+    return error(res, 'This time slot is not available for booking. The doctor has blocked this time.', 409);
+  }
+
   // Check for conflicting appointment (same doctor, date, time slot, not cancelled)
   const conflict = await Appointment.findOne({
     where: {
@@ -131,12 +145,15 @@ const book = async (req, res) => {
     doctorId,
     date,
     timeSlot,
-    duration: '30 minutes', // Default duration
+    duration: '30 minutes',
     appointmentType,
     reason,
     notes: notes || '',
     status: 'scheduled',
-    bookedAt: new Date(),
+    bookedAt:     new Date(),
+    bookedBy:     req.user.name,
+    bookedByRole: req.user.role,
+    bookedById:   req.user.id,
   });
 
   // Re-fetch with relationships
@@ -359,8 +376,15 @@ const updateStatus = async (req, res) => {
     }
   }
 
-  // Update status
-  await appointment.update({ status: newStatus });
+  // Update status — capture accountability when cancelling
+  await appointment.update({
+    status: newStatus,
+    ...(newStatus === 'cancelled' ? {
+      cancelledBy:     req.user.name,
+      cancelledByRole: req.user.role,
+      cancelledAt:     new Date(),
+    } : {}),
+  });
 
   // Re-fetch to ensure we have latest data
   const updated = await Appointment.findByPk(appointment.id, {
@@ -453,6 +477,74 @@ const stats = async (req, res) => {
 };
 
 
+// Clinic time slots — must match AppointmentContext.jsx on the frontend exactly.
+// Lunch break: 12:30 PM–1:30 PM excluded.
+const ALL_SLOTS = [
+  '8:00 AM', '8:30 AM', '9:00 AM', '9:30 AM', '10:00 AM', '10:30 AM',
+  '11:00 AM', '11:30 AM', '12:00 PM',
+  '2:00 PM', '2:30 PM', '3:00 PM', '3:30 PM', '4:00 PM', '4:30 PM', '5:00 PM',
+];
+
+/**
+ * GET /api/appointments/slots?doctorId=X&date=YYYY-MM-DD
+ * Returns all time slots for a doctor on a given date,
+ * each marked free or booked (booked ones include patient details).
+ */
+const getSlots = async (req, res) => {
+  const { doctorId, date } = req.query;
+  if (!doctorId || !date) return error(res, 'doctorId and date are required', 400);
+
+  const doctor = await User.findOne({
+    where: { id: doctorId, role: 'doctor' },
+    attributes: ['id', 'firstName', 'lastName'],
+  });
+  if (!doctor) return error(res, 'Doctor not found', 404);
+
+  const [booked, blocks] = await Promise.all([
+    Appointment.findAll({
+      where: { doctorId, date, status: { [Op.ne]: 'cancelled' } },
+      include: [{ model: Patient, attributes: ['uhid', 'firstName', 'lastName'] }],
+      attributes: ['id', 'timeSlot', 'appointmentType', 'status', 'reason', 'appointmentNumber'],
+    }),
+    DoctorBlock.findAll({
+      where: { doctorId, date },
+      attributes: ['timeSlot'],
+    }),
+  ]);
+
+  const bookedMap    = {};
+  booked.forEach(a => { bookedMap[a.timeSlot] = a; });
+
+  const blockedSlots = new Set(blocks.map(b => b.timeSlot));
+  const dayBlocked   = blockedSlots.has(FULL_DAY);
+
+  const slots = ALL_SLOTS.map(slot => {
+    if (dayBlocked || blockedSlots.has(slot)) {
+      return { time: slot, status: 'blocked' };
+    }
+    const appt = bookedMap[slot];
+    if (!appt) return { time: slot, status: 'free' };
+    return {
+      time:              slot,
+      status:            appt.status,
+      appointmentId:     appt.id,
+      appointmentNumber: appt.appointmentNumber,
+      appointmentType:   appt.appointmentType,
+      reason:            appt.reason,
+      patientName:       appt.Patient ? `${appt.Patient.firstName} ${appt.Patient.lastName}` : null,
+      patientUhid:       appt.Patient?.uhid || null,
+    };
+  });
+
+  return success(res, {
+    doctorId:  parseInt(doctorId),
+    doctorName: `Dr. ${doctor.firstName} ${doctor.lastName}`,
+    date,
+    dayBlocked,
+    slots,
+  });
+};
+
 // EXPORTS
 
 module.exports = {
@@ -460,4 +552,5 @@ module.exports = {
   list,
   updateStatus,
   stats,
+  getSlots,
 };

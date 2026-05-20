@@ -52,6 +52,7 @@ app.use('/api/physical-exams',     require('./routes/physicalExams'));
 app.use('/api/assessments',        require('./routes/assessments'));
 app.use('/api/consultation-notes', require('./routes/consultationNotes'));
 app.use('/api/appointments',       require('./routes/appointments'));
+app.use('/api/doctor-blocks',      require('./routes/doctorBlocks'));
 app.use('/api/users',              require('./routes/users'));
 app.use('/api/documents',          require('./routes/documents'));
 app.use('/api/reports',            require('./routes/reports'));

@@ -2,7 +2,7 @@ const { Op } = require('sequelize');
 const { success } = require('../utils/response');
 const db = require('../models');
 
-const { Queue, Patient, MedicalDocument, MedicalEquipment, EquipmentHistory, User, Prescription, LabTest, TreatmentPlan, ConsultationNote, PhysicalExamination, InitialAssessment, UserLoginLog } = db;
+const { Queue, Patient, MedicalDocument, MedicalEquipment, EquipmentHistory, User, Prescription, LabTest, TreatmentPlan, ConsultationNote, PhysicalExamination, InitialAssessment, UserLoginLog, Appointment, DoctorBlock } = db;
 
 // ── Shared event shape ────────────────────────────────────────────────────────
 
@@ -37,6 +37,9 @@ const SUMMARY_KEYS = {
   initial_assessment:      'initialAssessment',
   account_created:         'accountCreated',
   user_login:              'userLogin',
+  appointment_booked:      'appointmentBooked',
+  appointment_cancelled:   'appointmentCancelled',
+  slot_blocked:            'slotBlocked',
 };
 
 const buildSummary = (events) => {
@@ -274,6 +277,83 @@ const getLoginEvents = async (dateFilter, hasDateFilter) => {
   );
 };
 
+const getAppointmentEvents = async (dateFilter, hasDateFilter) => {
+  const appointments = await Appointment.findAll({
+    where: {
+      bookedByRole: { [Op.in]: ['staff', 'doctor'] },
+      bookedBy:     { [Op.ne]: null },
+      ...(hasDateFilter ? { createdAt: dateFilter } : {}),
+    },
+    include: [
+      { model: Patient, attributes: ['uhid', 'firstName', 'lastName'] },
+      { model: User, as: 'doctor', attributes: ['firstName', 'lastName'] },
+    ],
+  });
+
+  return appointments.map(a => {
+    const doctorName = a.doctor ? `Dr. ${a.doctor.firstName} ${a.doctor.lastName}` : 'Unknown Doctor';
+    const detail     = `${a.appointmentType || 'appointment'} · ${a.timeSlot} · ${doctorName}`;
+    const role       = a.bookedByRole || 'staff';
+    return makeEvent(
+      'appointment_booked', 'Booked Appointment',
+      a.bookedBy,
+      `${a.Patient.firstName} ${a.Patient.lastName}`,
+      a.Patient.uhid,
+      a.bookedAt || a.createdAt,
+      detail,
+      role
+    );
+  });
+};
+
+const getAppointmentCancellationEvents = async (dateFilter, hasDateFilter) => {
+  const appointments = await Appointment.findAll({
+    where: {
+      status:          'cancelled',
+      cancelledBy:     { [Op.ne]: null },
+      ...(hasDateFilter ? { cancelledAt: dateFilter } : {}),
+    },
+    include: [
+      { model: Patient, attributes: ['uhid', 'firstName', 'lastName'] },
+      { model: User, as: 'doctor', attributes: ['firstName', 'lastName'] },
+    ],
+  });
+
+  return appointments.map(a => {
+    const doctorName = a.doctor ? `Dr. ${a.doctor.firstName} ${a.doctor.lastName}` : 'Unknown Doctor';
+    const detail     = `${a.appointmentType || 'appointment'} · ${a.timeSlot} · ${doctorName}`;
+    const role       = a.cancelledByRole || 'staff';
+    return makeEvent(
+      'appointment_cancelled', 'Cancelled Appointment',
+      a.cancelledBy,
+      `${a.Patient.firstName} ${a.Patient.lastName}`,
+      a.Patient.uhid,
+      a.cancelledAt,
+      detail,
+      role
+    );
+  });
+};
+
+const getDoctorBlockEvents = async (dateFilter, hasDateFilter) => {
+  const blocks = await DoctorBlock.findAll({
+    where: {
+      blockedBy: { [Op.ne]: null },
+      ...(hasDateFilter ? { createdAt: dateFilter } : {}),
+    },
+    include: [
+      { model: User, as: 'doctor', attributes: ['firstName', 'lastName'] },
+    ],
+    attributes: ['blockedBy', 'date', 'timeSlot', 'reason', 'createdAt'],
+  });
+
+  return blocks.map(b => {
+    const slotLabel = b.timeSlot === 'ALL_DAY' ? 'Full Day' : b.timeSlot;
+    const detail    = `${slotLabel} · ${b.date}${b.reason ? ` · ${b.reason}` : ''}`;
+    return makeEvent('slot_blocked', 'Blocked Slot', b.blockedBy, null, null, b.createdAt, detail, 'doctor');
+  });
+};
+
 // ── Controller ────────────────────────────────────────────────────────────────
 
 const getActivityLog = async (req, res) => {
@@ -297,6 +377,9 @@ const getActivityLog = async (req, res) => {
     getDoctorEvents(dateFilter, hasDateFilter),
     getAccountCreationEvents(dateFilter, hasDateFilter),
     getLoginEvents(dateFilter, hasDateFilter),
+    getAppointmentEvents(dateFilter, hasDateFilter),
+    getAppointmentCancellationEvents(dateFilter, hasDateFilter),
+    getDoctorBlockEvents(dateFilter, hasDateFilter),
   ])).flat();
 
   // Summary uses all events (unfiltered)

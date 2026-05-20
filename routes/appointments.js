@@ -18,13 +18,22 @@ const appointmentController = require('../controllers/appointmentController');
 // ------------------------------------
 // GET /api/appointments/stats — Statistics
 // ------------------------------------
-// Authorization: Doctor, Admin
-// IMPORTANT: This route MUST come before /:id routes
 router.get(
   '/stats',
   authenticate,
   authorize('doctor', 'admin'),
   appointmentController.stats
+);
+
+// ------------------------------------
+// GET /api/appointments/slots?doctorId=X&date=YYYY-MM-DD
+// Returns all time slots for a doctor on a date (free + booked)
+// ------------------------------------
+router.get(
+  '/slots',
+  authenticate,
+  authorize('staff', 'doctor', 'admin'),
+  appointmentController.getSlots
 );
 
 // ------------------------------------
