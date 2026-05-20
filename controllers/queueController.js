@@ -52,7 +52,7 @@ const computeAge = (dateOfBirth) => {
 
 // Includes shared by every query that needs patient info + doctor name
 const queueIncludes = [
-  { model: Patient, attributes: ['uhid', 'firstName', 'lastName', 'age', 'dateOfBirth', 'gender'] },
+  { model: Patient, attributes: ['uhid', 'firstName', 'lastName', 'dateOfBirth', 'gender'] },
   { model: User,    as: 'assignedDoctor', attributes: ['firstName', 'lastName'] },
 ];
 

@@ -75,7 +75,7 @@ const formatLabTest = (labTest, includePatientDetails = false) => {
 const labTestIncludes = [
   {
     model: Patient,
-    attributes: ['uhid', 'firstName', 'lastName', 'age', 'dateOfBirth', 'gender'],
+    attributes: ['uhid', 'firstName', 'lastName', 'dateOfBirth', 'gender'],
   },
   {
     model: User,
