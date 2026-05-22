@@ -219,6 +219,31 @@ const sendPatientWelcomeEmail = async ({ to, name, uhid, tempPassword }) => {
 };
 
 // ============================================================
+// EMAIL: Email Address Updated — Patient
+// Called when admin changes a patient's login email
+// ============================================================
+const sendEmailUpdatedEmail = async ({ to, name, uhid }) => {
+  const body = `
+    <h2 style="margin:0 0 8px 0;font-size:20px;color:#111827;">Your Login Email Has Been Updated</h2>
+    <p style="margin:0 0 24px 0;font-size:14px;color:#6B7280;">
+      Hi <strong>${name}</strong>, the email address linked to your CDC HMS patient portal account has been updated by the clinic.
+      You can now log in using this email address.
+    </p>
+
+    <table width="100%" cellpadding="0" cellspacing="0">
+      ${credentialRow('Patient ID (UHID)', monoBlue(uhid))}
+      ${credentialRow('New Login Email', to)}
+    </table>
+
+    ${primaryButton('Access Patient Portal', `${FRONTEND_URL}/login/patient`)}
+
+    ${infoBanner('Your password has not changed. If you did not expect this update or need assistance, please contact the clinic directly.')}
+  `;
+
+  await sendEmail(to, 'CDC HMS — Your Login Email Has Been Updated', baseTemplate(body));
+};
+
+// ============================================================
 // EMAIL: Password Reset
 // Called when user requests a password reset
 // ============================================================
@@ -388,6 +413,7 @@ const sendDoctorAppointmentCancellationEmail = async ({ to, doctorName, patientN
 module.exports = {
   sendStaffWelcomeEmail,
   sendPatientWelcomeEmail,
+  sendEmailUpdatedEmail,
   sendPasswordResetEmail,
   sendAppointmentConfirmationEmail,
   sendDoctorAppointmentNotificationEmail,

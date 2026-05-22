@@ -5,7 +5,7 @@ const sequelize = require('../config/database');
 const bcrypt = require('bcryptjs');
 const crypto = require('crypto');
 const { generateUHID } = require('../utils/generateId');
-const { sendPatientWelcomeEmail } = require('../utils/emailService');
+const { sendPatientWelcomeEmail, sendEmailUpdatedEmail } = require('../utils/emailService');
 
 const { Patient, User, PatientVital, Appointment, Queue } = db;
 
@@ -84,6 +84,7 @@ const formatPatient = (patient, latestVital, nextAppointment = null, lastQueue =
     allergies:        p.allergies,
     comorbidities:    p.comorbidities,
     registeredBy:     p.registeredBy || null,
+    hasPortalAccount: !!p.UserId,
   };
 };
 
@@ -92,6 +93,87 @@ const doctorInclude = {
   model: User,
   as: 'primaryDoctor',
   attributes: ['firstName', 'lastName'],
+};
+
+// ------------------------------------
+// PRIVATE HELPERS
+// ------------------------------------
+
+/**
+ * Fetches the full patient row with all related data needed for an API response.
+ * Centralises the repeated Promise.all pattern across create / update / completeRegistration.
+ */
+const fetchFullPatient = (patientId) => {
+  const today = new Date().toISOString().split('T')[0];
+  return Promise.all([
+    Patient.findByPk(patientId, { include: [doctorInclude] }),
+    PatientVital.findOne({
+      where: { PatientId: patientId },
+      order: [['recordedAt', 'DESC']],
+    }),
+    Appointment.findOne({
+      where: { PatientId: patientId, status: 'scheduled', date: { [Op.gte]: today } },
+      order: [['date', 'ASC']],
+      attributes: ['PatientId', 'date', 'bookedAt'],
+    }),
+    Queue.findOne({
+      where: { PatientId: patientId, status: 'Completed' },
+      order: [['createdAt', 'DESC']],
+      attributes: ['PatientId', 'createdAt'],
+    }),
+  ]);
+};
+
+/**
+ * Syncs the linked User account when patient profile fields change.
+ * - Mirrors firstName / lastName / phone changes to the User row.
+ * - If email is being set for the first time, generates credentials and returns tempPassword.
+ * - Validates email uniqueness before applying any change.
+ *
+ * Returns the tempPassword string if a new email was activated, otherwise null.
+ * Throws { statusCode: 400, message } on email conflict so the caller can return a clean HTTP error.
+ */
+const syncLinkedUser = async (userId, fields, password) => {
+  if (!userId) return { tempPassword: null, emailChanged: false };
+
+  const user = await User.findByPk(userId);
+  if (!user) return { tempPassword: null, emailChanged: false };
+
+  const updates = {};
+  let emailChanged = false;
+
+  if (fields.firstName !== undefined) updates.firstName = fields.firstName;
+  if (fields.lastName  !== undefined) updates.lastName  = fields.lastName;
+  if (fields.phone     !== undefined) updates.phone     = fields.phone;
+
+  if (fields.email !== undefined && fields.email !== user.email) {
+    if (fields.email) {
+      const conflict = await User.findOne({
+        where: { email: fields.email, id: { [Op.ne]: user.id } },
+      });
+      if (conflict) {
+        const err = new Error(`A login account already exists for email "${fields.email}".`);
+        err.statusCode = 400;
+        throw err;
+      }
+    }
+    updates.email = fields.email || null;
+    emailChanged = true;
+  }
+
+  // First time an email is being added to an existing User — activate with a password
+  const activatingAccount = fields.email && !user.email;
+  let tempPassword = null;
+  if (activatingAccount) {
+    tempPassword = password || crypto.randomBytes(6).toString('hex');
+    updates.password = await bcrypt.hash(tempPassword, 10);
+  }
+
+  if (Object.keys(updates).length > 0) {
+    await user.update(updates);
+  }
+
+  return { tempPassword, emailChanged };
 };
 
 // ------------------------------------
@@ -164,6 +246,28 @@ const create = async (req, res) => {
     await transaction.rollback();
     throw err;
   }
+};
+
+// ------------------------------------
+// POST /api/patients/quick — minimal placeholder for phone bookings
+// Creates a Patient record only (no User login account).
+// Full profile is completed face-to-face when the patient walks in.
+// ------------------------------------
+const quickCreate = async (req, res) => {
+  const { firstName, lastName, phone } = req.body;
+
+  const uhid = await generateUHID(Patient);
+
+  const patient = await Patient.create({
+    firstName,
+    lastName,
+    phone: phone || null,
+    uhid,
+    registeredBy:     req.user.name || 'Unknown',
+    registeredByRole: req.user.role || 'staff',
+  });
+
+  return success(res, formatPatient(patient, null), 201);
 };
 
 // ------------------------------------
@@ -283,55 +387,165 @@ const list = async (req, res) => {
 // GET /api/patients/:uhid — single patient
 // ------------------------------------
 const getOne = async (req, res) => {
-  const today = new Date().toISOString().split('T')[0];
-
-  const [patient, latestVital, nextAppt, lastQueue] = await Promise.all([
-    Patient.findByPk(req.patient.id, { include: [doctorInclude] }),
-    PatientVital.findOne({
-      where: { PatientId: req.patient.id },
-      order: [['recordedAt', 'DESC']],
-    }),
-    Appointment.findOne({
-      where: { PatientId: req.patient.id, status: 'scheduled', date: { [Op.gte]: today } },
-      order: [['date', 'ASC']],
-      attributes: ['PatientId', 'date', 'bookedAt'],
-    }),
-    Queue.findOne({
-      where: { PatientId: req.patient.id, status: 'Completed' },
-      order: [['createdAt', 'DESC']],
-      attributes: ['PatientId', 'createdAt'],
-    }),
-  ]);
-
+  const [patient, latestVital, nextAppt, lastQueue] = await fetchFullPatient(req.patient.id);
   return success(res, formatPatient(patient, latestVital, nextAppt, lastQueue));
 };
 
 // ------------------------------------
+// POST /api/patients/:uhid/complete-registration
+// Completes a quick-registered (phone booking) patient's profile.
+// Updates all fields and, if email is provided, creates the portal login account.
+// ------------------------------------
+const completeRegistration = async (req, res) => {
+  const patient = req.patient;
+
+  if (patient.UserId) {
+    return res.status(400).json({ success: false, message: 'This patient already has a portal account.' });
+  }
+
+  const { password, ...patientFields } = req.body;
+
+  const transaction = await sequelize.transaction();
+  try {
+    let tempPassword = null;
+
+    if (patientFields.email) {
+      const existingUser = await User.findOne({ where: { email: patientFields.email } });
+      if (existingUser) {
+        await transaction.rollback();
+        return res.status(400).json({
+          success: false,
+          message: `A login account already exists for email "${patientFields.email}".`,
+        });
+      }
+
+      tempPassword = password || crypto.randomBytes(6).toString('hex');
+      const hashedPassword = await bcrypt.hash(tempPassword, 10);
+
+      const user = await User.create({
+        email:     patientFields.email,
+        password:  hashedPassword,
+        role:      'patient',
+        firstName: patient.firstName,
+        lastName:  patient.lastName,
+        phone:     patientFields.phone || patient.phone,
+        isActive:  true,
+      }, { transaction });
+
+      await patient.update({ ...patientFields, UserId: user.id }, { transaction });
+    } else {
+      await patient.update(patientFields, { transaction });
+    }
+
+    await transaction.commit();
+
+    if (patientFields.email && tempPassword) {
+      sendPatientWelcomeEmail({
+        to:   patientFields.email,
+        name: `${patient.firstName} ${patient.lastName}`,
+        uhid: patient.uhid,
+        tempPassword,
+      }).catch(() => {});
+    }
+
+    const [full, latestVital, nextAppt, lastQueue] = await fetchFullPatient(patient.id);
+
+    return success(res, {
+      ...formatPatient(full, latestVital, nextAppt, lastQueue),
+      ...(tempPassword ? { tempPassword } : {}),
+    });
+  } catch (err) {
+    await transaction.rollback();
+    throw err;
+  }
+};
+
+// ------------------------------------
 // PUT /api/patients/:uhid — update patient
+// Two cases:
+//   A) Patient has no portal account yet but an email is now provided → create User + link
+//   B) Patient already has a portal account → update fields and sync the linked User
 // ------------------------------------
 const update = async (req, res) => {
-  await req.patient.update(req.body);
-  const today = new Date().toISOString().split('T')[0];
+  const { password, ...patientFields } = req.body;
+  const patient = req.patient;
 
-  const [full, latestVital, nextAppt, lastQueue] = await Promise.all([
-    Patient.findByPk(req.patient.id, { include: [doctorInclude] }),
-    PatientVital.findOne({
-      where: { PatientId: req.patient.id },
-      order: [['recordedAt', 'DESC']],
-    }),
-    Appointment.findOne({
-      where: { PatientId: req.patient.id, status: 'scheduled', date: { [Op.gte]: today } },
-      order: [['date', 'ASC']],
-      attributes: ['PatientId', 'date', 'bookedAt'],
-    }),
-    Queue.findOne({
-      where: { PatientId: req.patient.id, status: 'Completed' },
-      order: [['createdAt', 'DESC']],
-      attributes: ['PatientId', 'createdAt'],
-    }),
-  ]);
+  let tempPassword = null;
 
-  return success(res, formatPatient(full, latestVital, nextAppt, lastQueue));
+  console.log(`[update] UHID=${patient.uhid} UserId=${patient.UserId} newEmail=${patientFields.email}`);
+
+  if (!patient.UserId && patientFields.email) {
+    // Case A: first-time email — create a portal account and link it atomically
+    const conflict = await User.findOne({ where: { email: patientFields.email } });
+    if (conflict) {
+      return res.status(400).json({
+        success: false,
+        message: `A login account already exists for email "${patientFields.email}".`,
+      });
+    }
+
+    tempPassword = password || crypto.randomBytes(6).toString('hex');
+    const hashedPassword = await bcrypt.hash(tempPassword, 10);
+
+    const transaction = await sequelize.transaction();
+    try {
+      const user = await User.create({
+        email:     patientFields.email,
+        password:  hashedPassword,
+        role:      'patient',
+        firstName: patientFields.firstName ?? patient.firstName,
+        lastName:  patientFields.lastName  ?? patient.lastName,
+        phone:     patientFields.phone     ?? patient.phone,
+        isActive:  true,
+      }, { transaction });
+
+      await patient.update({ ...patientFields, UserId: user.id }, { transaction });
+      await transaction.commit();
+    } catch (err) {
+      await transaction.rollback();
+      throw err;
+    }
+
+    console.log(`[update] Case A — sending welcome email to ${patientFields.email}`);
+    sendPatientWelcomeEmail({
+      to:          patientFields.email,
+      name:        `${patientFields.firstName ?? patient.firstName} ${patientFields.lastName ?? patient.lastName}`,
+      uhid:        patient.uhid,
+      tempPassword,
+    }).catch(err => console.error('[update] Welcome email failed:', err.message));
+  } else {
+    // Case B: standard update — persist fields and sync any linked User
+    await patient.update(patientFields);
+
+    let emailChanged = false;
+    try {
+      ({ tempPassword, emailChanged } = await syncLinkedUser(patient.UserId, patientFields, password));
+    } catch (err) {
+      if (err.statusCode === 400) {
+        return res.status(400).json({ success: false, message: err.message });
+      }
+      throw err;
+    }
+
+    const name = `${patientFields.firstName ?? patient.firstName} ${patientFields.lastName ?? patient.lastName}`;
+
+    console.log(`[update] Case B — tempPassword=${!!tempPassword} emailChanged=${emailChanged}`);
+    if (tempPassword) {
+      // Existing User had no email — now activated for the first time
+      console.log(`[update] Case B — sending welcome email to ${patientFields.email}`);
+      sendPatientWelcomeEmail({ to: patientFields.email, name, uhid: patient.uhid, tempPassword }).catch(err => console.error('[update] Welcome email failed:', err.message));
+    } else if (emailChanged && patientFields.email) {
+      // Email address changed — notify the patient at the new address
+      console.log(`[update] Case B — sending email-updated notification to ${patientFields.email}`);
+      sendEmailUpdatedEmail({ to: patientFields.email, name, uhid: patient.uhid }).catch(err => console.error('[update] Email-updated notification failed:', err.message));
+    }
+  }
+
+  const [full, latestVital, nextAppt, lastQueue] = await fetchFullPatient(patient.id);
+  return success(res, {
+    ...formatPatient(full, latestVital, nextAppt, lastQueue),
+    ...(tempPassword ? { tempPassword } : {}),
+  });
 };
 
 // ------------------------------------
@@ -439,4 +653,4 @@ const getVitalsHistory = async (req, res) => {
   return success(res, vitals.map(formatVitals));
 };
 
-module.exports = { create, list, getOne, update, destroy, stats, recordVitals, recordVitalsDoctor, getVitals, getVitalsHistory };
+module.exports = { create, quickCreate, completeRegistration, list, getOne, update, destroy, stats, recordVitals, recordVitalsDoctor, getVitals, getVitalsHistory };

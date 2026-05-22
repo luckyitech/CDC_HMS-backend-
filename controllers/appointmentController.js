@@ -118,17 +118,12 @@ const book = async (req, res) => {
     return error(res, 'This time slot is not available for booking. The doctor has blocked this time.', 409);
   }
 
-  // Check for conflicting appointment (same doctor, date, time slot, not cancelled)
-  const conflict = await Appointment.findOne({
-    where: {
-      doctorId,
-      date,
-      timeSlot,
-      status: { [Op.ne]: 'cancelled' },
-    },
+  // Each 30-minute slot holds up to 2 patients — reject only when both seats are taken
+  const existingCount = await Appointment.count({
+    where: { doctorId, date, timeSlot, status: { [Op.ne]: 'cancelled' } },
   });
-  if (conflict) {
-    return error(res, 'This time slot is already booked. Please choose a different time.', 409);
+  if (existingCount >= 2) {
+    return error(res, 'This time slot is full (2 patients already booked). Please choose a different time.', 409);
   }
 
   // Generate appointment number
@@ -512,27 +507,38 @@ const getSlots = async (req, res) => {
     }),
   ]);
 
-  const bookedMap    = {};
-  booked.forEach(a => { bookedMap[a.timeSlot] = a; });
+  // Group appointments by time slot — each slot holds up to 2 patients
+  const bookedMap = {};
+  booked.forEach(a => {
+    if (!bookedMap[a.timeSlot]) bookedMap[a.timeSlot] = [];
+    bookedMap[a.timeSlot].push(a);
+  });
 
   const blockedSlots = new Set(blocks.map(b => b.timeSlot));
   const dayBlocked   = blockedSlots.has(FULL_DAY);
 
   const slots = ALL_SLOTS.map(slot => {
     if (dayBlocked || blockedSlots.has(slot)) {
-      return { time: slot, status: 'blocked' };
+      return { time: slot, status: 'blocked', appointments: [] };
     }
-    const appt = bookedMap[slot];
-    if (!appt) return { time: slot, status: 'free' };
+    const appts = bookedMap[slot] || [];
+    if (appts.length === 0) {
+      return { time: slot, status: 'free', appointments: [] };
+    }
+    // 'full' when both seats are taken; otherwise use the single appointment's own status
+    const slotStatus = appts.length >= 2 ? 'full' : appts[0].status;
     return {
-      time:              slot,
-      status:            appt.status,
-      appointmentId:     appt.id,
-      appointmentNumber: appt.appointmentNumber,
-      appointmentType:   appt.appointmentType,
-      reason:            appt.reason,
-      patientName:       appt.Patient ? `${appt.Patient.firstName} ${appt.Patient.lastName}` : null,
-      patientUhid:       appt.Patient?.uhid || null,
+      time:         slot,
+      status:       slotStatus,
+      appointments: appts.map(a => ({
+        appointmentId:     a.id,
+        appointmentNumber: a.appointmentNumber,
+        appointmentType:   a.appointmentType,
+        reason:            a.reason,
+        status:            a.status,
+        patientName:       a.Patient ? `${a.Patient.firstName} ${a.Patient.lastName}` : null,
+        patientUhid:       a.Patient?.uhid || null,
+      })),
     };
   });
 

@@ -10,13 +10,23 @@ const equipmentController        = require('../controllers/equipmentController')
 const careLinkPartnerController  = require('../controllers/careLinkPartnerController');
 
 // ------------------------------------
-// POST /api/patients — create patient
+// POST /api/patients — create patient (full registration)
 // ------------------------------------
 router.post('/', authenticate, authorize('staff', 'admin'), [
   body('firstName').notEmpty().withMessage('First name is required'),
   body('lastName').notEmpty().withMessage('Last name is required'),
   validate,
 ], patientController.create);
+
+// ------------------------------------
+// POST /api/patients/quick — minimal placeholder for phone bookings
+// Only firstName + lastName required; no User login account created.
+// ------------------------------------
+router.post('/quick', authenticate, authorize('staff', 'admin', 'doctor'), [
+  body('firstName').notEmpty().withMessage('First name is required'),
+  body('lastName').notEmpty().withMessage('Last name is required'),
+  validate,
+], patientController.quickCreate);
 
 // ------------------------------------
 // GET /api/patients/stats — MUST be before /:uhid so Express doesn't treat "stats" as a uhid
@@ -32,6 +42,12 @@ router.get('/', authenticate, authorize('doctor', 'staff', 'admin'), patientCont
 // GET /api/patients/:uhid — single patient (all authenticated roles)
 // ------------------------------------
 router.get('/:uhid', authenticate, findPatient, patientController.getOne);
+
+// ------------------------------------
+// POST /api/patients/:uhid/complete-registration
+// Completes a quick-registered patient's profile and creates portal account.
+// ------------------------------------
+router.post('/:uhid/complete-registration', authenticate, authorize('staff', 'admin'), findPatient, patientController.completeRegistration);
 
 // ------------------------------------
 // PUT /api/patients/:uhid — update patient
