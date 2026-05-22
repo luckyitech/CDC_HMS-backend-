@@ -229,18 +229,24 @@ const update = async (req, res) => {
     if (item.status === 'In Triage' && updates.status && updates.status !== 'In Triage') {
       updates.triageEndTime = new Date();
     }
-    // Doctor starts consulting — open a new session entry
-    // consultationStartTime is sent from the frontend (QueueContext.startConsultation)
-    if (updates.consultationStartTime && !item.consultationStartTime) {
+    // Doctor starts consulting — open a new session entry.
+    // For referred patients, item.consultationStartTime is already set by the referring doctor,
+    // so we check whether the last session is still open rather than whether one exists at all.
+    const lastSessionOpen = Array.isArray(item.consultationSessions) &&
+      item.consultationSessions.some(s => !s.endTime);
+    if (updates.consultationStartTime && (!item.consultationStartTime || !lastSessionOpen)) {
       updates.consultationSessions = pushSession(item, req.user.id, req.user.name);
     }
-    // Consultation ends at billing or completion — close the open session
+    // Consultation ends at billing — record the end time and close the open session.
     if (updates.status === 'Pending Billing') {
       updates.consultationEndTime  = new Date();
       updates.consultationSessions = closeLastSession(item);
     }
     if (updates.status === 'Completed') {
-      updates.consultationEndTime  = updates.consultationEndTime || new Date();
+      // Only set consultationEndTime if not already captured at 'Pending Billing'.
+      // The previous bug was: updates.consultationEndTime || new Date() — this always
+      // overwrote the correct end time with the billing completion time.
+      if (!item.consultationEndTime) updates.consultationEndTime = new Date();
       updates.consultationSessions = closeLastSession(item);
       updates.dischargedBy         = req.user.name || 'Unknown';
       updates.dischargedAt         = new Date();
