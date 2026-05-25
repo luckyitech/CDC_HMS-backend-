@@ -25,6 +25,7 @@ const UserLoginLog        = require('./UserLoginLog');
 const UserEditLog         = require('./UserEditLog');
 const CareLinkPartner     = require('./CareLinkPartner');
 const DoctorBlock         = require('./DoctorBlock');
+const Notification        = require('./Notification');
 
 // =============================================
 // ASSOCIATIONS
@@ -133,6 +134,9 @@ CareLinkPartner.belongsTo(User, { foreignKey: 'addedBy', as: 'addedByUser' });
 User.hasMany(DoctorBlock, { foreignKey: 'doctorId', as: 'blocks' });
 DoctorBlock.belongsTo(User, { foreignKey: 'doctorId', as: 'doctor' });
 
+// --- In-app notifications ---
+Notification.belongsTo(User, { foreignKey: 'assignedDoctorId', as: 'assignedDoctor' });
+
 // =============================================
 // EXPORTS
 // =============================================
@@ -162,6 +166,7 @@ const db = {
   UserEditLog,
   CareLinkPartner,
   DoctorBlock,
+  Notification,
 };
 
 module.exports = db;

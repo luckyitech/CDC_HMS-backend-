@@ -23,6 +23,7 @@ const SUMMARY_KEYS = {
   removed:               'removed',
   referred:              'referred',
   document_uploaded:     'documentUploaded',
+  document_reviewed:     'documentReviewed',
   equipment_added:       'equipmentAdded',
   equipment_updated:     'equipmentUpdated',
   equipment_replaced:    'equipmentReplaced',
@@ -128,6 +129,34 @@ const getDocumentEvents = async (dateFilter, hasDateFilter) => {
       : 'Unknown';
     return makeEvent('document_uploaded', 'Uploaded Document', staff, `${d.Patient.firstName} ${d.Patient.lastName}`, d.Patient.uhid, d.createdAt, d.documentCategory, role);
   });
+};
+
+const getDocumentReviewedEvents = async (dateFilter, hasDateFilter) => {
+  const docs = await MedicalDocument.findAll({
+    where: {
+      status:           'Reviewed',
+      reviewedBy:       { [Op.ne]: null },
+      reviewDate:       { [Op.ne]: null },
+      uploadedByRole:   { [Op.in]: ['Staff', 'Lab'] }, // only staff/lab uploads reviewed by a doctor
+      ...(hasDateFilter ? { reviewDate: dateFilter } : {}),
+    },
+    include: [
+      { model: Patient, attributes: ['uhid', 'firstName', 'lastName'] },
+    ],
+  });
+
+  return docs.map(d =>
+    makeEvent(
+      'document_reviewed',
+      'Reviewed Document',
+      d.reviewedBy,
+      `${d.Patient.firstName} ${d.Patient.lastName}`,
+      d.Patient.uhid,
+      d.reviewDate,
+      d.documentCategory,
+      'doctor'
+    )
+  );
 };
 
 const getEquipmentEvents = async (dateFilter, hasDateFilter) => {
@@ -373,6 +402,7 @@ const getActivityLog = async (req, res) => {
     getRegistrationEvents(dateFilter, hasDateFilter),
     getQueueEvents(dateFilter, hasDateFilter),
     getDocumentEvents(dateFilter, hasDateFilter),
+    getDocumentReviewedEvents(dateFilter, hasDateFilter),
     getEquipmentEvents(dateFilter, hasDateFilter),
     getDoctorEvents(dateFilter, hasDateFilter),
     getAccountCreationEvents(dateFilter, hasDateFilter),

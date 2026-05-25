@@ -3,7 +3,8 @@ const db = require('../models');
 const fs = require('fs');
 const path = require('path');
 
-const { MedicalDocument, Patient, User } = db;
+const { MedicalDocument, Patient, User, Notification } = db;
+const { broadcast } = require('../utils/sseManager');
 
 // ====================================
 // CONSTANTS
@@ -160,9 +161,9 @@ const upload = async (req, res) => {
     const fileUrl = `/uploads/documents/${req.file.filename}`;
 
     // Determine status based on uploader role
-    // Patient uploads → Pending Review
-    // Doctor/Staff uploads → Reviewed
-    const status = req.user.role === 'patient' ? 'Pending Review' : 'Reviewed';
+    // Doctor uploads → Reviewed (doctor uploaded it themselves)
+    // Staff / Lab / Patient uploads → Pending Review (doctor must explicitly mark it reviewed)
+    const status = req.user.role === 'doctor' ? 'Reviewed' : 'Pending Review';
 
     // Create document record
     const document = await MedicalDocument.create({
@@ -189,6 +190,40 @@ const upload = async (req, res) => {
         { model: User, as: 'uploader', attributes: ['firstName', 'lastName'] },
       ],
     });
+
+    // Create in-app notification for doctors (only for staff/lab uploads, not patient self-uploads)
+    // Isolated try/catch — a notification failure must never fail a successful upload.
+    if (req.user.role !== 'patient') {
+      try {
+        const patientName = `${patient.firstName} ${patient.lastName}`;
+        const uploaderName = `${req.user.firstName || ''} ${req.user.lastName || ''}`.trim() || req.user.name || 'Staff';
+        const notification = await Notification.create({
+          type:             'document_uploaded',
+          patientName,
+          patientUhid:      patient.uhid,
+          documentName:     req.file.originalname,
+          documentCategory: documentCategory,
+          uploadedBy:       uploaderName,
+          assignedDoctorId: patient.primaryDoctorId || null,
+          isRead:           false,
+        });
+
+        broadcast('document_uploaded', {
+          id:               notification.id,
+          type:             'document_uploaded',
+          patientName,
+          patientUhid:      patient.uhid,
+          documentName:     req.file.originalname,
+          documentCategory: documentCategory,
+          uploadedBy:       uploaderName,
+          assignedDoctorId: patient.primaryDoctorId || null,
+          createdAt:        notification.createdAt,
+        });
+      } catch (notifErr) {
+        // Log but do not surface to the caller — the document was saved successfully.
+        console.error('Notification create error (non-fatal):', notifErr.message);
+      }
+    }
 
     return success(res, formatDocument(fullDocument), 201);
   } catch (err) {
