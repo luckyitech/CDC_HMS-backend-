@@ -80,6 +80,23 @@ const Patient = defineModel('Patient', {
     defaultValue: null,
   },
 
+  // --- Doctor summary (shared recognition note visible to all doctors) ---
+  patientSummary: {
+    type: DataTypes.TEXT,
+    allowNull: true,
+    defaultValue: null,
+  },
+  summaryUpdatedBy: {
+    type: DataTypes.STRING,
+    allowNull: true,
+    defaultValue: null,
+  },
+  summaryUpdatedAt: {
+    type: DataTypes.DATE,
+    allowNull: true,
+    defaultValue: null,
+  },
+
   // --- Visit dates ---
   lastVisit: {
     type: DataTypes.DATE,

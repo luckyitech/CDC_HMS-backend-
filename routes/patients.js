@@ -55,6 +55,11 @@ router.post('/:uhid/complete-registration', authenticate, authorize('staff', 'ad
 router.put('/:uhid', authenticate, authorize('staff', 'admin'), findPatient, patientController.update);
 
 // ------------------------------------
+// PATCH /api/patients/:uhid/summary — doctor writes/edits patient summary
+// ------------------------------------
+router.patch('/:uhid/summary', authenticate, authorize('doctor'), findPatient, patientController.updateSummary);
+
+// ------------------------------------
 // DELETE /api/patients/:uhid — delete patient
 // ------------------------------------
 router.delete('/:uhid', authenticate, authorize('admin'), findPatient, patientController.destroy);

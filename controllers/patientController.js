@@ -83,7 +83,10 @@ const formatPatient = (patient, latestVital, nextAppointment = null, lastQueue =
     medications:      p.currentMedications,
     allergies:        p.allergies,
     comorbidities:    p.comorbidities,
-    registeredBy:     p.registeredBy || null,
+    patientSummary:   p.patientSummary   || null,
+    summaryUpdatedBy: p.summaryUpdatedBy || null,
+    summaryUpdatedAt: p.summaryUpdatedAt || null,
+    registeredBy:     p.registeredBy     || null,
     hasPortalAccount: !!p.UserId,
   };
 };
@@ -653,4 +656,29 @@ const getVitalsHistory = async (req, res) => {
   return success(res, vitals.map(formatVitals));
 };
 
-module.exports = { create, quickCreate, completeRegistration, list, getOne, update, destroy, stats, recordVitals, recordVitalsDoctor, getVitals, getVitalsHistory };
+const updateSummary = async (req, res) => {
+  try {
+    const { summary } = req.body;
+    if (summary !== undefined && typeof summary !== 'string') {
+      return error(res, 'Summary must be a string.', 400);
+    }
+    const patient = req.patient;
+    const trimmed  = summary?.trim() || null;
+    const doctorName = `Dr. ${req.user.name}`;
+    await patient.update({
+      patientSummary:   trimmed,
+      summaryUpdatedBy: trimmed ? doctorName : null,
+      summaryUpdatedAt: trimmed ? new Date() : null,
+    });
+    return success(res, {
+      patientSummary:   patient.patientSummary,
+      summaryUpdatedBy: patient.summaryUpdatedBy,
+      summaryUpdatedAt: patient.summaryUpdatedAt,
+    });
+  } catch (err) {
+    console.error('Update patient summary error:', err.message);
+    return error(res, 'Failed to update patient summary.', 500);
+  }
+};
+
+module.exports = { create, quickCreate, completeRegistration, list, getOne, update, destroy, stats, recordVitals, recordVitalsDoctor, getVitals, getVitalsHistory, updateSummary };
