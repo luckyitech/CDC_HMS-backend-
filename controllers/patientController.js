@@ -86,8 +86,9 @@ const formatPatient = (patient, latestVital, nextAppointment = null, lastQueue =
     patientSummary:   p.patientSummary   || null,
     summaryUpdatedBy: p.summaryUpdatedBy || null,
     summaryUpdatedAt: p.summaryUpdatedAt || null,
-    registeredBy:     p.registeredBy     || null,
-    hasPortalAccount: !!p.UserId,
+    registeredBy:         p.registeredBy         || null,
+    hasPortalAccount:     !!p.UserId,
+    registrationComplete: !!p.registrationComplete,
   };
 };
 
@@ -228,7 +229,7 @@ const create = async (req, res) => {
       isActive: true,
     }, { transaction });
 
-    const patient = await Patient.create({ ...patientFields, uhid, UserId: user.id, registeredBy: req.user.name || 'Unknown', registeredByRole: req.user.role || 'staff' }, { transaction });
+    const patient = await Patient.create({ ...patientFields, uhid, UserId: user.id, registrationComplete: true, registeredBy: req.user.name || 'Unknown', registeredByRole: req.user.role || 'staff' }, { transaction });
     await transaction.commit();
 
     const full = await Patient.findByPk(patient.id, { include: [doctorInclude] });
@@ -402,8 +403,8 @@ const getOne = async (req, res) => {
 const completeRegistration = async (req, res) => {
   const patient = req.patient;
 
-  if (patient.UserId) {
-    return res.status(400).json({ success: false, message: 'This patient already has a portal account.' });
+  if (patient.registrationComplete) {
+    return res.status(400).json({ success: false, message: 'Registration has already been completed for this patient.' });
   }
 
   const { password, ...patientFields } = req.body;
@@ -435,9 +436,9 @@ const completeRegistration = async (req, res) => {
         isActive:  true,
       }, { transaction });
 
-      await patient.update({ ...patientFields, UserId: user.id }, { transaction });
+      await patient.update({ ...patientFields, UserId: user.id, registrationComplete: true }, { transaction });
     } else {
-      await patient.update(patientFields, { transaction });
+      await patient.update({ ...patientFields, registrationComplete: true }, { transaction });
     }
 
     await transaction.commit();
@@ -470,7 +471,8 @@ const completeRegistration = async (req, res) => {
 //   B) Patient already has a portal account → update fields and sync the linked User
 // ------------------------------------
 const update = async (req, res) => {
-  const { password, ...patientFields } = req.body;
+  // registrationComplete is managed exclusively by completeRegistration / create — never editable here
+  const { password, registrationComplete: _rc, ...patientFields } = req.body;
   const patient = req.patient;
 
   let tempPassword = null;
@@ -502,7 +504,7 @@ const update = async (req, res) => {
         isActive:  true,
       }, { transaction });
 
-      await patient.update({ ...patientFields, UserId: user.id }, { transaction });
+      await patient.update({ ...patientFields, UserId: user.id, registrationComplete: true }, { transaction });
       await transaction.commit();
     } catch (err) {
       await transaction.rollback();

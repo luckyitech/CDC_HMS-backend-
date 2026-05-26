@@ -114,6 +114,10 @@ const Patient = defineModel('Patient', {
     type: DataTypes.STRING,
     defaultValue: null,
   },
+  registrationComplete: {
+    type: DataTypes.BOOLEAN,
+    defaultValue: false,
+  },
 }, {
   indexes: [
     { unique: true, fields: ['uhid'], name: 'unique_uhid' },
