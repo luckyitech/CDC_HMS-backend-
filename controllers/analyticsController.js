@@ -359,6 +359,27 @@ const getWaitTimeBetweenTriageAndConsultation = async (req, res) => {
   }
 };
 
+// ── Wait Time: Consultation to Billing ───────────────────────────────────────
+
+const getWaitTimeConsultationToBilling = async (req, res) => {
+  try {
+    const rows = await Queue.findAll({
+      where: {
+        status:              'Completed',
+        consultationEndTime: { [Op.not]: null },
+        dischargedAt:        { [Op.not]: null },
+        ...buildDateFilter(req),
+      },
+      attributes: ['consultationEndTime', 'dischargedAt', 'priority'],
+      raw: true,
+    });
+    return success(res, computeWaitStats(rows, 'consultationEndTime', 'dischargedAt', 'consultationEndTime'));
+  } catch (err) {
+    console.error('Analytics.getWaitTimeConsultationToBilling error:', err);
+    return error(res, 'Failed to get consultation-to-billing wait time analytics', 500);
+  }
+};
+
 // ── Active Years ──────────────────────────────────────────────────────────────
 
 const getActiveYears = async (req, res) => {
@@ -466,4 +487,5 @@ module.exports = {
   getLengthOfStay,
   getWaitTimeBeforeTriage,
   getWaitTimeBetweenTriageAndConsultation,
+  getWaitTimeConsultationToBilling,
 };

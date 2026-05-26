@@ -22,5 +22,6 @@ router.get('/patient-volume-by-hour',  authenticate, authorize('admin'), analyti
 router.get('/removal-reasons',         authenticate, authorize('admin'), analyticsController.getRemovalReasons);
 router.get('/wait-time-before-triage',              authenticate, authorize('admin'), periodOptional, validate, analyticsController.getWaitTimeBeforeTriage);
 router.get('/wait-time-triage-to-consultation',     authenticate, authorize('admin'), periodOptional, validate, analyticsController.getWaitTimeBetweenTriageAndConsultation);
+router.get('/wait-time-consultation-to-billing',    authenticate, authorize('admin'), analyticsController.getWaitTimeConsultationToBilling);
 
 module.exports = router;
