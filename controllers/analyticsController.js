@@ -121,8 +121,8 @@ const getTriageMetrics = async (req, res) => {
     return success(res, {
       totalTriages:     allTriaged.length,
       avgTriageMinutes: durations.length ? Math.round(calculateAverage(durations)) : null,
-      minTriageMinutes: durations.length ? Math.min(...durations) : null,
-      maxTriageMinutes: durations.length ? Math.max(...durations) : null,
+      minTriageMinutes: durations.length ? durations.reduce((a, b) => (b < a ? b : a)) : null,
+      maxTriageMinutes: durations.length ? durations.reduce((a, b) => (b > a ? b : a)) : null,
       dailyVolume,
     });
   } catch (err) {
@@ -265,6 +265,100 @@ const getLengthOfStay = async (req, res) => {
   }
 };
 
+// ── Shared wait-time aggregator ───────────────────────────────────────────────
+// startField / endField: row field names for the two timestamps to diff.
+// dateField: row field used to group daily averages.
+
+const computeWaitStats = (rows, startField, endField, dateField) => {
+  const buckets    = { '0–5 min': 0, '6–15 min': 0, '16–30 min': 0, '31–60 min': 0, '60+ min': 0 };
+  const byDate     = {};
+  const byPriority = {};
+  const durations  = [];
+
+  rows.forEach(r => {
+    const wait = minutesDiff(r[startField], r[endField]);
+    if (wait === null || wait < 0) return;
+
+    durations.push(wait);
+
+    if      (wait <= 5)  buckets['0–5 min']++;
+    else if (wait <= 15) buckets['6–15 min']++;
+    else if (wait <= 30) buckets['16–30 min']++;
+    else if (wait <= 60) buckets['31–60 min']++;
+    else                 buckets['60+ min']++;
+
+    const date = new Date(r[dateField]).toISOString().split('T')[0];
+    if (!byDate[date]) byDate[date] = { date, durations: [] };
+    byDate[date].durations.push(wait);
+
+    const p = r.priority || 'Normal';
+    if (!byPriority[p]) byPriority[p] = { priority: p, count: 0, durations: [] };
+    byPriority[p].count++;
+    byPriority[p].durations.push(wait);
+  });
+
+  const n = durations.length;
+  // Use reduce instead of spread to avoid call-stack overflow on large arrays
+  const minWait = n ? durations.reduce((a, b) => (b < a ? b : a)) : null;
+  const maxWait = n ? durations.reduce((a, b) => (b > a ? b : a)) : null;
+
+  const dailyAvg = Object.values(byDate)
+    .map(d => ({ date: d.date, avgWait: Math.round(calculateAverage(d.durations)) }))
+    .sort((a, b) => a.date.localeCompare(b.date));
+
+  const waitByPriority = Object.values(byPriority).map(p => ({
+    priority: p.priority,
+    count:    p.count,
+    avgWait:  Math.round(calculateAverage(p.durations)),
+  }));
+
+  return {
+    totalRecords:   n,
+    avgWaitMinutes: n ? Math.round(calculateAverage(durations)) : null,
+    minWaitMinutes: minWait,
+    maxWaitMinutes: maxWait,
+    distribution:   Object.entries(buckets).map(([label, count]) => ({ label, count })),
+    dailyAvg,
+    waitByPriority,
+  };
+};
+
+// ── Wait Time Before Triage ───────────────────────────────────────────────────
+
+const getWaitTimeBeforeTriage = async (req, res) => {
+  try {
+    const rows = await Queue.findAll({
+      where: { triageStartTime: { [Op.not]: null }, ...buildDateFilter(req) },
+      attributes: ['createdAt', 'triageStartTime', 'priority'],
+      raw: true,
+    });
+    return success(res, computeWaitStats(rows, 'createdAt', 'triageStartTime', 'createdAt'));
+  } catch (err) {
+    console.error('Analytics.getWaitTimeBeforeTriage error:', err);
+    return error(res, 'Failed to get wait time before triage analytics', 500);
+  }
+};
+
+// ── Wait Time Between Triage and Consultation ─────────────────────────────────
+
+const getWaitTimeBetweenTriageAndConsultation = async (req, res) => {
+  try {
+    const rows = await Queue.findAll({
+      where: {
+        triageEndTime:         { [Op.not]: null },
+        consultationStartTime: { [Op.not]: null },
+        ...buildDateFilter(req),
+      },
+      attributes: ['triageEndTime', 'consultationStartTime', 'priority'],
+      raw: true,
+    });
+    return success(res, computeWaitStats(rows, 'triageEndTime', 'consultationStartTime', 'triageEndTime'));
+  } catch (err) {
+    console.error('Analytics.getWaitTimeBetweenTriageAndConsultation error:', err);
+    return error(res, 'Failed to get triage-to-consultation wait time analytics', 500);
+  }
+};
+
 // ── Active Years ──────────────────────────────────────────────────────────────
 
 const getActiveYears = async (req, res) => {
@@ -370,4 +464,6 @@ module.exports = {
   getPatientVolumeByHour,
   getRemovalReasons,
   getLengthOfStay,
+  getWaitTimeBeforeTriage,
+  getWaitTimeBetweenTriageAndConsultation,
 };

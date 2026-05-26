@@ -20,5 +20,7 @@ router.get('/triage-by-priority',      authenticate, authorize('admin'), analyti
 router.get('/length-of-stay',          authenticate, authorize('admin'), analyticsController.getLengthOfStay);
 router.get('/patient-volume-by-hour',  authenticate, authorize('admin'), analyticsController.getPatientVolumeByHour);
 router.get('/removal-reasons',         authenticate, authorize('admin'), analyticsController.getRemovalReasons);
+router.get('/wait-time-before-triage',              authenticate, authorize('admin'), periodOptional, validate, analyticsController.getWaitTimeBeforeTriage);
+router.get('/wait-time-triage-to-consultation',     authenticate, authorize('admin'), periodOptional, validate, analyticsController.getWaitTimeBetweenTriageAndConsultation);
 
 module.exports = router;
