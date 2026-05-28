@@ -260,18 +260,31 @@ const create = async (req, res) => {
 const quickCreate = async (req, res) => {
   const { firstName, lastName, phone } = req.body;
 
-  const uhid = await generateUHID(Patient);
+  try {
+    const existing = await Patient.findOne({ where: { phone } });
+    if (existing) {
+      return res.status(400).json({
+        success: false,
+        message: `A patient with phone ${phone} already exists — ${existing.firstName} ${existing.lastName} (${existing.uhid}).`,
+      });
+    }
 
-  const patient = await Patient.create({
-    firstName,
-    lastName,
-    phone: phone || null,
-    uhid,
-    registeredBy:     req.user.name || 'Unknown',
-    registeredByRole: req.user.role || 'staff',
-  });
+    const uhid = await generateUHID(Patient);
 
-  return success(res, formatPatient(patient, null), 201);
+    const patient = await Patient.create({
+      firstName,
+      lastName,
+      phone,
+      uhid,
+      registeredBy:     req.user.name || 'Unknown',
+      registeredByRole: req.user.role || 'staff',
+    });
+
+    return success(res, formatPatient(patient, null), 201);
+  } catch (err) {
+    console.error('quickCreate error:', err);
+    return res.status(500).json({ success: false, message: 'Failed to register patient' });
+  }
 };
 
 // ------------------------------------

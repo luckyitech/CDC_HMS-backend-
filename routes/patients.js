@@ -25,6 +25,7 @@ router.post('/', authenticate, authorize('staff', 'admin'), [
 router.post('/quick', authenticate, authorize('staff', 'admin', 'doctor'), [
   body('firstName').notEmpty().withMessage('First name is required'),
   body('lastName').notEmpty().withMessage('Last name is required'),
+  body('phone').notEmpty().withMessage('Phone number is required'),
   validate,
 ], patientController.quickCreate);
 
