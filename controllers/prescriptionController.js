@@ -252,8 +252,36 @@ const stats = async (req, res) => {
   return success(res, { total, active, completed, cancelled });
 };
 
+/**
+ * GET /api/prescriptions/top-drugs
+ * Returns the most-prescribed drug names across all prescriptions.
+ * Used by the New Prescription form to populate the Quick Add chips dynamically.
+ *
+ * Query params:
+ *   - limit: max results (default 20, max 50)
+ *
+ * Uses JSON_TABLE to unnest the medications JSON array column per row,
+ * then groups and counts by drug name so any hospital's real usage drives the list.
+ */
+const getTopDrugs = async (req, res) => {
+  const limit = Math.min(parseInt(req.query.limit) || 20, 50);
+
+  const rows = await db.sequelize.query(
+    `SELECT TRIM(med_name) AS name, COUNT(*) AS cnt
+     FROM Prescriptions,
+       JSON_TABLE(medications, '$[*]' COLUMNS (med_name VARCHAR(200) PATH '$.name')) AS meds
+     WHERE med_name IS NOT NULL AND TRIM(med_name) != ''
+     GROUP BY TRIM(med_name)
+     ORDER BY cnt DESC
+     LIMIT :limit`,
+    { replacements: { limit }, type: db.sequelize.QueryTypes.SELECT }
+  );
+
+  return success(res, rows.map((r) => r.name));
+};
+
 // ====================================
 // EXPORTS
 // ====================================
 // Export all actions so they can be used in routes
-module.exports = { create, list, getOne, update, destroy, stats };
+module.exports = { create, list, getOne, update, destroy, stats, getTopDrugs };

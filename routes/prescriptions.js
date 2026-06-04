@@ -54,14 +54,23 @@ router.post(
 // ------------------------------------
 // GET /api/prescriptions/stats — MUST be before /:id
 // ------------------------------------
-// Authorization: Doctor, Staff (for dashboards)
-// Why before /:id? Express matches routes in order.
-// If this was after /:id, "stats" would be treated as an ID!
 router.get(
   '/stats',
   authenticate,
   authorize('doctor', 'staff', 'admin'),
   prescriptionController.stats
+);
+
+// ------------------------------------
+// GET /api/prescriptions/top-drugs — MUST be before /:id
+// ------------------------------------
+// Returns the most-prescribed drug names (from actual DB data).
+// Used by the New Prescription form Quick Add chips.
+router.get(
+  '/top-drugs',
+  authenticate,
+  authorize('doctor', 'staff', 'admin'),
+  prescriptionController.getTopDrugs
 );
 
 // ------------------------------------
