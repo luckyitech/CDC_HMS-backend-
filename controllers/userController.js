@@ -79,6 +79,24 @@ const formatUserResponse = (user, profile) => {
   return baseData;
 };
 
+// Formats a Patient record that has no User account yet (quick-registered / incomplete)
+// into the same shape as formatUserResponse so the frontend can treat both uniformly.
+const formatPatientOnly = (p) => ({
+  id:                   `patient_${p.id}`,   // prefixed so it never clashes with a User id
+  patientId:            p.id,
+  firstName:            p.firstName,
+  lastName:             p.lastName,
+  name:                 `${p.firstName || ''} ${p.lastName || ''}`.trim(),
+  email:                p.email   || null,
+  phone:                p.phone   || null,
+  role:                 'patient',
+  status:               p.status  || 'Active',
+  uhid:                 p.uhid,
+  registrationComplete: !!p.registrationComplete,
+  hasUserAccount:       false,
+  createdAt:            p.createdAt,
+});
+
 // ====================================
 // CONTROLLER ACTIONS
 // ====================================
@@ -344,40 +362,59 @@ const listUsers = async (req, res) => {
   const { role } = req.query;
 
   try {
-    // Build where clause
     const where = {};
-    if (role) {
-      where.role = role;
-    }
+    if (role) where.role = role;
 
-    // Get all users
-    const users = await User.findAll({
-      where,
-      attributes: ['id', 'firstName', 'lastName', 'email', 'phone', 'role', 'isActive', 'createdAt'],
-      order: [['createdAt', 'DESC']],
+    const includePatients = !role || role === 'patient';
+
+    // Fetch users (with all role profiles eager-loaded) and unlinked patients in parallel
+    const [users, unlinkedPatients] = await Promise.all([
+      User.findAll({
+        where,
+        attributes: ['id', 'firstName', 'lastName', 'email', 'phone', 'role', 'isActive', 'createdAt'],
+        include: [
+          { model: DoctorProfile,  required: false },
+          { model: StaffProfile,   required: false },
+          { model: LabTechProfile, required: false },
+          { model: Patient,        required: false },
+        ],
+        order: [['createdAt', 'DESC']],
+      }),
+      includePatients
+        ? Patient.findAll({ where: { UserId: null }, order: [['createdAt', 'DESC']] })
+        : Promise.resolve([]),
+    ]);
+
+    const formattedUsers = users.map((user) => {
+      // Profile is already eager-loaded — no extra queries needed
+      const profile =
+        user.role === 'doctor'  ? user.DoctorProfile  :
+        user.role === 'staff'   ? user.StaffProfile   :
+        user.role === 'lab'     ? user.LabTechProfile  :
+        user.role === 'patient' ? user.Patient         : null;
+
+      const formatted = formatUserResponse(user, profile);
+
+      // Attach extra fields for patients so the frontend can show registration status
+      if (user.role === 'patient' && profile) {
+        formatted.uhid               = profile.uhid;
+        formatted.registrationComplete = !!profile.registrationComplete;
+        formatted.hasUserAccount     = true;
+        formatted.patientId          = profile.id;
+      }
+
+      return formatted;
     });
 
-    // Fetch profiles for each user
-    const usersWithProfiles = await Promise.all(
-      users.map(async (user) => {
-        let profile = null;
+    const allUsers = [
+      ...formattedUsers,
+      ...(includePatients ? unlinkedPatients.map(formatPatientOnly) : []),
+    ].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
 
-        if (user.role === 'doctor') {
-          profile = await DoctorProfile.findOne({ where: { UserId: user.id } });
-        } else if (user.role === 'staff') {
-          profile = await StaffProfile.findOne({ where: { UserId: user.id } });
-        } else if (user.role === 'lab') {
-          profile = await LabTechProfile.findOne({ where: { UserId: user.id } });
-        }
-
-        return formatUserResponse(user, profile);
-      })
-    );
-
-    return success(res, { users: usersWithProfiles });
+    return success(res, { users: allUsers });
   } catch (err) {
-    console.error('List users error:', err.message);
-    return error(res, 'Failed to retrieve users. Please try again.', 500);
+    console.error('listUsers error:', err);
+    return error(res, 'Failed to retrieve users', 500);
   }
 };
 
@@ -394,6 +431,9 @@ const ROLE_PROFILE_FIELDS = {
   lab:     ['specialization', 'certificationNumber', 'qualification', 'institution', 'yearsExperience', 'shift'],
   patient: ['firstName', 'lastName', 'email', 'phone', 'dateOfBirth', 'gender', 'address', 'diagnosis', 'diagnosisDate', 'hba1c', 'emergencyContact', 'insurance'],
 };
+
+// Date fields that must be null — not empty string — when cleared, otherwise MySQL rejects them
+const DATE_FIELDS = new Set(['dateOfBirth', 'diagnosisDate']);
 
 const ROLE_PROFILE_MODEL = {
   doctor:  (userId) => DoctorProfile.findOne({ where: { UserId: userId } }),
@@ -444,7 +484,9 @@ const updateUser = async (req, res) => {
       if (profile) {
         const profileUpdates = {};
         profileFields.forEach((field) => {
-          if (updates[field] !== undefined) profileUpdates[field] = updates[field];
+          if (updates[field] === undefined) return;
+          // Empty string on a date column would cause MySQL "Incorrect datetime value" — coerce to null
+          profileUpdates[field] = DATE_FIELDS.has(field) && updates[field] === '' ? null : updates[field];
         });
 
         if (Object.keys(profileUpdates).length > 0) {
