@@ -1,13 +1,20 @@
 const { Op } = require('sequelize');
 const { success } = require('../utils/response');
 const db = require('../models');
+const { resolvePatient } = require('../utils/patientFamily');
 const sequelize = require('../config/database');
 const bcrypt = require('bcryptjs');
 const crypto = require('crypto');
 const { generateUHID } = require('../utils/generateId');
 const { sendPatientWelcomeEmail, sendEmailUpdatedEmail } = require('../utils/emailService');
 
-const { Patient, User, PatientVital, Appointment, Queue } = db;
+const {
+  Patient, User, PatientVital, Appointment, Queue,
+  BloodSugarReading, Prescription, LabTest, TreatmentPlan,
+  PhysicalExamination, InitialAssessment, ConsultationNote,
+  MedicalDocument, MedicalEquipment, EquipmentHistory, EquipmentAuditLog,
+  CareLinkPartner,
+} = db;
 
 // ------------------------------------
 // Helpers
@@ -89,6 +96,7 @@ const formatPatient = (patient, latestVital, nextAppointment = null, lastQueue =
     registeredBy:         p.registeredBy         || null,
     hasPortalAccount:     !!p.UserId,
     registrationComplete: !!p.registrationComplete,
+    mergedIntoUhid:       p.mergedInto?.uhid || null,
   };
 };
 
@@ -99,9 +107,33 @@ const doctorInclude = {
   attributes: ['firstName', 'lastName'],
 };
 
+// Reusable include for resolving the canonical patient a deactivated patient was merged into.
+const mergedIntoInclude = {
+  model:      Patient,
+  as:         'mergedInto',
+  attributes: ['uhid'],
+};
+
 // ------------------------------------
 // PRIVATE HELPERS
 // ------------------------------------
+
+// Returns the conflicting patient if idNumber is already taken by a different record, else null.
+// Pass excludeId (Patient PK) when updating so the patient's own ID doesn't trigger a false positive.
+const findDuplicateIdNumber = (idNumber, excludeId = null) => {
+  if (!idNumber) return Promise.resolve(null);
+  const where = { idNumber };
+  if (excludeId) where.id = { [Op.ne]: excludeId };
+  return Patient.findOne({ where, attributes: ['uhid', 'firstName', 'lastName'] });
+};
+
+// Builds the standard 409 response used whenever a duplicate ID number is detected.
+const duplicateIdResponse = (res, idNumber, existing) =>
+  res.status(409).json({
+    success: false,
+    message: `A patient with this ID number / Passport / Birth certificate number already exists.`,
+    existingPatient: { uhid: existing.uhid, name: `${existing.firstName} ${existing.lastName}`.trim() },
+  });
 
 /**
  * Fetches the full patient row with all related data needed for an API response.
@@ -110,7 +142,7 @@ const doctorInclude = {
 const fetchFullPatient = (patientId) => {
   const today = new Date().toISOString().split('T')[0];
   return Promise.all([
-    Patient.findByPk(patientId, { include: [doctorInclude] }),
+    Patient.findByPk(patientId, { include: [doctorInclude, mergedIntoInclude] }),
     PatientVital.findOne({
       where: { PatientId: patientId },
       order: [['recordedAt', 'DESC']],
@@ -200,6 +232,9 @@ const create = async (req, res) => {
   } else {
     uhid = await generateUHID(Patient);
   }
+
+  const idDuplicate = await findDuplicateIdNumber(patientFields.idNumber);
+  if (idDuplicate) return duplicateIdResponse(res, patientFields.idNumber, idDuplicate);
 
   // Use provided password or auto-generate one
   const tempPassword = password || crypto.randomBytes(6).toString('hex');
@@ -422,6 +457,9 @@ const completeRegistration = async (req, res) => {
 
   const { password, ...patientFields } = req.body;
 
+  const idDuplicate = await findDuplicateIdNumber(patientFields.idNumber, patient.id);
+  if (idDuplicate) return duplicateIdResponse(res, patientFields.idNumber, idDuplicate);
+
   const transaction = await sequelize.transaction();
   try {
     let tempPassword = null;
@@ -484,6 +522,9 @@ const completeRegistration = async (req, res) => {
 //   B) Patient already has a portal account → update fields and sync the linked User
 // ------------------------------------
 const update = async (req, res) => {
+  if (req.isDeactivated) {
+    return res.status(403).json({ success: false, message: 'This patient profile is inactive. Use reactivate to restore it first.' });
+  }
   // registrationComplete is managed exclusively by completeRegistration / create — never editable here
   const { password, registrationComplete: _rc, ...patientFields } = req.body;
   const patient = req.patient;
@@ -491,6 +532,9 @@ const update = async (req, res) => {
   let tempPassword = null;
 
   console.log(`[update] UHID=${patient.uhid} UserId=${patient.UserId} newEmail=${patientFields.email}`);
+
+  const idDuplicate = await findDuplicateIdNumber(patientFields.idNumber, patient.id);
+  if (idDuplicate) return duplicateIdResponse(res, patientFields.idNumber, idDuplicate);
 
   if (!patient.UserId && patientFields.email) {
     // Case A: first-time email — create a portal account and link it atomically
@@ -601,6 +645,10 @@ const stats = async (req, res) => {
 // POST /api/patients/:uhid/vitals — record triage vitals
 // ------------------------------------
 const recordVitals = async (req, res) => {
+  if (req.isDeactivated) {
+    return res.status(403).json({ success: false, message: 'This patient profile is inactive. No new records can be added.' });
+  }
+
   const { weight, height, waistCircumference } = req.body;
 
   // Auto-calculate derived fields
@@ -627,6 +675,10 @@ const recordVitals = async (req, res) => {
 // All fields optional — doctor fills in what was missed at triage
 // ------------------------------------
 const recordVitalsDoctor = async (req, res) => {
+  if (req.isDeactivated) {
+    return res.status(403).json({ success: false, message: 'This patient profile is inactive. No new records can be added.' });
+  }
+
   const { weight, height, waistCircumference } = req.body;
 
   const bmi = (weight && height)
@@ -652,7 +704,7 @@ const recordVitalsDoctor = async (req, res) => {
 // ------------------------------------
 const getVitals = async (req, res) => {
   const latestVital = await PatientVital.findOne({
-    where: { PatientId: req.patient.id },
+    where: { PatientId: { [Op.in]: req.patientIds } },
     order: [['recordedAt', 'DESC']],
   });
 
@@ -664,7 +716,7 @@ const getVitals = async (req, res) => {
 // ------------------------------------
 const getVitalsHistory = async (req, res) => {
   const vitals = await PatientVital.findAll({
-    where: { PatientId: req.patient.id },
+    where: { PatientId: { [Op.in]: req.patientIds } },
     order: [['recordedAt', 'DESC']],
   });
 
@@ -673,6 +725,9 @@ const getVitalsHistory = async (req, res) => {
 
 const updateSummary = async (req, res) => {
   try {
+    if (req.isDeactivated) {
+      return res.status(403).json({ success: false, message: 'This patient profile is inactive. No changes are allowed.' });
+    }
     const { summary } = req.body;
     if (summary !== undefined && typeof summary !== 'string') {
       return error(res, 'Summary must be a string.', 400);
@@ -696,4 +751,158 @@ const updateSummary = async (req, res) => {
   }
 };
 
-module.exports = { create, quickCreate, completeRegistration, list, getOne, update, destroy, stats, recordVitals, recordVitalsDoctor, getVitals, getVitalsHistory, updateSummary };
+// ------------------------------------
+// GET /api/patients/duplicates — admin: list all active patient pairs sharing the same idNumber
+// ------------------------------------
+const getDuplicates = async (req, res) => {
+  const groups = await Patient.findAll({
+    attributes: ['idNumber', [db.sequelize.fn('COUNT', db.sequelize.col('id')), 'cnt']],
+    where: {
+      idNumber:    { [Op.not]: null, [Op.ne]: '' },
+      status:      { [Op.ne]: 'Inactive' },
+      mergedIntoId: null,
+    },
+    group: ['idNumber'],
+    having: db.sequelize.literal('COUNT(id) > 1'),
+    raw: true,
+  });
+
+  if (!groups.length) return success(res, []);
+
+  const idNumbers = groups.map(g => g.idNumber);
+
+  const patients = await Patient.findAll({
+    where: { idNumber: { [Op.in]: idNumbers }, status: { [Op.ne]: 'Inactive' }, mergedIntoId: null },
+    attributes: ['id', 'uhid', 'firstName', 'lastName', 'dateOfBirth', 'phone', 'gender', 'idNumber', 'createdAt', 'registeredBy', 'status', 'UserId'],
+    order: [['idNumber', 'ASC'], ['createdAt', 'ASC']],
+  });
+
+  const map = {};
+  patients.forEach(p => {
+    const v = p.dataValues;
+    if (!map[v.idNumber]) map[v.idNumber] = [];
+    map[v.idNumber].push({
+      id:              v.id,
+      uhid:            v.uhid,
+      firstName:       v.firstName,
+      lastName:        v.lastName,
+      name:            `${v.firstName} ${v.lastName}`.trim(),
+      dateOfBirth:     v.dateOfBirth,
+      phone:           v.phone,
+      gender:          v.gender,
+      idNumber:        v.idNumber,
+      registeredAt:    v.createdAt,
+      registeredBy:    v.registeredBy || 'Unknown',
+      status:          v.status,
+      hasPortalAccount: !!v.UserId,
+    });
+  });
+
+  return success(res, Object.values(map).filter(g => g.length > 1));
+};
+
+// ------------------------------------
+// POST /api/patients/merge — admin: merge duplicate into kept patient then deactivate it
+// Body: { keepUhid, discardUhid }
+// ------------------------------------
+const mergePatients = async (req, res) => {
+  const { keepUhid, discardUhid } = req.body;
+
+  if (!keepUhid || !discardUhid) {
+    return res.status(400).json({ success: false, message: 'keepUhid and discardUhid are required.' });
+  }
+  if (keepUhid === discardUhid) {
+    return res.status(400).json({ success: false, message: 'keepUhid and discardUhid must be different patients.' });
+  }
+
+  const [keepPatient, discardPatient] = await Promise.all([
+    Patient.findOne({ where: { uhid: keepUhid } }),
+    Patient.findOne({ where: { uhid: discardUhid } }),
+  ]);
+
+  if (!keepPatient)    return res.status(404).json({ success: false, message: `Patient "${keepUhid}" not found.` });
+  if (!discardPatient) return res.status(404).json({ success: false, message: `Patient "${discardUhid}" not found.` });
+  if (discardPatient.mergedIntoId !== null) {
+    return res.status(400).json({ success: false, message: `Patient "${discardUhid}" is already merged into another record.` });
+  }
+  if (keepPatient.status === 'Inactive') {
+    return res.status(400).json({ success: false, message: `Patient "${keepUhid}" is inactive and cannot be the merge target.` });
+  }
+
+  const transaction = await sequelize.transaction();
+  try {
+    // Handle User portal accounts
+    if (discardPatient.UserId) {
+      if (!keepPatient.UserId) {
+        // Transfer the portal account to the patient we are keeping
+        await keepPatient.update({ UserId: discardPatient.UserId }, { transaction });
+        await discardPatient.update({ UserId: null }, { transaction });
+      } else {
+        // Both have portal accounts — deactivate the discarded one
+        await User.update({ isActive: false }, { where: { id: discardPatient.UserId }, transaction });
+      }
+    }
+
+    // Link the discarded patient to the canonical one; clear idNumber to stop duplicate detection
+    await discardPatient.update(
+      { mergedIntoId: keepPatient.id, status: 'Inactive', idNumber: null },
+      { transaction },
+    );
+
+    await transaction.commit();
+
+    return success(res, {
+      message:     `Patient ${discardUhid} merged into ${keepUhid} and deactivated.`,
+      kept:        keepUhid,
+      deactivated: discardUhid,
+    });
+  } catch (err) {
+    await transaction.rollback();
+    throw err;
+  }
+};
+
+// ------------------------------------
+// PATCH /api/patients/:uhid/reactivate — admin: undo a merge and restore an inactive patient
+// ------------------------------------
+const reactivatePatient = async (req, res) => {
+  const { uhid } = req.params;
+  const patient = await Patient.findOne({ where: { uhid } });
+
+  if (!patient) return res.status(404).json({ success: false, message: 'Patient not found.' });
+  if (patient.mergedIntoId === null) {
+    return res.status(400).json({ success: false, message: 'This patient is not linked to a merge. Nothing to reactivate.' });
+  }
+
+  await patient.update({ mergedIntoId: null, status: 'Active' });
+
+  return success(res, {
+    message: `Patient ${uhid} has been reactivated successfully.`,
+    uhid,
+  });
+};
+
+// ------------------------------------
+// GET /api/patients/check-id?idNumber=xxx
+// Real-time duplicate check used by the registration form as staff types.
+// Returns { exists: false } or { exists: true, uhid, name }.
+// ------------------------------------
+const checkIdNumber = async (req, res) => {
+  const idNumber = (req.query.idNumber || '').trim();
+  if (!idNumber) return success(res, { exists: false });
+
+  const patient = await Patient.findOne({
+    where: { idNumber },
+    attributes: ['uhid', 'firstName', 'lastName'],
+  });
+
+  if (!patient) return success(res, { exists: false });
+
+  return success(res, {
+    exists: true,
+    uhid: patient.uhid,
+    name: `${patient.firstName} ${patient.lastName}`.trim(),
+  });
+};
+
+module.exports = { create, quickCreate, completeRegistration, list, getOne, update, destroy, stats, recordVitals, recordVitalsDoctor, getVitals, getVitalsHistory, updateSummary, checkIdNumber, getDuplicates, mergePatients, reactivatePatient };

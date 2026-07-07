@@ -109,8 +109,11 @@ const add = async (req, res) => {
   try {
     const { uhid, priority = 'Normal', reason, isReview = false, assignedDoctorId = null } = req.body;
 
-    const patient = await Patient.findOne({ where: { uhid } });
-    if (!patient) return error(res, 'Patient not found', 404);
+    const { resolvePatient } = require('../utils/patientFamily');
+    const family = await resolvePatient(uhid);
+    if (!family) return error(res, 'Patient not found', 404);
+    if (family.isDeactivated) return error(res, 'This patient profile is inactive. They cannot be added to the queue.', 403);
+    const patient = family.patient;
 
     // Reject if patient is already in the queue and not yet Completed or Removed
     const existing = await Queue.findOne({

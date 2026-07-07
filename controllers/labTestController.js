@@ -1,5 +1,6 @@
 const { Op } = require('sequelize');
 const { success, error } = require('../utils/response');
+const { resolvePatient } = require('../utils/patientFamily');
 const db = require('../models');
 const { generateLabTestNumber } = require('../utils/generateId');
 
@@ -110,12 +111,9 @@ const labTestIncludes = [
 const create = async (req, res) => {
   const { uhid, testType, sampleType, priority, notes } = req.body;
 
-  // Step 1: Find the patient by UHID
-  // We need the patient ID to create the foreign key relationship
-  const patient = await Patient.findOne({ where: { uhid } });
-  if (!patient) {
-    return error(res, `Patient ${uhid} not found`, 404);
-  }
+  const family = await resolvePatient(uhid);
+  if (!family) return error(res, `Patient ${uhid} not found`, 404);
+  if (family.isDeactivated) return error(res, 'This patient profile is inactive. No new lab tests can be ordered.', 403);
 
   // Step 2: Generate unique test number
   const testNumber = await generateLabTestNumber(LabTest);
@@ -133,7 +131,7 @@ const create = async (req, res) => {
   // CRITICAL: PatientId must be PascalCase (auto-generated FK naming convention)
   const labTest = await LabTest.create({
     testNumber,
-    PatientId: patient.id,  // PascalCase FK
+    PatientId: family.patient.id,  // PascalCase FK
     testType,
     sampleType,
     priority: priority || 'Routine',  // Default to Routine if not specified
@@ -178,13 +176,11 @@ const list = async (req, res) => {
   // Clone the includes array so we can modify it
   const includes = [...labTestIncludes];
 
-  // If filtering by patient UHID, add a WHERE to the Patient JOIN
+  // If filtering by patient UHID, resolve the family and filter by PatientId directly
   if (uhid) {
-    includes[0] = {
-      ...includes[0],
-      where: { uhid },
-      required: true,  // INNER JOIN
-    };
+    const family = await resolvePatient(uhid);
+    if (!family) return error(res, 'Patient not found', 404);
+    where.PatientId = { [Op.in]: family.patientIds };
   }
 
   // Calculate pagination offset

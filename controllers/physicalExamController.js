@@ -1,5 +1,6 @@
 const { Op } = require('sequelize');
 const { success, error } = require('../utils/response');
+const { resolvePatient } = require('../utils/patientFamily');
 const db = require('../models');
 
 const { PhysicalExamination, Patient, User } = db;
@@ -140,11 +141,11 @@ const create = async (req, res) => {
     data,
   } = req.body;
 
-  // Step 1: Find the patient by UHID
-  const patient = await Patient.findOne({ where: { uhid } });
-  if (!patient) {
-    return error(res, `Patient ${uhid} not found`, 404);
-  }
+  const family = await resolvePatient(uhid);
+  if (!family) return error(res, `Patient ${uhid} not found`, 404);
+  if (family.isDeactivated) return error(res, 'This patient profile is inactive. No new examinations can be created.', 403);
+
+  const { patient } = family;
 
   // Step 2: Get current date and time
   const now = new Date();
@@ -248,21 +249,13 @@ const list = async (req, res) => {
     ];
   }
 
-  // Build includes with patient filter
+  const family = await resolvePatient(uhid);
+  if (!family) return error(res, 'Patient not found', 404);
+  where.PatientId = { [Op.in]: family.patientIds };
+
   const includes = [
-    {
-      model: Patient,
-      attributes: ['uhid', 'firstName', 'lastName'],
-      where: { uhid },  // Filter by patient UHID
-      required: true,   // INNER JOIN
-    },
-    {
-      model: User,
-      as: 'doctor',
-      attributes: ['firstName', 'lastName'],
-      // Doctor name search is complex with JOINs - keep it simple for now
-      // Search only searches the main physical exam fields
-    },
+    { model: Patient, attributes: ['uhid', 'firstName', 'lastName'] },
+    { model: User, as: 'doctor', attributes: ['firstName', 'lastName'] },
   ];
 
   // Fetch physical examinations with count

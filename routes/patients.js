@@ -35,6 +35,34 @@ router.post('/quick', authenticate, authorize('staff', 'admin', 'doctor'), [
 router.get('/stats', authenticate, authorize('doctor', 'staff', 'admin'), patientController.stats);
 
 // ------------------------------------
+// GET /api/patients/check-id — MUST be before /:uhid
+// Real-time duplicate check as staff types an ID number during registration.
+// ------------------------------------
+router.get('/check-id', authenticate, authorize('staff', 'admin'), patientController.checkIdNumber);
+
+// ------------------------------------
+// GET /api/patients/duplicates — admin: active patient pairs sharing same idNumber
+// MUST be before /:uhid
+// ------------------------------------
+router.get('/duplicates', authenticate, authorize('admin'), patientController.getDuplicates);
+
+// ------------------------------------
+// POST /api/patients/merge — admin: merge one patient into another then deactivate
+// MUST be before /:uhid
+// ------------------------------------
+router.post('/merge', authenticate, authorize('admin'), [
+  body('keepUhid').notEmpty().withMessage('keepUhid is required'),
+  body('discardUhid').notEmpty().withMessage('discardUhid is required'),
+  validate,
+], patientController.mergePatients);
+
+// ------------------------------------
+// PATCH /api/patients/:uhid/reactivate — admin: undo a merge and restore an inactive patient
+// MUST be before /:uhid generic routes
+// ------------------------------------
+router.patch('/:uhid/reactivate', authenticate, authorize('admin'), patientController.reactivatePatient);
+
+// ------------------------------------
 // GET /api/patients — list with filters
 // ------------------------------------
 router.get('/', authenticate, authorize('doctor', 'staff', 'admin'), patientController.list);

@@ -1,7 +1,9 @@
+const { Op } = require('sequelize');
 const { success, error } = require('../utils/response');
+const { resolvePatient } = require('../utils/patientFamily');
 const db = require('../models');
 
-const { Patient, CareLinkPartner, User } = db;
+const { CareLinkPartner, User } = db;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -29,11 +31,11 @@ const formatPartner = (p) => ({
 const getAll = async (req, res) => {
   const { uhid } = req.params;
   try {
-    const patient = await Patient.findOne({ where: { uhid } });
-    if (!patient) return error(res, 'Patient not found', 404);
+    const family = await resolvePatient(uhid);
+    if (!family) return error(res, 'Patient not found', 404);
 
     const partners = await CareLinkPartner.findAll({
-      where:   { PatientId: patient.id, isActive: true },
+      where:   { PatientId: { [Op.in]: family.patientIds }, isActive: true },
       include: [userInclude],
       order:   [['addedDate', 'ASC']],
     });
@@ -51,11 +53,12 @@ const add = async (req, res) => {
   const { firstName, lastName, email, relationship, phone } = req.body;
 
   try {
-    const patient = await Patient.findOne({ where: { uhid } });
-    if (!patient) return error(res, 'Patient not found', 404);
+    const family = await resolvePatient(uhid);
+    if (!family) return error(res, 'Patient not found', 404);
+    if (family.isDeactivated) return error(res, 'This patient profile is inactive. No new CareLink partners can be added.', 403);
 
     const partner = await CareLinkPartner.create({
-      PatientId:    patient.id,
+      PatientId:    family.patient.id,
       firstName,
       lastName,
       email,
@@ -79,10 +82,13 @@ const update = async (req, res) => {
   const { firstName, lastName, email, relationship, phone } = req.body;
 
   try {
-    const patient = await Patient.findOne({ where: { uhid } });
-    if (!patient) return error(res, 'Patient not found', 404);
+    const family = await resolvePatient(uhid);
+    if (!family) return error(res, 'Patient not found', 404);
+    if (family.isDeactivated) return error(res, 'This patient profile is inactive. CareLink partners cannot be modified.', 403);
 
-    const partner = await CareLinkPartner.findOne({ where: { id, PatientId: patient.id } });
+    const partner = await CareLinkPartner.findOne({
+      where: { id, PatientId: { [Op.in]: family.patientIds } },
+    });
     if (!partner) return error(res, 'CareLink partner not found', 404);
 
     const updateData = {};
@@ -107,10 +113,13 @@ const remove = async (req, res) => {
   const { uhid, id } = req.params;
 
   try {
-    const patient = await Patient.findOne({ where: { uhid } });
-    if (!patient) return error(res, 'Patient not found', 404);
+    const family = await resolvePatient(uhid);
+    if (!family) return error(res, 'Patient not found', 404);
+    if (family.isDeactivated) return error(res, 'This patient profile is inactive. CareLink partners cannot be removed.', 403);
 
-    const partner = await CareLinkPartner.findOne({ where: { id, PatientId: patient.id, isActive: true } });
+    const partner = await CareLinkPartner.findOne({
+      where: { id, PatientId: { [Op.in]: family.patientIds }, isActive: true },
+    });
     if (!partner) return error(res, 'CareLink partner not found', 404);
 
     await partner.update({ isActive: false });

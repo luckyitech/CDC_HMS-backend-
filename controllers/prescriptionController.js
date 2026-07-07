@@ -5,6 +5,7 @@ const { generatePrescriptionNumber } = require('../utils/generateId');
 
 const { Prescription, Patient, User, DoctorProfile } = db;
 
+
 // ====================================
 // HELPER FUNCTIONS
 // ====================================
@@ -83,10 +84,17 @@ const prescriptionIncludes = [
  * 4. Return formatted response
  */
 const create = async (req, res) => {
-  // Step 1: Generate unique ID
+  // Step 1: Guard against writing to an inactive (merged) patient
+  const targetPatient = await Patient.findByPk(req.body.patientId, { attributes: ['id', 'mergedIntoId', 'status'] });
+  if (!targetPatient) return error(res, 'Patient not found', 404);
+  if (targetPatient.mergedIntoId !== null || targetPatient.status === 'Inactive') {
+    return error(res, 'This patient profile is inactive. No new prescriptions can be created.', 403);
+  }
+
+  // Step 2: Generate unique ID
   const prescriptionNumber = await generatePrescriptionNumber(Prescription);
 
-  // Step 2: Create prescription
+  // Step 3: Create prescription
   // req.user.id comes from the authenticate middleware (JWT token)
   // CRITICAL: PatientId must be PascalCase (auto-generated FK naming convention)
   const prescription = await Prescription.create({
@@ -136,13 +144,12 @@ const list = async (req, res) => {
   // Clone the includes array so we can modify it
   const includes = [...prescriptionIncludes];
 
-  // If filtering by patient UHID, we need to add a WHERE to the Patient JOIN
+  // If filtering by patient UHID, resolve the family and filter PatientId directly
   if (patientUhid) {
-    includes[0] = {
-      ...includes[0],
-      where: { uhid: patientUhid },
-      required: true,  // INNER JOIN (only show prescriptions with matching patient)
-    };
+    const { resolvePatient } = require('../utils/patientFamily');
+    const family = await resolvePatient(patientUhid);
+    if (!family) return error(res, 'Patient not found', 404);
+    where.PatientId = { [Op.in]: family.patientIds };
   }
 
   // Calculate pagination offset

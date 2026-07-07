@@ -1,4 +1,6 @@
+const { Op } = require('sequelize');
 const { success, error } = require('../utils/response');
+const { resolvePatient } = require('../utils/patientFamily');
 const db = require('../models');
 
 const { TreatmentPlan, Patient, User } = db;
@@ -80,22 +82,16 @@ const treatmentPlanIncludes = [
 const create = async (req, res) => {
   const { uhid, diagnosis, plan, consultationId } = req.body;
 
-  // Step 1: Find the patient by UHID
-  const patient = await Patient.findOne({ where: { uhid } });
-  if (!patient) {
-    return error(res, `Patient ${uhid} not found`, 404);
-  }
+  const family = await resolvePatient(uhid);
+  if (!family) return error(res, `Patient ${uhid} not found`, 404);
+  if (family.isDeactivated) return error(res, 'This patient profile is inactive. No new treatment plans can be created.', 403);
 
-  // Step 2: Auto-complete all other Active treatment plans for this patient
-  // This is critical business logic - only ONE active plan should exist
+  const { patient, patientIds } = family;
+
+  // Step 2: Auto-complete all other Active treatment plans for this patient (and merged)
   await TreatmentPlan.update(
-    { status: 'Completed' },  // Set to Completed
-    {
-      where: {
-        PatientId: patient.id,  // For this patient (PascalCase FK)
-        status: 'Active',        // Only update Active plans
-      },
-    }
+    { status: 'Completed' },
+    { where: { PatientId: { [Op.in]: patientIds }, status: 'Active' } },
   );
 
   // Step 3: Get current date and time
@@ -150,23 +146,17 @@ const list = async (req, res) => {
   // Calculate pagination offset
   const offset = (parseInt(page) - 1) * parseInt(limit);
 
-  // Build includes with patient filter
+  const family = await resolvePatient(uhid);
+  if (!family) return error(res, 'Patient not found', 404);
+
   const includes = [
-    {
-      model: Patient,
-      attributes: ['uhid', 'firstName', 'lastName'],
-      where: { uhid },  // Filter by patient UHID
-      required: true,   // INNER JOIN
-    },
-    {
-      model: User,
-      as: 'doctor',
-      attributes: ['firstName', 'lastName'],
-    },
+    { model: Patient, attributes: ['uhid', 'firstName', 'lastName'] },
+    { model: User, as: 'doctor', attributes: ['firstName', 'lastName'] },
   ];
 
   // Fetch treatment plans with count
   const { count, rows } = await TreatmentPlan.findAndCountAll({
+    where: { PatientId: { [Op.in]: family.patientIds } },
     include: includes,
     order: [['date', 'DESC'], ['time', 'DESC']],  // Newest first
     offset,

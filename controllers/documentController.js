@@ -1,4 +1,6 @@
+const { Op } = require('sequelize');
 const { success, error } = require('../utils/response');
+const { resolvePatient } = require('../utils/patientFamily');
 const db = require('../models');
 const fs = require('fs');
 const path = require('path');
@@ -143,13 +145,16 @@ const upload = async (req, res) => {
       return error(res, `The "${documentCategory}" category only accepts PDF files.`, 400);
     }
 
-    // Find patient
-    const patient = await Patient.findOne({ where: { uhid } });
-    if (!patient) {
-      // Delete uploaded file if patient not found
+    const family = await resolvePatient(uhid);
+    if (!family) {
       fs.unlinkSync(req.file.path);
       return error(res, `Patient with UHID '${uhid}' not found. Please verify the UHID and try again.`, 404);
     }
+    if (family.isDeactivated) {
+      fs.unlinkSync(req.file.path);
+      return error(res, 'This patient profile is inactive. Documents cannot be uploaded.', 403);
+    }
+    const { patient } = family;
 
     // Generate document ID
     const documentId = `DOC-${Date.now()}`;
@@ -252,12 +257,6 @@ const list = async (req, res) => {
       where.documentCategory = category;
     }
 
-    // Patient ID filter
-    let patientWhere = {};
-    if (uhid) {
-      patientWhere.uhid = uhid;
-    }
-
     // If user is a patient, restrict to their own documents
     if (req.user.role === 'patient') {
       const patient = await Patient.findOne({ where: { UserId: req.user.id } });
@@ -280,15 +279,18 @@ const list = async (req, res) => {
       // ──────────────────────────────────────────────────────────────────────
     }
 
+    // For non-patient roles: filter by uhid via PatientId Op.in
+    if (req.user.role !== 'patient' && uhid) {
+      const family = await resolvePatient(uhid);
+      if (!family) return error(res, 'Patient not found', 404);
+      where.PatientId = { [Op.in]: family.patientIds };
+    }
+
     // Fetch documents
     const documents = await MedicalDocument.findAll({
       where,
       include: [
-        {
-          model: Patient,
-          attributes: ['uhid', 'firstName', 'lastName'],
-          where: Object.keys(patientWhere).length > 0 ? patientWhere : undefined,
-        },
+        { model: Patient, attributes: ['uhid', 'firstName', 'lastName'] },
         { model: User, as: 'uploader', attributes: ['firstName', 'lastName'] },
       ],
       order: [['createdAt', 'DESC']],

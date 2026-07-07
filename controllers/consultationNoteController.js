@@ -1,5 +1,6 @@
 const { Op } = require('sequelize');
 const { success, error } = require('../utils/response');
+const { resolvePatient } = require('../utils/patientFamily');
 const db = require('../models');
 
 const { ConsultationNote, Patient, User } = db;
@@ -74,11 +75,9 @@ const create = async (req, res) => {
   try {
     const { uhid, notes, vitals, assessment, plan, prescriptionIds } = req.body;
 
-    // Find the patient by UHID
-    const patient = await Patient.findOne({ where: { uhid } });
-    if (!patient) {
-      return error(res, `Patient ${uhid} not found`, 404);
-    }
+    const family = await resolvePatient(uhid);
+    if (!family) return error(res, `Patient ${uhid} not found`, 404);
+    if (family.isDeactivated) return error(res, 'This patient profile is inactive. No new notes can be created.', 403);
 
     // Get current date and time
     const now = new Date();
@@ -91,7 +90,7 @@ const create = async (req, res) => {
 
     // Create the consultation note
     const consultationNote = await ConsultationNote.create({
-      PatientId: patient.id,  // PascalCase FK
+      PatientId: family.patient.id,  // PascalCase FK
       notes,
       vitals,
       assessment,
@@ -165,19 +164,13 @@ const list = async (req, res) => {
       if (!isNaN(parsedDoctorId)) where.doctorId = parsedDoctorId;
     }
 
-    // Build includes with patient filter and optional doctor name filter
+    const family = await resolvePatient(uhid);
+    if (!family) return error(res, 'Patient not found', 404);
+    where.PatientId = { [Op.in]: family.patientIds };
+
     const includes = [
-      {
-        model: Patient,
-        attributes: ['uhid', 'firstName', 'lastName'],
-        where: { uhid },
-        required: true,
-      },
-      {
-        model: User,
-        as: 'doctor',
-        attributes: ['firstName', 'lastName'],
-      },
+      { model: Patient, attributes: ['uhid', 'firstName', 'lastName'] },
+      { model: User, as: 'doctor', attributes: ['firstName', 'lastName'] },
     ];
 
     const { count, rows } = await ConsultationNote.findAndCountAll({

@@ -93,11 +93,16 @@ const book = async (req, res) => {
   const { doctorId, date, timeSlot, appointmentType, reason, notes, uhid } = req.body;
 
   // Patients book for themselves; doctors/staff supply a uhid to book for a patient
-  const patient = req.user.role === 'patient'
-    ? await Patient.findOne({ where: { userId: req.user.id } })
-    : await Patient.findOne({ where: { uhid } });
-  if (!patient) {
-    return error(res, 'Patient not found', 404);
+  let patient;
+  if (req.user.role === 'patient') {
+    patient = await Patient.findOne({ where: { userId: req.user.id } });
+    if (!patient) return error(res, 'Patient not found', 404);
+  } else {
+    const { resolvePatient } = require('../utils/patientFamily');
+    const family = await resolvePatient(uhid);
+    if (!family) return error(res, 'Patient not found', 404);
+    if (family.isDeactivated) return error(res, 'This patient profile is inactive. Appointments cannot be booked.', 403);
+    patient = family.patient;
   }
 
   // Verify doctor exists

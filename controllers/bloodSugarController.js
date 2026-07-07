@@ -34,6 +34,7 @@ const formatReading = (r) => ({
 const post = async (req, res) => {
   // Patient can only save their own readings
   if (req.patient.UserId !== req.user.id) return error(res, 'Access denied', 403);
+  if (req.isDeactivated) return error(res, 'This patient profile is inactive. New readings cannot be added.', 403);
 
   const { date, readings, timeSlot, value, time } = req.body;
 
@@ -84,7 +85,7 @@ const get = async (req, res) => {
     return error(res, 'Access denied', 403);
   }
 
-  const where = { PatientId: req.patient.id };
+  const where = { PatientId: { [Op.in]: req.patientIds } };
   const { days, date, from, to } = req.query;
 
   if (date) {

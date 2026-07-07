@@ -118,6 +118,14 @@ const Patient = defineModel('Patient', {
     type: DataTypes.BOOLEAN,
     defaultValue: false,
   },
+
+  // Set when this patient is merged into another — points to the canonical patient's PK.
+  // null means this is an active, canonical record.
+  mergedIntoId: {
+    type:         DataTypes.INTEGER,
+    allowNull:    true,
+    defaultValue: null,
+  },
 }, {
   indexes: [
     { unique: true, fields: ['uhid'], name: 'unique_uhid' },

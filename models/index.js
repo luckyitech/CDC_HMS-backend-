@@ -46,6 +46,10 @@ User.hasOne(Patient);                                                          /
 Patient.belongsTo(User);
 Patient.belongsTo(User, { as: 'primaryDoctor', foreignKey: 'primaryDoctorId' }); // assigned doctor
 
+// --- Patient self-referential merge link ---
+Patient.belongsTo(Patient, { as: 'mergedInto',    foreignKey: 'mergedIntoId' });
+Patient.hasMany  (Patient, { as: 'mergedPatients', foreignKey: 'mergedIntoId' });
+
 // --- Patient children (one-to-many) ---
 Patient.hasMany(PatientVital);
 PatientVital.belongsTo(Patient);

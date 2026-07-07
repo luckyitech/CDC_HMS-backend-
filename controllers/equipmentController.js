@@ -1,6 +1,8 @@
+const { Op } = require('sequelize');
 const { success, error } = require('../utils/response');
 const { encrypt, decrypt } = require('../utils/crypto');
 const auditLog = require('../utils/equipmentAudit');
+const { resolvePatient } = require('../utils/patientFamily');
 const db = require('../models');
 const sequelize = require('../config/database');
 
@@ -63,17 +65,20 @@ const decryptCareLink = (data) => {
 };
 
 // Builds the full equipment response shape expected by the frontend.
-const formatEquipmentResponse = async (patientId) => {
+// patientIds is an array — includes merged patients for read operations.
+const formatEquipmentResponse = async (patientIds) => {
+  const patientFilter = { PatientId: { [Op.in]: patientIds } };
+
   const [activePump, activeTransmitter] = await Promise.all([
     MedicalEquipment.findOne({
-      where: { PatientId: patientId, deviceType: 'pump', isActive: true },
+      where: { ...patientFilter, deviceType: 'pump', isActive: true },
       include: [
         userInclude('addedBy', 'addedByUser'),
         userInclude('lastUpdatedBy', 'updatedByUser'),
       ],
     }),
     MedicalEquipment.findOne({
-      where: { PatientId: patientId, deviceType: 'transmitter', isActive: true },
+      where: { ...patientFilter, deviceType: 'transmitter', isActive: true },
       include: [
         userInclude('addedBy', 'addedByUser'),
         userInclude('lastUpdatedBy', 'updatedByUser'),
@@ -82,7 +87,7 @@ const formatEquipmentResponse = async (patientId) => {
   ]);
 
   const history = await EquipmentHistory.findAll({
-    where: { PatientId: patientId },
+    where: patientFilter,
     include: [
       userInclude('addedBy',    'historyAddedByUser'),
       userInclude('archivedBy', 'archivedByUser'),
@@ -175,10 +180,10 @@ const formatEquipmentResponse = async (patientId) => {
 const getCurrent = async (req, res) => {
   const { uhid } = req.params;
   try {
-    const patient = await Patient.findOne({ where: { uhid } });
-    if (!patient) return error(res, 'Patient not found', 404);
+    const family = await resolvePatient(uhid);
+    if (!family) return error(res, 'Patient not found', 404);
 
-    return success(res, await formatEquipmentResponse(patient.id));
+    return success(res, await formatEquipmentResponse(family.patientIds));
   } catch (err) {
     console.error('Equipment GET error:', err.message);
     return error(res, 'Failed to retrieve equipment information. Please try again.', 500);
@@ -194,11 +199,14 @@ const add = async (req, res) => {
     const validationError = validateEquipmentData({ startDate, warrantyStartDate, warrantyEndDate });
     if (validationError) return error(res, validationError, 400);
 
-    const patient = await Patient.findOne({ where: { uhid } });
-    if (!patient) return error(res, 'Patient not found', 404);
+    const family = await resolvePatient(uhid);
+    if (!family) return error(res, 'Patient not found', 404);
+    if (family.isDeactivated) return error(res, 'This patient profile is inactive. No new equipment can be added.', 403);
+
+    const { patient, patientIds } = family;
 
     const existingActive = await MedicalEquipment.findOne({
-      where: { PatientId: patient.id, deviceType, isActive: true },
+      where: { PatientId: { [Op.in]: patientIds }, deviceType, isActive: true },
     });
     if (existingActive) {
       return error(res, `Patient already has an active ${deviceType}. Use replace endpoint instead.`, 400);
@@ -224,7 +232,7 @@ const add = async (req, res) => {
 
     await auditLog.recordAdd(patient.id, equipment.id, deviceType, { serialNo }, req.user.id);
 
-    return success(res, await formatEquipmentResponse(patient.id), 201);
+    return success(res, await formatEquipmentResponse(patientIds), 201);
   } catch (err) {
     console.error('Equipment ADD error:', err.message);
     return error(res, 'Failed to add equipment. Please try again.', 500);
@@ -242,15 +250,17 @@ const update = async (req, res) => {
   ];
 
   try {
-    const patient = await Patient.findOne({ where: { uhid } });
-    if (!patient) return error(res, 'Patient not found', 404);
+    const family = await resolvePatient(uhid);
+    if (!family) return error(res, 'Patient not found', 404);
+    if (family.isDeactivated) return error(res, 'This patient profile is inactive. Equipment cannot be modified.', 403);
+
+    const { patient, patientIds } = family;
 
     const equipment = await MedicalEquipment.findOne({
-      where: { id, PatientId: patient.id, isActive: true },
+      where: { id, PatientId: { [Op.in]: patientIds }, isActive: true },
     });
     if (!equipment) return error(res, 'Equipment not found or already inactive', 404);
 
-    // Build update payload — only allowed fields present in the request.
     const updateData = {};
     ALLOWED_FIELDS.forEach((field) => {
       if (req.body[field] !== undefined) {
@@ -262,7 +272,6 @@ const update = async (req, res) => {
     updateData.lastUpdatedBy   = req.user.id;
     updateData.lastUpdatedDate = new Date();
 
-    // Capture old values for audit before applying changes.
     const oldData = {};
     ALLOWED_FIELDS.forEach((field) => { oldData[field] = equipment[field]; });
 
@@ -273,7 +282,7 @@ const update = async (req, res) => {
       oldData, updateData, req.user.id,
     );
 
-    return success(res, await formatEquipmentResponse(patient.id));
+    return success(res, await formatEquipmentResponse(patientIds));
   } catch (err) {
     console.error('Equipment UPDATE error:', err.message);
     return error(res, 'Failed to update equipment. Please try again.', 500);
@@ -290,11 +299,14 @@ const replace = async (req, res) => {
     const validationError = validateEquipmentData({ startDate, warrantyStartDate, warrantyEndDate });
     if (validationError) return error(res, validationError, 400);
 
-    const patient = await Patient.findOne({ where: { uhid } });
-    if (!patient) return error(res, 'Patient not found', 404);
+    const family = await resolvePatient(uhid);
+    if (!family) return error(res, 'Patient not found', 404);
+    if (family.isDeactivated) return error(res, 'This patient profile is inactive. Equipment cannot be replaced.', 403);
+
+    const { patient, patientIds } = family;
 
     const oldEquipment = await MedicalEquipment.findOne({
-      where: { id, PatientId: patient.id, isActive: true },
+      where: { id, PatientId: { [Op.in]: patientIds }, isActive: true },
     });
     if (!oldEquipment) return error(res, 'Equipment not found or already inactive', 404);
 
@@ -304,7 +316,6 @@ const replace = async (req, res) => {
 
     transaction = await sequelize.transaction();
 
-    // Archive old equipment — copy all fields including who added it and CareLink snapshot.
     await EquipmentHistory.create({
       PatientId:          patient.id,
       MedicalEquipmentId: oldEquipment.id,
@@ -354,7 +365,7 @@ const replace = async (req, res) => {
       oldEquipment.serialNo, serialNo, reason, req.user.id,
     );
 
-    return success(res, await formatEquipmentResponse(patient.id));
+    return success(res, await formatEquipmentResponse(patientIds));
   } catch (err) {
     if (transaction) await transaction.rollback();
     console.error('Equipment REPLACE error:', err.message);
@@ -366,11 +377,11 @@ const replace = async (req, res) => {
 const getHistory = async (req, res) => {
   const { uhid } = req.params;
   try {
-    const patient = await Patient.findOne({ where: { uhid } });
-    if (!patient) return error(res, 'Patient not found', 404);
+    const family = await resolvePatient(uhid);
+    if (!family) return error(res, 'Patient not found', 404);
 
     const history = await EquipmentHistory.findAll({
-      where: { PatientId: patient.id },
+      where: { PatientId: { [Op.in]: family.patientIds } },
       include: [
         userInclude('addedBy',    'historyAddedByUser'),
         userInclude('archivedBy', 'archivedByUser'),
@@ -409,11 +420,11 @@ const getHistory = async (req, res) => {
 const getAuditLog = async (req, res) => {
   const { uhid } = req.params;
   try {
-    const patient = await Patient.findOne({ where: { uhid } });
-    if (!patient) return error(res, 'Patient not found', 404);
+    const family = await resolvePatient(uhid);
+    if (!family) return error(res, 'Patient not found', 404);
 
     const logs = await EquipmentAuditLog.findAll({
-      where: { PatientId: patient.id },
+      where: { PatientId: { [Op.in]: family.patientIds } },
       include: [userInclude('changedBy', 'changedByUser')],
       order: [['changedAt', 'DESC']],
     });

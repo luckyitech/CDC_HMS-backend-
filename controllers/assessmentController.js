@@ -1,4 +1,6 @@
+const { Op } = require('sequelize');
 const { success, error } = require('../utils/response');
+const { resolvePatient } = require('../utils/patientFamily');
 const db = require('../models');
 
 const { InitialAssessment, Patient, User } = db;
@@ -73,14 +75,14 @@ const assessmentIncludes = [
 const create = async (req, res) => {
   const { uhid, hpi, ros, pastMedicalHistory, familyHistory, socialHistory, data } = req.body;
 
-  // Find the patient by UHID
-  const patient = await Patient.findOne({ where: { uhid } });
-  if (!patient) {
-    return error(res, `Patient ${uhid} not found`, 404);
-  }
+  const family = await resolvePatient(uhid);
+  if (!family) return error(res, `Patient ${uhid} not found`, 404);
+  if (family.isDeactivated) return error(res, 'This patient profile is inactive. No new assessments can be created.', 403);
+
+  const { patient } = family;
 
   // Initial assessment is a one-time evaluation — prevent duplicates
-  const existing = await InitialAssessment.findOne({ where: { PatientId: patient.id } });
+  const existing = await InitialAssessment.findOne({ where: { PatientId: { [Op.in]: family.patientIds } } });
   if (existing) {
     return error(res, 'Initial assessment already exists for this patient. It can only be done once.', 409);
   }
@@ -190,22 +192,16 @@ const list = async (req, res) => {
 
   const offset = (parseInt(page) - 1) * parseInt(limit);
 
-  // Build includes with patient filter
+  const family = await resolvePatient(uhid);
+  if (!family) return error(res, 'Patient not found', 404);
+
   const includes = [
-    {
-      model: Patient,
-      attributes: ['uhid', 'firstName', 'lastName'],
-      where: { uhid },
-      required: true,
-    },
-    {
-      model: User,
-      as: 'doctor',
-      attributes: ['firstName', 'lastName'],
-    },
+    { model: Patient, attributes: ['uhid', 'firstName', 'lastName'] },
+    { model: User, as: 'doctor', attributes: ['firstName', 'lastName'] },
   ];
 
   const { count, rows } = await InitialAssessment.findAndCountAll({
+    where: { PatientId: { [Op.in]: family.patientIds } },
     include: includes,
     order: [['date', 'DESC'], ['time', 'DESC']],
     offset,
