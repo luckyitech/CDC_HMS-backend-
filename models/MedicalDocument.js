@@ -57,6 +57,26 @@ const MedicalDocument = defineModel('MedicalDocument', {
     type: DataTypes.TEXT,
     defaultValue: null,
   },
+  // Admin archive ("recycle bin") — hides wrongly uploaded documents from
+  // every view without ever deleting them. Distinct from status 'Archived',
+  // which only hides a document from the patient portal.
+  isArchived: {
+    type: DataTypes.BOOLEAN,
+    allowNull: false,
+    defaultValue: false,
+  },
+  archivedBy: {
+    type: DataTypes.STRING,
+    defaultValue: null,
+  },
+  archivedAt: {
+    type: DataTypes.DATE,
+    defaultValue: null,
+  },
+  archiveReason: {
+    type: DataTypes.TEXT,
+    defaultValue: null,
+  },
 }, {
   indexes: [
     { unique: true, fields: ['documentId'], name: 'unique_documentId' },

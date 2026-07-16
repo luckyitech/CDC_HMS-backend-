@@ -68,6 +68,10 @@ const formatDocument = (doc) => {
     reviewedBy: doc.reviewedBy,
     reviewDate: doc.reviewDate,
     notes: doc.notes,
+    isArchived: doc.isArchived,
+    archivedBy: doc.archivedBy,
+    archivedAt: doc.archivedAt,
+    archiveReason: doc.archiveReason,
     uploadedAt: doc.createdAt,
   };
 };
@@ -249,12 +253,20 @@ const upload = async (req, res) => {
  */
 const list = async (req, res) => {
   try {
-    const { uhid, category } = req.query;
+    const { uhid, category, archived } = req.query;
 
     // Build where clause
     const where = {};
     if (category) {
       where.documentCategory = category;
+    }
+
+    // Admin-archived documents are hidden from every view.
+    // Only an admin may list them, via ?archived=true.
+    if (req.user.role === 'admin' && archived === 'true') {
+      where.isArchived = true;
+    } else {
+      where.isArchived = false;
     }
 
     // If user is a patient, restrict to their own documents
@@ -362,33 +374,87 @@ const updateStatus = async (req, res) => {
 };
 
 /**
- * DELETE /api/documents/:id
- * Delete a document
+ * PUT /api/documents/:id/archive
+ * Archive a wrongly uploaded document — hides it from every view
+ * (doctor, staff, lab, patient) without deleting the file or record.
  *
- * Authorization: doctor, staff
+ * Authorization: admin only (route-level). When granular permissions
+ * are introduced, move this to a permission check instead of a role.
  */
-const destroy = async (req, res) => {
+const archive = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { reason } = req.body;
+
+    const document = await MedicalDocument.findByPk(id);
+    if (!document) {
+      return error(res, `Document with ID ${id} not found. Please verify the document ID.`, 404);
+    }
+    if (document.isArchived) {
+      return error(res, 'This document is already archived.', 400);
+    }
+    if (reason && reason.length > 5000) {
+      return error(res, 'Archive reason is too long. Maximum 5000 characters allowed.', 400);
+    }
+
+    const admin = await User.findByPk(req.user.id);
+    await document.update({
+      isArchived: true,
+      archivedBy: `${admin.firstName} ${admin.lastName}`,
+      archivedAt: new Date(),
+      archiveReason: reason || null,
+    });
+
+    const fullDocument = await MedicalDocument.findByPk(document.id, {
+      include: [
+        { model: Patient, attributes: ['uhid', 'firstName', 'lastName'] },
+        { model: User, as: 'uploader', attributes: ['firstName', 'lastName'] },
+      ],
+    });
+
+    return success(res, formatDocument(fullDocument));
+  } catch (err) {
+    console.error('Archive document error:', err.message);
+    return error(res, 'Failed to archive document. Please try again.', 500);
+  }
+};
+
+/**
+ * PUT /api/documents/:id/restore
+ * Restore an archived document — it reappears in all views.
+ *
+ * Authorization: admin only (route-level).
+ */
+const restore = async (req, res) => {
   try {
     const { id } = req.params;
 
-    // Find document
     const document = await MedicalDocument.findByPk(id);
     if (!document) {
-      return error(res, `Document with ID ${id} not found. It may have already been deleted.`, 404);
+      return error(res, `Document with ID ${id} not found. Please verify the document ID.`, 404);
+    }
+    if (!document.isArchived) {
+      return error(res, 'This document is not archived.', 400);
     }
 
-    // Delete physical file
-    if (fs.existsSync(document.filePath)) {
-      fs.unlinkSync(document.filePath);
-    }
+    await document.update({
+      isArchived: false,
+      archivedBy: null,
+      archivedAt: null,
+      archiveReason: null,
+    });
 
-    // Delete database record
-    await document.destroy();
+    const fullDocument = await MedicalDocument.findByPk(document.id, {
+      include: [
+        { model: Patient, attributes: ['uhid', 'firstName', 'lastName'] },
+        { model: User, as: 'uploader', attributes: ['firstName', 'lastName'] },
+      ],
+    });
 
-    return success(res, { message: 'Document deleted successfully' });
+    return success(res, formatDocument(fullDocument));
   } catch (err) {
-    console.error('Delete document error:', err.message);
-    return error(res, 'Failed to delete document. Please try again.', 500);
+    console.error('Restore document error:', err.message);
+    return error(res, 'Failed to restore document. Please try again.', 500);
   }
 };
 
@@ -410,6 +476,12 @@ const serveFile = async (req, res) => {
 
     if (!document) {
       return error(res, `File '${filename}' not found in database. The document may have been deleted.`, 404);
+    }
+
+    // Admin-archived documents are hidden from everyone except admins —
+    // respond 404 so their existence is not revealed via direct links.
+    if (document.isArchived && req.user.role !== 'admin') {
+      return error(res, `File '${filename}' not found.`, 404);
     }
 
     // Authorization: patients can only access their own documents
@@ -439,6 +511,7 @@ module.exports = {
   upload,
   list,
   updateStatus,
-  destroy,
+  archive,
+  restore,
   serveFile,
 };
