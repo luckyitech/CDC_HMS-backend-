@@ -26,6 +26,8 @@ const UserEditLog         = require('./UserEditLog');
 const CareLinkPartner     = require('./CareLinkPartner');
 const DoctorBlock         = require('./DoctorBlock');
 const Notification        = require('./Notification');
+const CatalogItem         = require('./CatalogItem');
+const Setting             = require('./Setting');
 
 // =============================================
 // ASSOCIATIONS
@@ -171,6 +173,8 @@ const db = {
   CareLinkPartner,
   DoctorBlock,
   Notification,
+  CatalogItem,
+  Setting,
 };
 
 module.exports = db;

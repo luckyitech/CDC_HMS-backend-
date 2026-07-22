@@ -60,6 +60,7 @@ app.use('/api/analytics',          require('./routes/analytics'));
 app.use('/api/dashboard',          require('./routes/dashboard'));
 app.use('/api/activity',           require('./routes/activity'));
 app.use('/api/notifications',      require('./routes/notifications'));
+app.use('/api/catalog',            require('./routes/catalog'));
 
 // Global error handler — must be last
 app.use(errorHandler);
