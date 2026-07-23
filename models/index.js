@@ -26,6 +26,12 @@ const UserEditLog         = require('./UserEditLog');
 const CareLinkPartner     = require('./CareLinkPartner');
 const DoctorBlock         = require('./DoctorBlock');
 const Notification        = require('./Notification');
+const Glp1Medication         = require('./Glp1Medication');
+const Glp1Therapy            = require('./Glp1Therapy');
+const Glp1Review             = require('./Glp1Review');
+const Glp1SideEffectCatalog  = require('./Glp1SideEffectCatalog');
+const Glp1SideEffect         = require('./Glp1SideEffect');
+const Glp1Administration     = require('./Glp1Administration');
 
 // =============================================
 // ASSOCIATIONS
@@ -141,6 +147,49 @@ DoctorBlock.belongsTo(User, { foreignKey: 'doctorId', as: 'doctor' });
 // --- In-app notifications ---
 Notification.belongsTo(User, { foreignKey: 'assignedDoctorId', as: 'assignedDoctor' });
 
+// --- GLP-1 / GIP agonist monitoring ---
+// Formulary (clinic-wide) → therapy (one per patient course) → review (one per
+// monitoring visit) → side effect (one per symptom per review).
+User.hasMany(Glp1Medication, { foreignKey: 'addedBy', as: 'addedGlp1Medications' });
+Glp1Medication.belongsTo(User, { foreignKey: 'addedBy', as: 'addedByUser' });
+
+Patient.hasMany(Glp1Therapy);
+Glp1Therapy.belongsTo(Patient);
+Glp1Therapy.belongsTo(Glp1Medication);                                        // Glp1MedicationId
+Glp1Medication.hasMany(Glp1Therapy);
+Glp1Therapy.belongsTo(User, { as: 'doctor',    foreignKey: 'doctorId'  });    // the prescriber
+Glp1Therapy.belongsTo(User, { as: 'stoppedByUser', foreignKey: 'stoppedBy' });
+
+Glp1Therapy.hasMany(Glp1Review);
+Glp1Review.belongsTo(Glp1Therapy);
+Patient.hasMany(Glp1Review);                                                  // PatientId denormalised
+Glp1Review.belongsTo(Patient);                                                //   for merge-aware reads
+Glp1Review.belongsTo(User, { as: 'doctor',        foreignKey: 'doctorId'   }); // the Doctor column
+Glp1Review.belongsTo(User, { as: 'amendedByUser', foreignKey: 'amendedBy'  });
+Glp1Review.belongsTo(User, { as: 'deletedByUser', foreignKey: 'deletedBy'  });
+
+Glp1Review.hasMany(Glp1SideEffect);
+Glp1SideEffect.belongsTo(Glp1Review);
+Glp1Therapy.hasMany(Glp1SideEffect);                                          // Glp1TherapyId denormalised
+Glp1SideEffect.belongsTo(Glp1Therapy);
+Glp1SideEffect.belongsTo(Glp1SideEffectCatalog, { as: 'symptom', foreignKey: 'symptomId' });
+Glp1SideEffectCatalog.hasMany(Glp1SideEffect, { foreignKey: 'symptomId' });
+
+User.hasMany(Glp1SideEffectCatalog, { foreignKey: 'addedBy', as: 'addedGlp1Symptoms' });
+Glp1SideEffectCatalog.belongsTo(User, { foreignKey: 'addedBy', as: 'addedByUser' });
+
+// Weekly injections — separate from reviews: the ladder is the plan, this is
+// what happened. Usually recorded by a nurse in triage.
+Glp1Therapy.hasMany(Glp1Administration);
+Glp1Administration.belongsTo(Glp1Therapy);
+Patient.hasMany(Glp1Administration);                                          // PatientId denormalised
+Glp1Administration.belongsTo(Patient);
+Glp1Administration.belongsTo(User, { as: 'administeredByUser', foreignKey: 'administeredBy' });
+
+// A course switch links the new course back to the one it replaced
+Glp1Therapy.belongsTo(Glp1Therapy, { as: 'switchedFrom', foreignKey: 'switchedFromTherapyId' });
+Glp1Therapy.hasOne  (Glp1Therapy, { as: 'switchedTo',   foreignKey: 'switchedFromTherapyId' });
+
 // =============================================
 // EXPORTS
 // =============================================
@@ -171,6 +220,12 @@ const db = {
   CareLinkPartner,
   DoctorBlock,
   Notification,
+  Glp1Medication,
+  Glp1Therapy,
+  Glp1Review,
+  Glp1SideEffectCatalog,
+  Glp1SideEffect,
+  Glp1Administration,
 };
 
 module.exports = db;

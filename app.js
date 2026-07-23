@@ -26,7 +26,8 @@ app.use(helmet({
 app.use('/api/sse', require('./routes/sse'));
 
 // Rate limiting — Prevent brute force and DoS attacks
-// Applied to ALL endpoints: 100 requests per 15 minutes per IP
+// Applied to ALL endpoints: 1000 requests per 15 minutes per IP
+// (matches generalLimiter in middleware/rateLimiter.js and the README)
 app.use('/api/', generalLimiter);
 
 // Parse JSON bodies (increased limit for physical exam base64 images)
@@ -51,6 +52,11 @@ app.use('/api/treatment-plans',    require('./routes/treatmentPlans'));
 app.use('/api/physical-exams',     require('./routes/physicalExams'));
 app.use('/api/assessments',        require('./routes/assessments'));
 app.use('/api/consultation-notes', require('./routes/consultationNotes'));
+app.use('/api/glp1-medications',   require('./routes/glp1Medications'));
+app.use('/api/glp1-therapies',     require('./routes/glp1Therapies'));
+app.use('/api/glp1-reviews',       require('./routes/glp1Reviews'));
+app.use('/api/glp1-administrations', require('./routes/glp1Administrations'));
+app.use('/api/glp1-symptoms',      require('./routes/glp1Symptoms'));
 app.use('/api/appointments',       require('./routes/appointments'));
 app.use('/api/doctor-blocks',      require('./routes/doctorBlocks'));
 app.use('/api/users',              require('./routes/users'));

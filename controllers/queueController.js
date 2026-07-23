@@ -240,16 +240,19 @@ const update = async (req, res) => {
     if (updates.consultationStartTime && (!item.consultationStartTime || !lastSessionOpen)) {
       updates.consultationSessions = pushSession(item, req.user.id, req.user.name);
     }
-    // Consultation ends at billing — record the end time and close the open session.
-    if (updates.status === 'Pending Billing') {
+    // The consultation ends whenever the patient leaves the doctor — whether
+    // that is to billing, or back to the nurse for an injection. Keying off the
+    // departure rather than the destination means new routes get correct
+    // timings for free.
+    if (item.status === 'With Doctor' && updates.status && updates.status !== 'With Doctor') {
       updates.consultationEndTime  = new Date();
       updates.consultationSessions = closeLastSession(item);
     }
     if (updates.status === 'Completed') {
-      // Only set consultationEndTime if not already captured at 'Pending Billing'.
-      // The previous bug was: updates.consultationEndTime || new Date() — this always
-      // overwrote the correct end time with the billing completion time.
-      if (!item.consultationEndTime) updates.consultationEndTime = new Date();
+      // Only set consultationEndTime if not already captured on the way out of
+      // 'With Doctor'. The previous bug was: updates.consultationEndTime || new Date()
+      // — this always overwrote the correct end time with the completion time.
+      if (!item.consultationEndTime && !updates.consultationEndTime) updates.consultationEndTime = new Date();
       updates.consultationSessions = closeLastSession(item);
       updates.dischargedBy         = req.user.name || 'Unknown';
       updates.dischargedAt         = new Date();
@@ -299,18 +302,19 @@ const stats = async (req, res) => {
     startOfToday.setHours(0, 0, 0, 0);
     const todayFilter = { createdAt: { [Op.gte]: startOfToday } };
 
-    const [total, waiting, inTriage, withDoctor, pendingBilling, completed, urgent] =
+    const [total, waiting, inTriage, withDoctor, pendingInjection, pendingBilling, completed, urgent] =
       await Promise.all([
         Queue.count({ where: todayFilter }),
         Queue.count({ where: { status: 'Awaiting Triage', ...todayFilter } }),
         Queue.count({ where: { status: 'In Triage', ...todayFilter } }),
         Queue.count({ where: { status: 'With Doctor', ...todayFilter } }),
+        Queue.count({ where: { status: 'Pending Injection', ...todayFilter } }),
         Queue.count({ where: { status: 'Pending Billing', ...todayFilter } }),
         Queue.count({ where: { status: 'Completed', ...todayFilter } }),
         Queue.count({ where: { priority: 'Urgent', ...todayFilter } }),
       ]);
 
-    return success(res, { total, waiting, inTriage, withDoctor, pendingBilling, completed, urgent });
+    return success(res, { total, waiting, inTriage, withDoctor, pendingInjection, pendingBilling, completed, urgent });
   } catch (err) {
     console.error('Queue stats error:', err);
     return error(res, 'Internal server error', 500);

@@ -5,7 +5,10 @@ const Queue = defineModel('Queue', {
   // assignedDoctorId — added by Queue.belongsTo(User, { as: 'assignedDoctor' }) — nullable
 
   status: {
-    type: DataTypes.ENUM('Awaiting Triage', 'In Triage', 'Awaiting Doctor', 'With Doctor', 'Pending Billing', 'Completed', 'Removed'),
+    // 'Pending Injection' — consultation done, patient is with the nurse for a
+    // GLP-1 injection, not yet billed. Kept as a real status so injection
+    // visits are countable in SQL.
+    type: DataTypes.ENUM('Awaiting Triage', 'In Triage', 'Awaiting Doctor', 'With Doctor', 'Pending Injection', 'Pending Billing', 'Completed', 'Removed'),
     allowNull: false,
     defaultValue: 'Awaiting Triage',
   },
