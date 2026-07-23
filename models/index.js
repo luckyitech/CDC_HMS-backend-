@@ -26,7 +26,6 @@ const UserEditLog         = require('./UserEditLog');
 const CareLinkPartner     = require('./CareLinkPartner');
 const DoctorBlock         = require('./DoctorBlock');
 const Notification        = require('./Notification');
-const Glp1Medication         = require('./Glp1Medication');
 const Glp1Therapy            = require('./Glp1Therapy');
 const Glp1Review             = require('./Glp1Review');
 const Glp1SideEffectCatalog  = require('./Glp1SideEffectCatalog');
@@ -150,15 +149,11 @@ DoctorBlock.belongsTo(User, { foreignKey: 'doctorId', as: 'doctor' });
 Notification.belongsTo(User, { foreignKey: 'assignedDoctorId', as: 'assignedDoctor' });
 
 // --- GLP-1 / GIP agonist monitoring ---
-// Formulary (clinic-wide) → therapy (one per patient course) → review (one per
-// monitoring visit) → side effect (one per symptom per review).
-User.hasMany(Glp1Medication, { foreignKey: 'addedBy', as: 'addedGlp1Medications' });
-Glp1Medication.belongsTo(User, { foreignKey: 'addedBy', as: 'addedByUser' });
-
+// Agents come from the clinic catalogue (CatalogItem tagged GLP-1/GIP); the
+// therapy records the agent name directly. therapy (one per patient course) →
+// review (one per monitoring visit) → side effect (one per symptom per review).
 Patient.hasMany(Glp1Therapy);
 Glp1Therapy.belongsTo(Patient);
-Glp1Therapy.belongsTo(Glp1Medication);                                        // Glp1MedicationId
-Glp1Medication.hasMany(Glp1Therapy);
 Glp1Therapy.belongsTo(User, { as: 'doctor',    foreignKey: 'doctorId'  });    // the prescriber
 Glp1Therapy.belongsTo(User, { as: 'stoppedByUser', foreignKey: 'stoppedBy' });
 
@@ -222,7 +217,6 @@ const db = {
   CareLinkPartner,
   DoctorBlock,
   Notification,
-  Glp1Medication,
   Glp1Therapy,
   Glp1Review,
   Glp1SideEffectCatalog,

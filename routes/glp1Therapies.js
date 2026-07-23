@@ -55,8 +55,9 @@ router.post(
     body('uhid')
       .notEmpty()
       .withMessage('Patient UHID is required'),
-    body('medicationId')
-      .isInt({ min: 1 })
+    body('medicationName')
+      .trim()
+      .notEmpty()
       .withMessage('A medication must be selected'),
     body('startDate')
       .notEmpty()
@@ -187,8 +188,9 @@ router.post(
   authenticate,
   authorize('doctor'),
   [
-    body('medicationId')
-      .isInt({ min: 1 })
+    body('medicationName')
+      .trim()
+      .notEmpty()
       .withMessage('Select the agent to switch to'),
     body('reason')
       .trim()

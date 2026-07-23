@@ -3,9 +3,20 @@ const { defineModel, DataTypes } = require('../utils/defineModel');
 // One row per patient course of a GLP-1 / GIP agonist.
 // A course is never deleted — it is Stopped with a reason.
 const Glp1Therapy = defineModel('Glp1Therapy', {
-  // PatientId        — added by Patient.hasMany(Glp1Therapy)
-  // Glp1MedicationId — added by Glp1Therapy.belongsTo(Glp1Medication)
-  // doctorId         — added by Glp1Therapy.belongsTo(User, { as: 'doctor' }) — the prescriber
+  // PatientId — added by Patient.hasMany(Glp1Therapy)
+  // doctorId  — added by Glp1Therapy.belongsTo(User, { as: 'doctor' }) — the prescriber
+
+  // The agent, denormalised from the clinic catalogue. GLP-1 agents are catalogue
+  // medications tagged GLP-1 / GIP; a course records the name (and brand) rather
+  // than a foreign key so it survives the catalogue entry being edited or removed.
+  medicationName: {
+    type: DataTypes.STRING,
+    allowNull: false,
+  },
+  medicationBrand: {
+    type: DataTypes.STRING,
+    defaultValue: null,
+  },
 
   indication: {
     type: DataTypes.ENUM('T2DM', 'Obesity', 'Both'),
@@ -40,8 +51,7 @@ const Glp1Therapy = defineModel('Glp1Therapy', {
     type: DataTypes.JSON,
     defaultValue: null,
   },
-  // Patient-scoped copy of the formulary ladder. Editing this never touches the
-  // clinic default on Glp1Medication.defaultSchedule.
+  // The patient's dose ladder, built at initiation and editable per course.
   doseSchedule: {
     type: DataTypes.JSON,          // [{ fromWeek, toWeek, dose, note }]
     defaultValue: null,
