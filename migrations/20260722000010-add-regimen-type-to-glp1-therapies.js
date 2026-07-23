@@ -20,8 +20,11 @@
 
 module.exports = {
   async up(queryInterface, Sequelize) {
-    const tables = await queryInterface.showAllTables();
-    if (!tables.map(String).includes('Glp1Therapies')) {
+    // showAllTables() may return { tableName } objects rather than strings;
+    // String() on those gives '[object Object]', so map explicitly.
+    const tables = (await queryInterface.showAllTables())
+      .map(t => String(typeof t === 'string' ? t : t.tableName).toLowerCase());
+    if (!tables.includes('glp1therapies')) {
       console.log('Glp1Therapies not found — skipping');
       return;
     }
@@ -43,8 +46,9 @@ module.exports = {
   },
 
   async down(queryInterface) {
-    const tables = await queryInterface.showAllTables();
-    if (!tables.map(String).includes('Glp1Therapies')) return;
+    const tables = (await queryInterface.showAllTables())
+      .map(t => String(typeof t === 'string' ? t : t.tableName).toLowerCase());
+    if (!tables.includes('glp1therapies')) return;
 
     const columns = await queryInterface.describeTable('Glp1Therapies');
     if (!columns.regimenType) return;

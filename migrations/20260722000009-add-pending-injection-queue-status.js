@@ -38,8 +38,11 @@ const enumSql = (values) =>
 
 module.exports = {
   async up(queryInterface) {
-    const tables = await queryInterface.showAllTables();
-    if (!tables.map(String).includes('Queues')) {
+    // showAllTables() may return { tableName } objects rather than strings;
+    // String() on those gives '[object Object]', so map explicitly.
+    const tables = (await queryInterface.showAllTables())
+      .map(t => String(typeof t === 'string' ? t : t.tableName).toLowerCase());
+    if (!tables.includes('queues')) {
       console.log('Queues table not found — skipping');
       return;
     }
@@ -64,8 +67,9 @@ module.exports = {
   },
 
   async down(queryInterface) {
-    const tables = await queryInterface.showAllTables();
-    if (!tables.map(String).includes('Queues')) return;
+    const tables = (await queryInterface.showAllTables())
+      .map(t => String(typeof t === 'string' ? t : t.tableName).toLowerCase());
+    if (!tables.includes('queues')) return;
 
     // Refuse to drop the value while rows still hold it — silently rewriting a
     // patient's queue state during a rollback would lose clinical context.

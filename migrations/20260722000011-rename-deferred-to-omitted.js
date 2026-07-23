@@ -36,8 +36,11 @@ const columnType = async (queryInterface) => {
 
 module.exports = {
   async up(queryInterface) {
-    const tables = await queryInterface.showAllTables();
-    if (!tables.map(String).includes('Glp1Administrations')) {
+    // showAllTables() may return { tableName } objects rather than strings;
+    // String() on those gives '[object Object]', so map explicitly.
+    const tables = (await queryInterface.showAllTables())
+      .map(t => String(typeof t === 'string' ? t : t.tableName).toLowerCase());
+    if (!tables.includes('glp1administrations')) {
       console.log('Glp1Administrations table not found — skipping');
       return;
     }
@@ -61,8 +64,9 @@ module.exports = {
   },
 
   async down(queryInterface) {
-    const tables = await queryInterface.showAllTables();
-    if (!tables.map(String).includes('Glp1Administrations')) return;
+    const tables = (await queryInterface.showAllTables())
+      .map(t => String(typeof t === 'string' ? t : t.tableName).toLowerCase());
+    if (!tables.includes('glp1administrations')) return;
 
     const type = await columnType(queryInterface);
     if (type.includes("'deferred'") && !type.includes("'omitted'")) {
