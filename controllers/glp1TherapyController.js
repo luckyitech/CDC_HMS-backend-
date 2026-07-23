@@ -13,7 +13,7 @@ const { formatAdministration, administrationIncludes } = require('./glp1Administ
 const db = require('../models');
 
 const {
-  sequelize, Glp1Therapy, Glp1Medication, Glp1Review, Glp1Administration, Patient, User,
+  sequelize, Glp1Therapy, Glp1Review, Glp1Administration, Patient, User,
 } = db;
 
 // The standard monitoring schedule. Doctors add weeks per patient on top of this.
@@ -28,14 +28,12 @@ const LIVE_STATUSES = ['Active', 'Paused'];
 
 const therapyIncludes = [
   { model: Patient,        attributes: ['uhid', 'firstName', 'lastName', 'gender', 'dateOfBirth'] },
-  { model: Glp1Medication, attributes: ['id', 'genericName', 'brandName', 'drugClass', 'route', 'strengths'] },
   { model: User, as: 'doctor',         attributes: ['firstName', 'lastName'] },
   { model: User, as: 'stoppedByUser',  attributes: ['firstName', 'lastName'] },
   {
     model: Glp1Therapy,
     as: 'switchedFrom',
-    attributes: ['id', 'startDate', 'stoppedAt'],
-    include: [{ model: Glp1Medication, attributes: ['genericName'] }],
+    attributes: ['id', 'startDate', 'stoppedAt', 'medicationName'],
   },
 ];
 
@@ -66,15 +64,10 @@ const formatTherapy = (therapy) => {
     id:              t.id,
     uhid:            t.Patient?.uhid || null,
     patientName:     t.Patient ? `${t.Patient.firstName} ${t.Patient.lastName}` : null,
-    medication:      t.Glp1Medication
-      ? {
-          id:          t.Glp1Medication.id,
-          genericName: t.Glp1Medication.genericName,
-          brandName:   t.Glp1Medication.brandName,
-          drugClass:   t.Glp1Medication.drugClass,
-          route:       t.Glp1Medication.route,
-          strengths:   t.Glp1Medication.strengths || [],
-        }
+    // The agent, from the name recorded on the course. Identity lives in the
+    // clinic catalogue; the course keeps the name so it survives catalogue edits.
+    medication:      t.medicationName
+      ? { genericName: t.medicationName, brandName: t.medicationBrand || null }
       : null,
     doctorName:      doctorName(t.doctor),
     indication:      t.indication,
@@ -98,7 +91,7 @@ const formatTherapy = (therapy) => {
     switchedFrom: t.switchedFrom
       ? {
           therapyId:   t.switchedFrom.id,
-          genericName: t.switchedFrom.Glp1Medication?.genericName || null,
+          genericName: t.switchedFrom.medicationName || null,
           startedOn:   t.switchedFrom.startDate,
           switchedOn:  t.switchedFrom.stoppedAt,
         }
@@ -240,10 +233,13 @@ const getFull = async (req, res) => {
 const create = async (req, res) => {
   try {
     const {
-      uhid, medicationId, indication, startDate,
+      uhid, medicationName, medicationBrand, indication, startDate,
       startingDose, targetDose, otherConditions,
       baseline, safetyScreen, doseSchedule, reviewWeeks,
     } = req.body;
+
+    const agent = String(medicationName || '').trim();
+    if (!agent) return error(res, 'A medication must be selected', 400);
 
     const family = await resolvePatient(uhid);
     if (!family) return error(res, `Patient ${uhid} not found`, 404);
@@ -251,25 +247,19 @@ const create = async (req, res) => {
       return error(res, 'This patient profile is inactive. No new therapy can be started.', 403);
     }
 
-    const medication = await Glp1Medication.findByPk(medicationId);
-    if (!medication) return error(res, `GLP-1 medication with ID ${medicationId} not found`, 404);
-    if (!medication.isActive) {
-      return error(res, `${medication.genericName} has been retired from the formulary`, 400);
-    }
-
     // One live course per agent per patient. A second one would make "current
     // dose" ambiguous on the tool and in the record.
     const existing = await Glp1Therapy.findOne({
       where: {
-        PatientId:        { [Op.in]: family.patientIds },
-        Glp1MedicationId: medication.id,
-        status:           { [Op.in]: LIVE_STATUSES },
+        PatientId:      { [Op.in]: family.patientIds },
+        medicationName: agent,
+        status:         { [Op.in]: LIVE_STATUSES },
       },
     });
     if (existing) {
       return error(
         res,
-        `This patient already has a ${existing.status.toLowerCase()} course of ${medication.genericName}. ` +
+        `This patient already has a ${existing.status.toLowerCase()} course of ${agent}. ` +
         'Stop it before starting a new one.',
         409
       );
@@ -279,29 +269,28 @@ const create = async (req, res) => {
     const evaluation = evaluateSafetyScreen(safetyScreen, family.patient);
     if (!evaluation.ok) return error(res, evaluation.message, evaluation.status);
 
-    const isCustom = req.body.regimenType === 'custom';
-
-    // Patient-scoped copy of the ladder. Editing it later never touches the
-    // clinic default on the formulary row.
-    //
-    // A custom regimen may arrive either as rungs ({ dose, weeks }) which we
-    // build into a contiguous ladder, or as a fully-formed doseSchedule.
+    // Every course's ladder is built at initiation — there is no stored clinic
+    // default. It arrives either as rungs ({ dose, weeks }), which we build into
+    // a contiguous ladder, or as a fully-formed doseSchedule.
+    const startWeekVal = Number(req.body.startWeek) || 0;
     let schedule;
-    if (isCustom && Array.isArray(req.body.rungs) && req.body.rungs.length) {
-      schedule = buildCustomSchedule(req.body.rungs, req.body.startWeek ?? 0);
-    } else if (doseSchedule !== undefined) {
+    if (Array.isArray(req.body.rungs) && req.body.rungs.length) {
+      schedule = buildCustomSchedule(req.body.rungs, startWeekVal);
+    } else if (Array.isArray(doseSchedule) && doseSchedule.length) {
       schedule = doseSchedule;
     } else {
-      schedule = medication.defaultSchedule || [];
+      return error(res, 'A dose schedule is required to start a course', 400);
     }
 
     const check = validateSchedule(schedule);
     if (!check.ok) return error(res, check.message, 400);
     schedule = check.schedule;
 
-    // Explicit weeks win. Otherwise a custom ladder derives its own review
-    // points from its dose changes, because the standard 4/8/12 pattern no
-    // longer lines up with anything for a patient on a bespoke titration.
+    // A course starting mid-therapy (a transfer-in) is the custom-regimen case:
+    // the standard 4/8/12 review pattern no longer lines up, so review points are
+    // derived from the ladder's dose changes. A course starting at week 0 keeps
+    // the clinic's standard monitoring cadence.
+    const isCustom = startWeekVal > 0;
     const weeks = Array.isArray(reviewWeeks) && reviewWeeks.length
       ? [...new Set(reviewWeeks.map(Number).filter((w) => Number.isInteger(w) && w >= 0))].sort((a, b) => a - b)
       : isCustom
@@ -310,7 +299,8 @@ const create = async (req, res) => {
 
     const therapy = await Glp1Therapy.create({
       PatientId:        family.patient.id,          // PascalCase FK
-      Glp1MedicationId: medication.id,              // PascalCase FK
+      medicationName:   agent,
+      medicationBrand:  medicationBrand ? String(medicationBrand).trim() : null,
       doctorId:         req.user.id,                // From JWT token
       indication:       indication || 'T2DM',
       startDate,
@@ -551,7 +541,13 @@ const switchMedication = async (req, res) => {
   const transaction = await sequelize.transaction();
   try {
     const { id } = req.params;
-    const { medicationId, reason, startDate, startingDose, targetDose, doseSchedule } = req.body;
+    const { medicationName, medicationBrand, reason, startDate, startingDose, targetDose, doseSchedule } = req.body;
+
+    const agent = String(medicationName || '').trim();
+    if (!agent) {
+      await transaction.rollback();
+      return error(res, 'A medication must be selected', 400);
+    }
 
     const loaded = await loadTherapyForWrite(id);
     if (loaded.err) {
@@ -566,16 +562,7 @@ const switchMedication = async (req, res) => {
       return error(res, `This course is ${therapy.status.toLowerCase()} — start a new course instead`, 403);
     }
 
-    const medication = await Glp1Medication.findByPk(medicationId);
-    if (!medication) {
-      await transaction.rollback();
-      return error(res, `GLP-1 medication with ID ${medicationId} not found`, 404);
-    }
-    if (!medication.isActive) {
-      await transaction.rollback();
-      return error(res, `${medication.genericName} has been retired from the formulary`, 400);
-    }
-    if (medication.id === therapy.Glp1MedicationId) {
+    if (agent === therapy.medicationName) {
       await transaction.rollback();
       return error(res, 'The patient is already on this agent', 409);
     }
@@ -586,23 +573,23 @@ const switchMedication = async (req, res) => {
       return error(res, 'A reason is required to switch agents', 400);
     }
 
-    let schedule;
-    if (doseSchedule !== undefined) {
-      const check = validateSchedule(doseSchedule);
-      if (!check.ok) {
-        await transaction.rollback();
-        return error(res, check.message, 400);
-      }
-      schedule = check.schedule;
-    } else {
-      schedule = medication.defaultSchedule || [];
+    // The new agent's ladder is built at the switch — no stored default.
+    if (!Array.isArray(doseSchedule) || !doseSchedule.length) {
+      await transaction.rollback();
+      return error(res, 'A dose schedule is required to switch agents', 400);
     }
+    const check = validateSchedule(doseSchedule);
+    if (!check.ok) {
+      await transaction.rollback();
+      return error(res, check.message, 400);
+    }
+    const schedule = check.schedule;
 
     const switchDate = startDate || new Date().toISOString().slice(0, 10);
 
     // 1. Stop the old course
     therapy.status     = 'Stopped';
-    therapy.stopReason = `Switched to ${medication.genericName} — ${switchReason}`;
+    therapy.stopReason = `Switched to ${agent} — ${switchReason}`;
     therapy.stoppedBy  = req.user.id;
     therapy.stoppedAt  = new Date();
     await therapy.save({ transaction });
@@ -610,7 +597,8 @@ const switchMedication = async (req, res) => {
     // 2. Start the new one, linked back
     const started = await Glp1Therapy.create({
       PatientId:             family.patient.id,
-      Glp1MedicationId:      medication.id,
+      medicationName:        agent,
+      medicationBrand:       medicationBrand ? String(medicationBrand).trim() : null,
       doctorId:              req.user.id,
       indication:            therapy.indication,
       startDate:             switchDate,
