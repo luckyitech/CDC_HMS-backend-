@@ -1,4 +1,4 @@
-const { Op } = require('sequelize');
+const { Op, fn, col } = require('sequelize');
 const { success, error } = require('../utils/response');
 const db = require('../models');
 
@@ -700,6 +700,131 @@ const getClinicOverview = async (req, res) => {
   }
 };
 
+/**
+ * GET /api/reports/patient-visits
+ * Daily count of patients who appeared at the clinic (queue entries)
+ * over a date range, with period totals.
+ *
+ * Query params: from, to — YYYY-MM-DD, inclusive
+ * Authorization: doctor, staff, admin
+ */
+const getPatientVisits = async (req, res) => {
+  try {
+    const { from, to } = req.query;
+
+    const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+    if (!from || !to || !DATE_RE.test(from) || !DATE_RE.test(to)) {
+      return error(res, "Both 'from' and 'to' dates are required in YYYY-MM-DD format", 400);
+    }
+    if (from > to) {
+      return error(res, "'from' date must be on or before 'to' date", 400);
+    }
+    // Guard against unbounded queries — two years is plenty for one report
+    if (new Date(to) - new Date(from) > 2 * 366 * 24 * 60 * 60 * 1000) {
+      return error(res, 'Date range too large. Maximum is 2 years per report.', 400);
+    }
+
+    const { Queue, Appointment } = db;
+    const range = { [Op.between]: [new Date(`${from}T00:00:00`), new Date(`${to}T23:59:59.999`)] };
+
+    const visits = await Queue.findAll({
+      attributes: ['id', 'PatientId', 'createdAt', 'status'],
+      where: { createdAt: range },
+      order: [['createdAt', 'ASC']],
+      raw: true,
+    });
+
+    const patientIds = [...new Set(visits.map((v) => v.PatientId).filter((id) => id != null))];
+
+    // Per patient: their first-ever visit (new vs return) and any non-cancelled
+    // appointments in the period (booked vs walk-in)
+    const [firstVisits, appointments] = patientIds.length
+      ? await Promise.all([
+          Queue.findAll({
+            attributes: ['PatientId', [fn('MIN', col('createdAt')), 'firstVisit']],
+            where: { PatientId: { [Op.in]: patientIds } },
+            group: ['PatientId'],
+            raw: true,
+          }),
+          Appointment.findAll({
+            attributes: ['PatientId', 'date'],
+            where: {
+              PatientId: { [Op.in]: patientIds },
+              date: { [Op.between]: [from, to] },
+              status: { [Op.ne]: 'cancelled' },
+            },
+            raw: true,
+          }),
+        ])
+      : [[], []];
+
+    const firstVisitAt = new Map(firstVisits.map((f) => [f.PatientId, new Date(f.firstVisit).getTime()]));
+    const bookedKeys = new Set(appointments.map((a) => `${a.PatientId}_${a.date}`));
+
+    const localDate = (value) => {
+      const d = new Date(value);
+      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    };
+
+    const emptyDay = (date) => ({
+      date, visits: 0, newPatients: 0, returnPatients: 0,
+      booked: 0, walkIn: 0, completed: 0, removed: 0,
+    });
+
+    // Visits arrive in chronological order, so Map insertion order = date order
+    const byDay = new Map();
+    const uniqueDaily = new Map();
+    const uniqueAll = new Set();
+
+    for (const v of visits) {
+      const date = localDate(v.createdAt);
+      if (!byDay.has(date)) {
+        byDay.set(date, emptyDay(date));
+        uniqueDaily.set(date, new Set());
+      }
+      const day = byDay.get(date);
+      day.visits += 1;
+
+      const isNew =
+        v.PatientId != null &&
+        firstVisitAt.get(v.PatientId) === new Date(v.createdAt).getTime();
+      if (isNew) day.newPatients += 1;
+      else day.returnPatients += 1;
+
+      if (v.PatientId != null && bookedKeys.has(`${v.PatientId}_${date}`)) day.booked += 1;
+      else day.walkIn += 1;
+
+      if (v.status === 'Completed' || v.status === 'Pending Billing') day.completed += 1;
+      if (v.status === 'Removed') day.removed += 1;
+
+      if (v.PatientId != null) {
+        uniqueDaily.get(date).add(v.PatientId);
+        uniqueAll.add(v.PatientId);
+      }
+    }
+
+    const days = [...byDay.values()].map((d) => ({
+      ...d,
+      uniquePatients: uniqueDaily.get(d.date).size,
+    }));
+
+    const totals = days.reduce(
+      (acc, d) => {
+        for (const key of Object.keys(acc)) acc[key] += d[key];
+        return acc;
+      },
+      { visits: 0, newPatients: 0, returnPatients: 0, booked: 0, walkIn: 0, completed: 0, removed: 0 }
+    );
+    // Distinct across the whole period — summing daily uniques would double-count
+    totals.uniquePatients = uniqueAll.size;
+
+    return success(res, { from, to, days, totals });
+  } catch (err) {
+    console.error('getPatientVisits error:', err);
+    return error(res, 'Failed to generate patient visits report', 500);
+  }
+};
+
 // ====================================
 // EXPORTS
 // ====================================
@@ -710,4 +835,5 @@ module.exports = {
   getMedicationAdherence,
   getHighRiskPatients,
   getClinicOverview,
+  getPatientVisits,
 };

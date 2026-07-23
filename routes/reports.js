@@ -100,4 +100,16 @@ router.get(
   reportController.getClinicOverview
 );
 
+// ------------------------------------
+// GET /api/reports/patient-visits — Daily patient visit counts over a range
+// ------------------------------------
+// Authorization: Doctor, Staff, Admin
+// Query params: from, to (YYYY-MM-DD, required — validated in controller)
+router.get(
+  '/patient-visits',
+  authenticate,
+  authorize('doctor', 'staff', 'admin'),
+  reportController.getPatientVisits
+);
+
 module.exports = router;
