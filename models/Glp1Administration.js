@@ -1,6 +1,6 @@
 const { defineModel, DataTypes } = require('../utils/defineModel');
 
-// One row per week that was actually recorded — given, missed or deferred.
+// One row per week that was actually recorded — given, missed or omitted.
 //
 // Separate from Glp1Review on purpose: a review is a clinical assessment every
 // four weeks or so, an administration is a single injection, usually weekly and
@@ -19,7 +19,7 @@ const Glp1Administration = defineModel('Glp1Administration', {
     allowNull: false,
   },
   status: {
-    type: DataTypes.ENUM('given', 'missed', 'deferred'),
+    type: DataTypes.ENUM('given', 'missed', 'omitted'),
     allowNull: false,
   },
   administeredDate: {
@@ -35,7 +35,7 @@ const Glp1Administration = defineModel('Glp1Administration', {
     defaultValue: null,
   },
   note: {
-    type: DataTypes.TEXT,          // why it was missed or deferred
+    type: DataTypes.TEXT,          // why it was missed or omitted
     defaultValue: null,
   },
 });

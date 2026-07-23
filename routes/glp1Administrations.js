@@ -26,7 +26,7 @@ router.get(
 );
 
 // ------------------------------------
-// POST /api/glp1-administrations — Record a week as given, missed or deferred
+// POST /api/glp1-administrations — Record a week as given, missed or omitted
 // ------------------------------------
 // Recording the same week again updates it rather than duplicating.
 router.post(
@@ -41,8 +41,8 @@ router.post(
       .isInt({ min: 0 })
       .withMessage('Week number must be a whole number, 0 or greater'),
     body('status')
-      .isIn(['given', 'missed', 'deferred'])
-      .withMessage('Status must be given, missed or deferred'),
+      .isIn(['given', 'missed', 'omitted'])
+      .withMessage('Status must be given, missed or omitted'),
     body('administeredDate')
       .optional({ nullable: true })
       .isISO8601()

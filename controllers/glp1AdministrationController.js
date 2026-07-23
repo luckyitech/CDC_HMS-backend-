@@ -112,7 +112,7 @@ const list = async (req, res) => {
 
 /**
  * POST /api/glp1-administrations
- * Records one week as given, missed or deferred.
+ * Records one week as given, missed or omitted.
  *
  * Authorization: doctor, staff. Nurses give most of these, so staff can record
  * them — but staff still cannot start or stop a course, which is a prescribing
