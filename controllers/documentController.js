@@ -378,7 +378,7 @@ const updateStatus = async (req, res) => {
  * Archive a wrongly uploaded document — hides it from every view
  * (doctor, staff, lab, patient) without deleting the file or record.
  *
- * Authorization: admin only (route-level). When granular permissions
+ * Authorization: doctor, admin (route-level). When granular permissions
  * are introduced, move this to a permission check instead of a role.
  */
 const archive = async (req, res) => {
@@ -397,10 +397,11 @@ const archive = async (req, res) => {
       return error(res, 'Archive reason is too long. Maximum 5000 characters allowed.', 400);
     }
 
-    const admin = await User.findByPk(req.user.id);
+    const archiver = await User.findByPk(req.user.id);
+    const prefix = archiver.role === 'doctor' ? 'Dr. ' : '';
     await document.update({
       isArchived: true,
-      archivedBy: `${admin.firstName} ${admin.lastName}`,
+      archivedBy: `${prefix}${archiver.firstName} ${archiver.lastName}`,
       archivedAt: new Date(),
       archiveReason: reason || null,
     });

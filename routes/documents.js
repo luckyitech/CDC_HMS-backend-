@@ -41,9 +41,9 @@ router.put('/:id/status', authenticate, authorize('doctor', 'staff', 'admin'), [
 // ------------------------------------
 // PUT /api/documents/:id/archive — archive a wrongly uploaded document
 // (hidden from all views, never deleted — medical documents must be kept)
-// Admin only for now; switch to a permission check when granular roles land.
+// Doctors and admins; switch to a permission check when granular roles land.
 // ------------------------------------
-router.put('/:id/archive', authenticate, authorize('admin'), documentController.archive);
+router.put('/:id/archive', authenticate, authorize('doctor', 'admin'), documentController.archive);
 
 // ------------------------------------
 // PUT /api/documents/:id/restore — restore an archived document

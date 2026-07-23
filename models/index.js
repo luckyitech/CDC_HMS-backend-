@@ -32,6 +32,8 @@ const Glp1Review             = require('./Glp1Review');
 const Glp1SideEffectCatalog  = require('./Glp1SideEffectCatalog');
 const Glp1SideEffect         = require('./Glp1SideEffect');
 const Glp1Administration     = require('./Glp1Administration');
+const CatalogItem         = require('./CatalogItem');
+const Setting             = require('./Setting');
 
 // =============================================
 // ASSOCIATIONS
@@ -226,6 +228,8 @@ const db = {
   Glp1SideEffectCatalog,
   Glp1SideEffect,
   Glp1Administration,
+  CatalogItem,
+  Setting,
 };
 
 module.exports = db;
