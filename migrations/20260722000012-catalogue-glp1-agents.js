@@ -22,8 +22,13 @@
 module.exports = {
   async up(queryInterface, Sequelize) {
     const { DataTypes } = Sequelize;
-    const tables = (await queryInterface.showAllTables()).map(String);
-    if (!tables.includes('Glp1Therapies')) {
+    // showAllTables() may return { tableName } objects, and MySQL can store
+    // names lowercase — String() on the objects gives '[object Object]', so
+    // map explicitly and compare case-insensitively.
+    const tables = (await queryInterface.showAllTables())
+      .map(t => String(typeof t === 'string' ? t : t.tableName).toLowerCase());
+    const hasTable = (name) => tables.includes(name.toLowerCase());
+    if (!hasTable('Glp1Therapies')) {
       console.log('Glp1Therapies not found — skipping');
       return;
     }
@@ -43,7 +48,7 @@ module.exports = {
     }
 
     // 2. Backfill from the old formulary while it is still there
-    if (tables.includes('Glp1Medications') && cols.Glp1MedicationId) {
+    if (hasTable('Glp1Medications') && cols.Glp1MedicationId) {
       await queryInterface.sequelize.query(
         'UPDATE `Glp1Therapies` t ' +
         'JOIN `Glp1Medications` m ON t.`Glp1MedicationId` = m.`id` ' +
@@ -78,7 +83,7 @@ module.exports = {
     });
 
     // 5. Drop the formulary table (its only inbound FK was removed above)
-    if (tables.includes('Glp1Medications')) {
+    if (hasTable('Glp1Medications')) {
       await queryInterface.dropTable('Glp1Medications');
     }
   },
@@ -86,9 +91,11 @@ module.exports = {
   async down(queryInterface, Sequelize) {
     // Structural rollback only — the dropped formulary rows are not restored.
     const { DataTypes } = Sequelize;
-    const tables = (await queryInterface.showAllTables()).map(String);
+    const tables = (await queryInterface.showAllTables())
+      .map(t => String(typeof t === 'string' ? t : t.tableName).toLowerCase());
+    const hasTable = (name) => tables.includes(name.toLowerCase());
 
-    if (!tables.includes('Glp1Medications')) {
+    if (!hasTable('Glp1Medications')) {
       await queryInterface.createTable('Glp1Medications', {
         id:                    { type: DataTypes.INTEGER, primaryKey: true, autoIncrement: true },
         genericName:           { type: DataTypes.STRING, allowNull: false },

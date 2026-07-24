@@ -1,8 +1,21 @@
 const { Op } = require('sequelize');
 const { success, error } = require('../utils/response');
+const { DRUG_CLASS_VALUES } = require('../constants/drugClasses');
 const db = require('../models');
 
 const { CatalogItem, Setting, User } = db;
+
+// Drug class only applies to medications. Returns { ok, value } or { ok:false,
+// message } — null clears it, an unknown value is rejected.
+const normalizeDrugClass = (type, raw) => {
+  if (type !== 'medication' || raw === undefined || raw === null || raw === '') {
+    return { ok: true, value: null };
+  }
+  if (!DRUG_CLASS_VALUES.includes(raw)) {
+    return { ok: false, message: `Unknown drug class '${raw}'` };
+  }
+  return { ok: true, value: raw };
+};
 
 // One controller serves every catalog type. Add a type here (and to the
 // model enum) and the whole API + admin UI picks it up.
@@ -30,6 +43,7 @@ const formatItem = (item) => ({
   id: item.id,
   name: item.name,
   detail: item.detail,
+  drugClass: item.drugClass || null,
   addedBy: item.addedBy,
   createdAt: item.createdAt,
 });
@@ -78,6 +92,9 @@ const create = async (req, res) => {
     if (!name) return error(res, 'Name is required', 400);
     if (name.length > 255) return error(res, 'Name is too long (maximum 255 characters)', 400);
 
+    const drugClass = normalizeDrugClass(req.catalogType, req.body.drugClass);
+    if (!drugClass.ok) return error(res, drugClass.message, 400);
+
     const existing = await CatalogItem.findOne({ where: { type: req.catalogType, name } });
     if (existing) return error(res, `'${name}' is already in this catalog`, 409);
 
@@ -85,6 +102,7 @@ const create = async (req, res) => {
       type: req.catalogType,
       name,
       detail,
+      drugClass: drugClass.value,
       addedBy: await archiverName(req.user.id),
     });
 
@@ -167,6 +185,11 @@ const update = async (req, res) => {
     }
     if (req.body.detail !== undefined) {
       updates.detail = cleanName(req.body.detail) || null;
+    }
+    if (req.body.drugClass !== undefined) {
+      const drugClass = normalizeDrugClass(req.catalogType, req.body.drugClass);
+      if (!drugClass.ok) return error(res, drugClass.message, 400);
+      updates.drugClass = drugClass.value;
     }
 
     await item.update(updates);
