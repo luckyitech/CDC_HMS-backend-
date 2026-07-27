@@ -216,8 +216,26 @@ const syncLinkedUser = async (userId, fields, password) => {
 // POST /api/patients — create patient
 // Always creates both a patient record AND a user login account.
 // ------------------------------------
+// Phone and emergency contact are mandatory to register a patient.
+// Returns an error message string, or null when the required fields are present.
+const missingContactInfo = (fields) => {
+  if (!fields.phone || !String(fields.phone).trim()) {
+    return 'Phone number is required.';
+  }
+  const ec = fields.emergencyContact;
+  if (!ec || !String(ec.name || '').trim() || !String(ec.relationship || '').trim() || !String(ec.phone || '').trim()) {
+    return 'Emergency contact name, relationship, and phone are all required.';
+  }
+  return null;
+};
+
 const create = async (req, res) => {
   const { password, ...patientFields } = req.body;
+
+  const contactError = missingContactInfo(patientFields);
+  if (contactError) {
+    return res.status(400).json({ success: false, message: contactError });
+  }
 
   // Use provided UHID or auto-generate one
   let uhid = patientFields.uhid;
@@ -294,6 +312,10 @@ const create = async (req, res) => {
 // ------------------------------------
 const quickCreate = async (req, res) => {
   const { firstName, lastName, phone } = req.body;
+
+  if (!phone || !phone.trim()) {
+    return res.status(400).json({ success: false, message: 'Phone number is required.' });
+  }
 
   try {
     const existing = await Patient.findOne({ where: { phone } });
@@ -456,6 +478,11 @@ const completeRegistration = async (req, res) => {
   }
 
   const { password, ...patientFields } = req.body;
+
+  const contactError = missingContactInfo(patientFields);
+  if (contactError) {
+    return res.status(400).json({ success: false, message: contactError });
+  }
 
   const idDuplicate = await findDuplicateIdNumber(patientFields.idNumber, patient.id);
   if (idDuplicate) return duplicateIdResponse(res, patientFields.idNumber, idDuplicate);
