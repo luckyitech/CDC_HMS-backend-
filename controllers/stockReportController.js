@@ -215,4 +215,90 @@ const fefoOverrides = movementReport('fefoOverrides', () => ({
 // it moves the ledger to the counted figure.
 const variances = movementReport('variances', () => ({ type: 'adjustment' }));
 
-module.exports = { reorder, consumption, recall, disposal, fefoOverrides, variances };
+// ------------------------------------
+// GET /api/stock/reports/inventory — the master inventory sheet: every active
+// item in one place with total availability, where it sits (per location), its
+// reorder level, its most recent order (intake qty + date), and its most recent
+// stocktake (counted, expected, variance, reason). The single screen to view
+// and analyse the whole inventory; also the richest sheet in the Excel export.
+// ------------------------------------
+const inventory = async (req, res) => {
+  try {
+    const items = await StockItem.findAll({
+      where: { status: 'active' },
+      attributes: ['id', 'name', 'category', 'unit', 'reorderLevel', 'reorderQuantity'],
+      order: [['name', 'ASC']],
+    });
+
+    // Total + per-location quantities.
+    const levels = await StockLevel.findAll({
+      where: { quantity: { [Op.gt]: 0 } },
+      include: [
+        { model: StockBatch, as: 'batch', attributes: ['stockItemId'] },
+        { model: StockLocation, as: 'location', attributes: ['id', 'name'] },
+      ],
+    });
+    const totals = {};       // itemId → total
+    const byLocation = {};   // itemId → { locationName → qty }
+    levels.forEach((l) => {
+      const id = l.batch?.stockItemId;
+      if (!id) return;
+      totals[id] = (totals[id] || 0) + l.quantity;
+      const name = l.location?.name || '—';
+      byLocation[id] = byLocation[id] || {};
+      byLocation[id][name] = (byLocation[id][name] || 0) + l.quantity;
+    });
+
+    // Most recent order (intake) per item.
+    const intakes = await StockMovement.findAll({
+      where: { type: 'intake' },
+      attributes: ['stockItemId', 'quantity', 'createdAt'],
+      order: [['createdAt', 'DESC']],
+    });
+    const lastOrder = {};
+    intakes.forEach((m) => {
+      if (!lastOrder[m.stockItemId]) lastOrder[m.stockItemId] = { quantity: m.quantity, date: m.createdAt };
+    });
+
+    // Most recent stocktake variance per item (adjustments whose reason starts
+    // 'Stocktake'), with expected/counted parsed from the reason string.
+    const adjustments = await StockMovement.findAll({
+      where: { type: 'adjustment', reason: { [Op.like]: 'Stocktake%' } },
+      attributes: ['stockItemId', 'quantity', 'reason', 'createdAt', 'toLocationId'],
+      order: [['createdAt', 'DESC']],
+    });
+    const lastStocktake = {};
+    adjustments.forEach((m) => {
+      if (lastStocktake[m.stockItemId]) return;
+      const match = /expected\s+(\d+),\s*counted\s+(\d+)/i.exec(m.reason || '');
+      const expected = match ? Number(match[1]) : null;
+      const counted = match ? Number(match[2]) : null;
+      const variance = expected != null && counted != null
+        ? counted - expected
+        : (m.toLocationId ? m.quantity : -m.quantity);
+      lastStocktake[m.stockItemId] = { date: m.createdAt, expected, counted, variance, reason: m.reason };
+    });
+
+    const rows = items.map((i) => ({
+      id: i.id,
+      name: i.name,
+      category: i.category,
+      unit: i.unit,
+      reorderLevel: i.reorderLevel,
+      reorderQuantity: i.reorderQuantity,
+      totalQuantity: totals[i.id] || 0,
+      locations: Object.entries(byLocation[i.id] || {})
+        .map(([name, quantity]) => ({ name, quantity }))
+        .sort((a, b) => a.name.localeCompare(b.name)),
+      lastOrder: lastOrder[i.id] || null,
+      lastStocktake: lastStocktake[i.id] || null,
+    }));
+
+    return success(res, rows);
+  } catch (err) {
+    console.error('Stock.reports.inventory error:', err);
+    return error(res, 'Failed to build inventory report', 500);
+  }
+};
+
+module.exports = { reorder, consumption, recall, disposal, fefoOverrides, variances, inventory };

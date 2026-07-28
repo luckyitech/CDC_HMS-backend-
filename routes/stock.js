@@ -140,6 +140,7 @@ router.get('/reports/recall/:query',  authenticate, authorizeStock, reports.reca
 router.get('/reports/disposal',       authenticate, authorizeStock, reports.disposal);
 router.get('/reports/fefo-overrides', authenticate, authorizeStock, reports.fefoOverrides);
 router.get('/reports/variances',      authenticate, authorizeStock, reports.variances);
+router.get('/reports/inventory',      authenticate, authorizeStock, reports.inventory);
 
 // ---------- Admin maintenance ----------
 router.post('/levels/rebuild', authenticate, authorize('admin'), movements.rebuild);
