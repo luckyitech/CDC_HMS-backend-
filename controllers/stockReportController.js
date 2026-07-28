@@ -143,9 +143,11 @@ const recall = async (req, res) => {
       // "Who received it" — unique patients this batch was dispensed to, with
       // the total quantity each got. The half that was stubbed for the
       // patient-linking phase, now live.
+      // Both 'dispense' (taken home) and 'use' (administered in the room)
+      // count as "received it" for a recall.
       const byPatient = {};
       movements.forEach((m) => {
-        if (m.type !== 'dispense' || !m.Patient) return;
+        if (!['dispense', 'use'].includes(m.type) || !m.Patient) return;
         const p = m.Patient;
         byPatient[p.id] = byPatient[p.id]
           || { uhid: p.uhid, name: `${p.firstName} ${p.lastName}`, quantity: 0 };

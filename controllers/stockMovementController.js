@@ -37,6 +37,32 @@ const MOVEMENT_INCLUDE = [
   { model: Patient,       attributes: ['id', 'uhid', 'firstName', 'lastName'], required: false },
 ];
 
+// Resolve an OPTIONAL patient UHID to a merge-aware canonical id, for
+// attaching a dispense/use to the patient who received it. Returns
+// { PatientId: null } when no uhid is given (over-the-counter). Throws a
+// LedgerError (clean status) for an unknown or merged-away record.
+const resolveOptionalPatient = async (uhid) => {
+  if (!uhid) return { PatientId: null };
+  const family = await resolvePatient(uhid);
+  if (!family) throw new LedgerError('Patient not found', 404);
+  if (family.isDeactivated) {
+    throw new LedgerError('This patient record was merged into another. Use the current record.', 403);
+  }
+  return { PatientId: family.patient.id };
+};
+
+// FEFO override reason for advisory paths (use / checkout): returns a logged
+// reason when the chosen batch isn't the earliest-expiring at the location, so
+// it still surfaces in the FEFO-overrides report. Null when compliant.
+const fefoOverrideReasonFor = async (batch, locationId, label) => {
+  const suggestion = await suggestFefoBatch(batch.stockItemId, locationId);
+  if (suggestion && suggestion.batch.id !== batch.id) {
+    return `FEFO override (${label}): earlier batch ${suggestion.batch.labelCode || suggestion.batch.id}` +
+      (suggestion.batch.expiryDate ? ` exp ${suggestion.batch.expiryDate}` : '');
+  }
+  return null;
+};
+
 // Resolve a batch by id or by its printed label code (scan-first UX).
 const findBatch = async (stockBatchId, labelCode, t = null) => {
   if (stockBatchId) return StockBatch.findByPk(stockBatchId, { transaction: t });
@@ -136,14 +162,16 @@ const intake = async (req, res) => {
 
 // ------------------------------------
 // POST /api/stock/dispense — stock leaves the world with the patient.
-// Body: stockBatchId | labelCode, locationId, quantity, fefoOverrideReason?
+// Body: stockBatchId | labelCode, locationId, quantity, fefoOverrideReason?,
+//       uhid? (optional — attaches the patient who collected it; over-the-
+//       counter collection omits it).
 // FEFO: if an earlier-expiring batch of the same item sits at this location,
 // respond 409 with the suggestion; the user may resubmit with a reason
 // (logged override — the report reads these).
 // ------------------------------------
 const dispense = async (req, res) => {
   try {
-    const { locationId, quantity, fefoOverrideReason } = req.body;
+    const { locationId, quantity, fefoOverrideReason, uhid } = req.body;
 
     const batch = await findBatch(req.body.stockBatchId, req.body.labelCode);
     if (!batch) return error(res, 'Batch not found', 404);
@@ -151,6 +179,9 @@ const dispense = async (req, res) => {
     const location = await StockLocation.findByPk(locationId);
     if (!location || location.status !== 'active') return error(res, 'Location not found or retired', 404);
     if (!location.isDispensing) return error(res, `${location.name} is not a dispensing location`);
+
+    // Merge-aware patient attach (optional).
+    const { PatientId } = await resolveOptionalPatient(uhid);
 
     const fefo = await fefoCheck(batch, location.id, fefoOverrideReason);
     if (fefo?.blocked) {
@@ -167,6 +198,7 @@ const dispense = async (req, res) => {
       quantity,
       fromLocationId: location.id,
       performedById: req.user.id,
+      PatientId,
       reason: fefo ? `FEFO override: ${fefo.overrideReason}` : null,
     }, t));
 
@@ -177,17 +209,24 @@ const dispense = async (req, res) => {
 };
 
 // ------------------------------------
-// POST /api/stock/use — point-of-care consumption from a room.
+// POST /api/stock/use — point-of-care consumption from a room (e.g. an insulin
+// shot, a dressing, a branula used on the patient in the room).
 // Open to all clinical roles (authorize gate at the route, NOT authorizeStock)
 // — gating it would guarantee unrecorded usage and rotten room counts.
-// Body: stockBatchId | labelCode, locationId, quantity
+// Body: stockBatchId | labelCode, locationId, quantity, uhid? (optional patient
+//       who it was used on — defaults to the in-consultation patient in the UI).
+// FEFO is advisory here (the clinician holds the physical box): a non-earliest
+// batch is logged as an override so it still shows in the FEFO report.
 // ------------------------------------
 const use = async (req, res) => {
   try {
-    const { locationId, quantity } = req.body;
+    const { locationId, quantity, uhid } = req.body;
 
     const batch = await findBatch(req.body.stockBatchId, req.body.labelCode);
     if (!batch) return error(res, 'Batch not found', 404);
+
+    const { PatientId } = await resolveOptionalPatient(uhid);
+    const reason = await fefoOverrideReasonFor(batch, locationId, 'use');
 
     const movement = await sequelize.transaction((t) => applyMovement({
       type: 'use',
@@ -195,6 +234,8 @@ const use = async (req, res) => {
       quantity,
       fromLocationId: locationId,
       performedById: req.user.id,
+      PatientId,
+      reason,
     }, t));
 
     return success(res, movement, 201);
@@ -607,7 +648,10 @@ const patientDispenses = async (req, res) => {
     if (!family) return error(res, 'Patient not found', 404);
 
     const rows = await StockMovement.findAll({
-      where: { type: 'dispense', PatientId: { [Op.in]: family.patientIds } },
+      // Both stock a patient received: 'dispense' (taken home) and 'use'
+      // (administered in the room, e.g. an insulin shot) — both matter for a
+      // bad-batch recall.
+      where: { type: { [Op.in]: ['dispense', 'use'] }, PatientId: { [Op.in]: family.patientIds } },
       include: [
         { model: StockItem,  as: 'item',  attributes: ['id', 'name', 'unit'] },
         { model: StockBatch, as: 'batch', attributes: ['id', 'labelCode', 'batchNo', 'expiryDate'] },
