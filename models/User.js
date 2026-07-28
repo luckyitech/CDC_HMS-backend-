@@ -42,6 +42,16 @@ const User = defineModel('User', {
     type: DataTypes.STRING,
     defaultValue: null,
   },
+
+  // --- Stock module permission ---
+  // Admin-granted per-user flag: staff/doctors with this see the Stocks pages.
+  // authorizeStock reads it from the DB (not the JWT) so a grant takes effect
+  // without re-login.
+  canManageStock: {
+    type: DataTypes.BOOLEAN,
+    allowNull: false,
+    defaultValue: false,
+  },
 }, {
   indexes: [
     { unique: true, fields: ['email'], name: 'unique_email', where: { email: { [require('sequelize').Op.ne]: null } } },

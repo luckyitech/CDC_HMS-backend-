@@ -1,0 +1,95 @@
+const express = require('express');
+const router = express.Router();
+const { body } = require('express-validator');
+const validate = require('../middleware/validate');
+const { authenticate, authorize } = require('../middleware/auth');
+const authorizeStock = require('../middleware/authorizeStock');
+const catalog = require('../controllers/stockCatalogController');
+const movements = require('../controllers/stockMovementController');
+
+// ====================================
+// UNDERSTANDING AUTHORIZATION
+// ====================================
+// Everything here requires authentication. Beyond that:
+//   authorizeStock  — admins, plus staff/doctors the admin granted
+//                     canManageStock (read from the DB, so a grant takes
+//                     effect without re-login). Hiding the sidebar link is
+//                     UX; THIS is the security boundary.
+//   POST /use       — the one exception: point-of-care usage recording is
+//                     open to all clinical roles. Gating it would guarantee
+//                     unrecorded usage and rotten room counts.
+//   POST /levels/rebuild — admin only (destructive recompute).
+
+const qty = () => body('quantity').isInt({ min: 1 }).withMessage('Quantity must be a whole number of at least 1');
+
+// ---------- Reference data ----------
+router.get('/items',        authenticate, authorizeStock, catalog.listItems);
+router.post('/items',       authenticate, authorizeStock, [body('name').notEmpty().withMessage('Name is required'), validate], catalog.createItem);
+router.put('/items/:id',    authenticate, authorizeStock, catalog.updateItem);
+
+router.get('/locations',     authenticate, authorizeStock, catalog.listLocations);
+router.post('/locations',    authenticate, authorizeStock, [body('name').notEmpty().withMessage('Name is required'), validate], catalog.createLocation);
+router.put('/locations/:id', authenticate, authorizeStock, catalog.updateLocation);
+
+router.get('/suppliers',     authenticate, authorizeStock, catalog.listSuppliers);
+router.post('/suppliers',    authenticate, authorizeStock, [body('name').notEmpty().withMessage('Name is required'), validate], catalog.createSupplier);
+router.put('/suppliers/:id', authenticate, authorizeStock, catalog.updateSupplier);
+
+// ---------- Ledger writes (each one DB transaction with row locks) ----------
+router.post('/intake', authenticate, authorizeStock, [
+  body('stockItemId').isInt().withMessage('stockItemId is required'),
+  body('locationId').isInt().withMessage('locationId is required'),
+  qty(),
+  validate,
+], movements.intake);
+
+router.post('/dispense', authenticate, authorizeStock, [
+  body('locationId').isInt().withMessage('locationId is required'),
+  qty(),
+  validate,
+], movements.dispense);
+
+// Point-of-care use — clinical roles, NOT authorizeStock (see header note).
+router.post('/use', authenticate, authorize('doctor', 'staff', 'admin'), [
+  body('locationId').isInt().withMessage('locationId is required'),
+  qty(),
+  validate,
+], movements.use);
+
+router.post('/transfer', authenticate, authorizeStock, [
+  body('fromLocationId').isInt().withMessage('fromLocationId is required'),
+  body('toLocationId').isInt().withMessage('toLocationId is required'),
+  qty(),
+  validate,
+], movements.transfer);
+
+router.post('/adjustment', authenticate, authorizeStock, [
+  body('stockBatchId').isInt().withMessage('stockBatchId is required'),
+  body('locationId').isInt().withMessage('locationId is required'),
+  body('reason').notEmpty().withMessage('A reason is required for adjustments'),
+  qty(),
+  validate,
+], movements.adjustment);
+
+router.post('/writeoff', authenticate, authorizeStock, [
+  body('locationId').isInt().withMessage('locationId is required'),
+  body('reason').notEmpty().withMessage('A reason is required for write-offs'),
+  qty(),
+  validate,
+], movements.writeoff);
+
+router.post('/movements/:id/reverse', authenticate, authorizeStock, [
+  body('reason').notEmpty().withMessage('A reason is required to reverse a movement'),
+  validate,
+], movements.reverse);
+
+// ---------- Reads ----------
+router.get('/movements', authenticate, authorizeStock, movements.listMovements);
+router.get('/levels',    authenticate, authorizeStock, movements.listLevels);
+router.get('/batches',   authenticate, authorizeStock, movements.listBatches);
+router.get('/dashboard', authenticate, authorizeStock, movements.dashboard);
+
+// ---------- Admin maintenance ----------
+router.post('/levels/rebuild', authenticate, authorize('admin'), movements.rebuild);
+
+module.exports = router;
