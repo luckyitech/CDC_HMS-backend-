@@ -208,4 +208,11 @@ const fefoOverrides = movementReport('fefoOverrides', () => ({
   reason: { [Op.like]: 'FEFO override:%' },
 }));
 
-module.exports = { reorder, consumption, recall, disposal, fefoOverrides };
+// GET /api/stock/reports/variances — every stock adjustment: stocktake variances
+// (the reason carries "expected X, counted Y") and manual count corrections.
+// This is the reconciliation record — what the counts disagreed on, at which
+// location, corrected by whom and when. Each adjustment IS the reconciliation:
+// it moves the ledger to the counted figure.
+const variances = movementReport('variances', () => ({ type: 'adjustment' }));
+
+module.exports = { reorder, consumption, recall, disposal, fefoOverrides, variances };

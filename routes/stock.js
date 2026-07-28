@@ -74,6 +74,20 @@ router.post('/checkout-dispense', authenticate, authorize('doctor', 'staff', 'ad
   validate,
 ], movements.checkoutDispense);
 
+// Returns — a patient brings stock back. Patient-linked (recall traceability),
+// reason required. Clinical/reception roles, NOT authorizeStock (same rationale
+// as /use and /checkout-dispense).
+router.post('/return', authenticate, authorize('doctor', 'staff', 'admin'), [
+  body('uhid').notEmpty().withMessage('Patient UHID is required'),
+  body('reason').notEmpty().withMessage('A reason is required'),
+  qty(),
+  validate,
+], movements.returnStock);
+
+// Whether a scanned batch was ever returned (and why) — drives the dispense
+// warning. Clinical/reception roles.
+router.get('/batches/:id/return-info', authenticate, authorize('doctor', 'staff', 'admin'), movements.batchReturnInfo);
+
 router.post('/transfer', authenticate, authorizeStock, [
   body('fromLocationId').isInt().withMessage('fromLocationId is required'),
   body('toLocationId').isInt().withMessage('toLocationId is required'),
@@ -125,6 +139,7 @@ router.get('/reports/consumption',    authenticate, authorizeStock, reports.cons
 router.get('/reports/recall/:query',  authenticate, authorizeStock, reports.recall);
 router.get('/reports/disposal',       authenticate, authorizeStock, reports.disposal);
 router.get('/reports/fefo-overrides', authenticate, authorizeStock, reports.fefoOverrides);
+router.get('/reports/variances',      authenticate, authorizeStock, reports.variances);
 
 // ---------- Admin maintenance ----------
 router.post('/levels/rebuild', authenticate, authorize('admin'), movements.rebuild);

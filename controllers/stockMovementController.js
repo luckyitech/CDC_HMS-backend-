@@ -599,6 +599,21 @@ const checkoutDispense = async (req, res) => {
       }
     }
 
+    // Non-dispensing locations (e.g. the Faulty Box) quarantine stock — it must
+    // not go out with a patient from there. To re-dispense a returned faulty
+    // item, move it back into normal stock first (a logged transfer with a
+    // reason), then dispense.
+    const locIds = [...new Set(lines.map((l) => Number(l.locationId)))];
+    const locs = await StockLocation.findAll({ where: { id: locIds } });
+    const locById = Object.fromEntries(locs.map((l) => [l.id, l]));
+    for (const l of lines) {
+      const loc = locById[Number(l.locationId)];
+      if (!loc || loc.status !== 'active') return error(res, 'A dispensing location was not found or is retired', 404);
+      if (!loc.isDispensing) {
+        return error(res, `${loc.name} is a non-dispensing location — its stock is quarantined and cannot be dispensed`);
+      }
+    }
+
     const movements = await sequelize.transaction(async (t) => {
       const out = [];
       for (const l of lines) {
@@ -746,6 +761,99 @@ const useOptions = async (req, res) => {
   }
 };
 
+// The quarantine location kind. A returned faulty item is parked here so it is
+// never re-dispensed by accident (its stock is non-dispensing).
+const FAULTY_BOX_KIND = 'faulty';
+
+// ------------------------------------
+// POST /api/stock/return — stock comes back from a patient.
+// Body: stockBatchId | labelCode, quantity, uhid (required), reason (required),
+//       reDispensable (bool), toLocationId (required when reDispensable).
+//
+// A return is a named handover in reverse, so the patient is required (a faulty-
+// batch recall depends on tracing who brought it back). If the item is safe to
+// re-dispense (e.g. a collection error), it goes back into the chosen location;
+// otherwise it is parked in the Faulty Box, a non-dispensing quarantine, so it
+// cannot be handed out again without first being moved back into stock.
+// ------------------------------------
+const returnStock = async (req, res) => {
+  try {
+    const { quantity, reason, uhid, reDispensable, toLocationId } = req.body;
+
+    const batch = await findBatch(req.body.stockBatchId, req.body.labelCode);
+    if (!batch) return error(res, 'Batch not found', 404);
+    if (!uhid) return error(res, 'A patient is required to record a return');
+    if (!String(reason || '').trim()) return error(res, 'A reason is required for a return');
+
+    const family = await resolvePatient(uhid);
+    if (!family) return error(res, 'Patient not found', 404);
+    if (family.isDeactivated) {
+      return error(res, 'This patient record was merged into another. Use the current record.', 403);
+    }
+
+    let destination;
+    if (reDispensable) {
+      if (!toLocationId) return error(res, 'Choose where the returned stock goes back to');
+      destination = await StockLocation.findByPk(toLocationId);
+      if (!destination || destination.status !== 'active') {
+        return error(res, 'Destination location not found or retired', 404);
+      }
+    } else {
+      destination = await StockLocation.findOne({ where: { kind: FAULTY_BOX_KIND, status: 'active' } });
+      if (!destination) {
+        return error(res, 'No Faulty Box is set up — an admin can add a non-dispensing quarantine location', 400);
+      }
+    }
+
+    const movement = await sequelize.transaction((t) => applyMovement({
+      type: 'return',
+      stockBatchId: batch.id,
+      quantity,
+      toLocationId: destination.id,
+      performedById: req.user.id,
+      PatientId: family.patient.id,
+      reason: `${reDispensable ? 'Return (re-dispensable)' : 'Return (faulty — quarantined)'}: ${String(reason).trim()}`,
+    }, t));
+
+    return success(res, movement, 201);
+  } catch (err) {
+    return handleErr('returnStock')(res, err);
+  }
+};
+
+// ------------------------------------
+// GET /api/stock/batches/:id/return-info — has this batch ever been returned,
+// and is any of it currently quarantined? Drives the dispense-time warning so
+// staff know a scanned item came back, and why, before handing it out again.
+// ------------------------------------
+const batchReturnInfo = async (req, res) => {
+  try {
+    const batch = await StockBatch.findByPk(req.params.id);
+    if (!batch) return error(res, 'Batch not found', 404);
+
+    const lastReturn = await StockMovement.findOne({
+      where: { stockBatchId: batch.id, type: 'return' },
+      order: [['createdAt', 'DESC'], ['id', 'DESC']],
+    });
+
+    const levels = await StockLevel.findAll({
+      where: { stockBatchId: batch.id, quantity: { [Op.gt]: 0 } },
+      include: [{ model: StockLocation, as: 'location', attributes: ['id', 'name', 'isDispensing'] }],
+    });
+    const inQuarantine = levels.some((l) => l.location && !l.location.isDispensing);
+
+    return success(res, {
+      returned: !!lastReturn,
+      reason: lastReturn?.reason || null,
+      at: lastReturn?.createdAt || null,
+      inQuarantine,
+    });
+  } catch (err) {
+    console.error('Stock.batchReturnInfo error:', err);
+    return error(res, 'Failed to load return info', 500);
+  }
+};
+
 // ------------------------------------
 // POST /api/stock/levels/rebuild — admin-only escape hatch: recompute the
 // materialized levels from the ledger.
@@ -776,5 +884,7 @@ module.exports = {
   fefoSuggestion,
   patientDispenses,
   checkoutDispense,
+  returnStock,
+  batchReturnInfo,
   rebuild,
 };
