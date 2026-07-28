@@ -13,6 +13,7 @@ const {
   sequelize, StockItem, StockBatch, StockMovement, StockLevel, StockLocation,
   Supplier, User,
 } = db;
+const { runExpirySweepIfDue } = require('../utils/stockExpirySweep');
 
 // Every action here writes through utils/stockLedger inside one transaction —
 // the append-only ledger and the materialized levels can never disagree.
@@ -431,6 +432,11 @@ const listBatches = async (req, res) => {
 // ------------------------------------
 const dashboard = async (req, res) => {
   try {
+    // Daily expired-batch sweep — no job scheduler exists, so the first
+    // dashboard load of the day runs it. Failure must not break the page.
+    const sweep = await runExpirySweepIfDue()
+      .catch((e) => { console.error('Stock.expirySweep error:', e); return { ran: false, newlyExpired: 0 }; });
+
     const today = new Date();
     const iso = (d) => d.toISOString().slice(0, 10);
     const plusDays = (n) => { const d = new Date(today); d.setDate(d.getDate() + n); return d; };
@@ -496,10 +502,60 @@ const dashboard = async (req, res) => {
       },
       itemsBelowReorder,
       expiry: buckets,
+      sweep,   // { ran, newlyExpired } — dashboard banner when batches expired
     });
   } catch (err) {
     console.error('Stock.dashboard error:', err);
     return error(res, 'Failed to load stock dashboard', 500);
+  }
+};
+
+// ------------------------------------
+// GET /api/stock/use-options?locationId= — the data the Record Use flow
+// needs, open to ALL clinical roles (the full levels endpoint stays
+// permission-gated; this returns only what point-of-care recording requires):
+// active locations, and — given a location — the batches it holds,
+// FEFO-ordered per item.
+// ------------------------------------
+const useOptions = async (req, res) => {
+  try {
+    const locations = await StockLocation.findAll({
+      where: { status: 'active' },
+      attributes: ['id', 'name', 'kind'],
+      order: [['name', 'ASC']],
+    });
+
+    let batches = [];
+    if (req.query.locationId) {
+      const levels = await StockLevel.findAll({
+        where: { locationId: req.query.locationId, quantity: { [Op.gt]: 0 } },
+        include: [{
+          model: StockBatch, as: 'batch',
+          where: { status: 'active' },
+          include: [{ model: StockItem, as: 'item', attributes: ['id', 'name', 'unit', 'isHighAlert'] }],
+        }],
+      });
+      batches = levels
+        .map((l) => ({
+          stockBatchId: l.batch.id,
+          labelCode: l.batch.labelCode,
+          batchNo: l.batch.batchNo,
+          expiryDate: l.batch.expiryDate,
+          available: l.quantity,
+          item: l.batch.item,
+        }))
+        .sort((a, b) => {
+          if (a.item.name !== b.item.name) return a.item.name.localeCompare(b.item.name);
+          const ax = a.expiryDate || '9999-12-31';
+          const bx = b.expiryDate || '9999-12-31';
+          return ax < bx ? -1 : 1;
+        });
+    }
+
+    return success(res, { locations, batches });
+  } catch (err) {
+    console.error('Stock.useOptions error:', err);
+    return error(res, 'Failed to load use options', 500);
   }
 };
 
@@ -529,5 +585,6 @@ module.exports = {
   listLevels,
   listBatches,
   dashboard,
+  useOptions,
   rebuild,
 };

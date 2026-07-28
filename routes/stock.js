@@ -6,6 +6,8 @@ const { authenticate, authorize } = require('../middleware/auth');
 const authorizeStock = require('../middleware/authorizeStock');
 const catalog = require('../controllers/stockCatalogController');
 const movements = require('../controllers/stockMovementController');
+const rooms = require('../controllers/stockRoomController');
+const reports = require('../controllers/stockReportController');
 
 // ====================================
 // UNDERSTANDING AUTHORIZATION
@@ -88,6 +90,25 @@ router.get('/movements', authenticate, authorizeStock, movements.listMovements);
 router.get('/levels',    authenticate, authorizeStock, movements.listLevels);
 router.get('/batches',   authenticate, authorizeStock, movements.listBatches);
 router.get('/dashboard', authenticate, authorizeStock, movements.dashboard);
+
+// Record-Use options — clinical roles, NOT authorizeStock (matches POST /use):
+// only what point-of-care recording needs, nothing more.
+router.get('/use-options', authenticate, authorize('doctor', 'staff', 'admin'), movements.useOptions);
+
+// ---------- Room balancing (par levels, RAG grid, restock, stocktake) ----------
+router.get('/par-levels',       authenticate, authorizeStock, rooms.listParLevels);
+router.put('/par-levels',       authenticate, authorizeStock, rooms.setParLevels);
+router.post('/par-levels/copy', authenticate, authorizeStock, rooms.copyParLevels);
+router.get('/room-balance',     authenticate, authorizeStock, rooms.roomBalance);
+router.get('/restock-plan',     authenticate, authorizeStock, rooms.restockPlan);
+router.post('/stocktake',       authenticate, authorizeStock, rooms.stocktake);
+
+// ---------- Reports (straight SQL over the ledger; no money) ----------
+router.get('/reports/reorder',        authenticate, authorizeStock, reports.reorder);
+router.get('/reports/consumption',    authenticate, authorizeStock, reports.consumption);
+router.get('/reports/recall/:query',  authenticate, authorizeStock, reports.recall);
+router.get('/reports/disposal',       authenticate, authorizeStock, reports.disposal);
+router.get('/reports/fefo-overrides', authenticate, authorizeStock, reports.fefoOverrides);
 
 // ---------- Admin maintenance ----------
 router.post('/levels/rebuild', authenticate, authorize('admin'), movements.rebuild);
