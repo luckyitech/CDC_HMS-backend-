@@ -4,7 +4,7 @@ const { resolvePatient } = require('../utils/patientFamily');
 const { code128Png } = require('../utils/code128png');
 const { sendPatientBarcodeEmail } = require('../utils/emailService');
 
-const { Patient, BarcodeScan } = db;
+const { Patient, BarcodeScan, User } = db;
 
 // Normalise a scanned payload.
 const normalise = (raw) => String(raw || '').trim().toUpperCase();
@@ -121,6 +121,15 @@ const emailBarcode = async (req, res) => {
 
     const png = code128Png(patient.uhid);
 
+    // Treating doctor for the card (nullable — omitted from the email if unset).
+    let doctorName = null;
+    if (patient.primaryDoctorId) {
+      const doc = await User.findByPk(patient.primaryDoctorId, {
+        attributes: ['firstName', 'lastName'],
+      });
+      if (doc) doctorName = `Dr. ${doc.firstName} ${doc.lastName}`;
+    }
+
     // Same fire-and-forget contract as the welcome emails: sendEmail logs
     // failures rather than throwing, so a mail outage never breaks the UI.
     await sendPatientBarcodeEmail({
@@ -128,6 +137,7 @@ const emailBarcode = async (req, res) => {
       name:    `${patient.firstName} ${patient.lastName}`,
       uhid:    patient.uhid,
       dob:     patient.dateOfBirth,
+      doctor:  doctorName,
       pngBuffer: png,
     });
 

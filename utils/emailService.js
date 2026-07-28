@@ -1,5 +1,6 @@
 const nodemailer = require('nodemailer');
 const path = require('path');
+const { code128Png } = require('./code128png');
 
 const LOGO_PATH = path.join(__dirname, '../logo/cdc.jpg');
 
@@ -133,6 +134,37 @@ const infoBanner = (text) => `
 `;
 
 // ============================================================
+// HELPER — patient identification barcode
+// Every patient-facing email (welcome, email-updated, appointment
+// confirmations/cancellations, and any FUTURE reminder emails) should
+// include barcodeBlock(uhid) in the body and barcodeAttachment(uhid)
+// as the sendEmail extraAttachments — the patient can then be
+// identified at reception from any email we have ever sent them.
+// ============================================================
+const barcodeBlock = (uhid) => `
+  <table width="100%" cellpadding="0" cellspacing="0" style="margin-top:28px;">
+    <tr>
+      <td align="center" style="background-color:#FFFFFF;border:2px solid #E5E7EB;border-radius:12px;padding:18px;">
+        <p style="margin:0 0 8px 0;font-size:12px;color:#6B7280;">Show this barcode at reception to be identified instantly</p>
+        <img src="cid:patientbarcode" alt="Barcode ${uhid}" style="max-width:100%;height:auto;display:block;margin:0 auto;" />
+        <p style="margin:8px 0 0 0;font-family:monospace;font-size:15px;letter-spacing:3px;color:#111827;">${uhid}</p>
+      </td>
+    </tr>
+  </table>
+`;
+
+// cid attachment for barcodeBlock — [] if generation fails: an email must
+// never fail because of its barcode.
+const barcodeAttachment = (uhid) => {
+  try {
+    return [{ filename: `${uhid}-barcode.png`, content: code128Png(uhid), cid: 'patientbarcode' }];
+  } catch (err) {
+    console.warn('[EmailService] barcode generation failed:', err.message);
+    return [];
+  }
+};
+
+// ============================================================
 // SEND — base function (all emails go through here)
 // ============================================================
 const sendEmail = async (to, subject, html, extraAttachments = []) => {
@@ -212,10 +244,12 @@ const sendPatientWelcomeEmail = async ({ to, name, uhid, tempPassword }) => {
       <li>Access your lab results and medical documents</li>
     </ul>
 
+    ${barcodeBlock(uhid)}
+
     ${infoBanner('<strong>Important:</strong> This is a temporary password. To change it, go to the patient portal login page and click <strong>"Forgot Password"</strong>, then follow the instructions sent to this email address. Keep your account secure — do not share this password with anyone.')}
   `;
 
-  await sendEmail(to, 'Welcome to CDC HMS — Your Patient Portal Account', baseTemplate(body));
+  await sendEmail(to, 'Welcome to CDC HMS — Your Patient Portal Account', baseTemplate(body), barcodeAttachment(uhid));
 };
 
 // ============================================================
@@ -237,10 +271,12 @@ const sendEmailUpdatedEmail = async ({ to, name, uhid }) => {
 
     ${primaryButton('Access Patient Portal', `${FRONTEND_URL}/login/patient`)}
 
+    ${barcodeBlock(uhid)}
+
     ${infoBanner('Your password has not changed. If you did not expect this update or need assistance, please contact the clinic directly.')}
   `;
 
-  await sendEmail(to, 'CDC HMS — Your Login Email Has Been Updated', baseTemplate(body));
+  await sendEmail(to, 'CDC HMS — Your Login Email Has Been Updated', baseTemplate(body), barcodeAttachment(uhid));
 };
 
 // ============================================================
@@ -279,7 +315,7 @@ const sendPasswordResetEmail = async ({ to, name, resetToken }) => {
 // EMAIL: Appointment Confirmation — Patient
 // Called when a patient successfully books an appointment
 // ============================================================
-const sendAppointmentConfirmationEmail = async ({ to, patientName, doctorName, specialty, date, timeSlot, appointmentType, appointmentNumber, reason }) => {
+const sendAppointmentConfirmationEmail = async ({ to, patientName, doctorName, specialty, date, timeSlot, appointmentType, appointmentNumber, reason, uhid }) => {
   const formattedDate = fmtDate(date);
 
   const body = `
@@ -298,10 +334,12 @@ const sendAppointmentConfirmationEmail = async ({ to, patientName, doctorName, s
       ${reason ? credentialRow('Reason', reason) : ''}
     </table>
 
+    ${uhid ? barcodeBlock(uhid) : ''}
+
     ${infoBanner('Please arrive 10 minutes before your scheduled time. To cancel or reschedule, log in to the patient portal.')}
   `;
 
-  await sendEmail(to, `Appointment Confirmed — ${formattedDate} at ${timeSlot}`, baseTemplate(body));
+  await sendEmail(to, `Appointment Confirmed — ${formattedDate} at ${timeSlot}`, baseTemplate(body), uhid ? barcodeAttachment(uhid) : []);
 };
 
 // ============================================================
@@ -337,7 +375,7 @@ const sendDoctorAppointmentNotificationEmail = async ({ to, doctorName, patientN
 // EMAIL: Appointment Cancellation — Patient
 // Called when an appointment is cancelled
 // ============================================================
-const sendAppointmentCancellationEmail = async ({ to, patientName, doctorName, date, timeSlot, appointmentType, appointmentNumber }) => {
+const sendAppointmentCancellationEmail = async ({ to, patientName, doctorName, date, timeSlot, appointmentType, appointmentNumber, uhid }) => {
   const formattedDate = fmtDate(date);
 
   const body = `
@@ -365,10 +403,12 @@ const sendAppointmentCancellationEmail = async ({ to, patientName, doctorName, d
       </tr>
     </table>
 
+    ${uhid ? barcodeBlock(uhid) : ''}
+
     ${infoBanner('Need to reschedule? Log in to the patient portal to book a new appointment at your convenience.')}
   `;
 
-  await sendEmail(to, `Appointment Cancelled — ${formattedDate} at ${timeSlot}`, baseTemplate(body));
+  await sendEmail(to, `Appointment Cancelled — ${formattedDate} at ${timeSlot}`, baseTemplate(body), uhid ? barcodeAttachment(uhid) : []);
 };
 
 // ============================================================
@@ -414,9 +454,13 @@ const sendDoctorAppointmentCancellationEmail = async ({ to, doctorName, patientN
 // server-side (utils/code128png) and embedded inline via cid;
 // it is also attached so the patient can save or print it.
 // ============================================================
-const sendPatientBarcodeEmail = async ({ to, name, uhid, dob, pngBuffer }) => {
+const sendPatientBarcodeEmail = async ({ to, name, uhid, dob, doctor, pngBuffer }) => {
   const dobRow = dob
     ? credentialRow('Date of Birth', new Date(dob).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }))
+    : '';
+
+  const doctorRow = doctor
+    ? credentialRow('Doctor', doctor)
     : '';
 
   const body = `
@@ -430,6 +474,7 @@ const sendPatientBarcodeEmail = async ({ to, name, uhid, dob, pngBuffer }) => {
     <table width="100%" cellpadding="0" cellspacing="0">
       ${credentialRow('Patient ID (UHID)', monoBlue(uhid))}
       ${dobRow}
+      ${doctorRow}
     </table>
 
     <table width="100%" cellpadding="0" cellspacing="0" style="margin-top:24px;">
