@@ -8,6 +8,7 @@ const patientController          = require('../controllers/patientController');
 const bloodSugarController       = require('../controllers/bloodSugarController');
 const equipmentController        = require('../controllers/equipmentController');
 const careLinkPartnerController  = require('../controllers/careLinkPartnerController');
+const barcodeController          = require('../controllers/barcodeController');
 
 // ------------------------------------
 // POST /api/patients — create patient (full registration)
@@ -55,6 +56,18 @@ router.post('/merge', authenticate, authorize('admin'), [
   body('discardUhid').notEmpty().withMessage('discardUhid is required'),
   validate,
 ], patientController.mergePatients);
+
+// ------------------------------------
+// GET /api/patients/scan/:payload — resolve a scanned barcode (merge-aware)
+// MUST be before /:uhid so scan is not treated as a uhid.
+// Lab included now so lab-side scanning needs no route change later.
+// ------------------------------------
+router.get('/scan/:payload', authenticate, authorize('staff', 'admin', 'doctor', 'lab'), barcodeController.resolveScan);
+
+// ------------------------------------
+// POST /api/patients/:uhid/barcode-email — email the patient their barcode card
+// ------------------------------------
+router.post('/:uhid/barcode-email', authenticate, authorize('staff', 'admin', 'doctor'), findPatient, barcodeController.emailBarcode);
 
 // ------------------------------------
 // PATCH /api/patients/:uhid/reactivate — admin: undo a merge and restore an inactive patient

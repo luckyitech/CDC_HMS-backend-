@@ -135,7 +135,7 @@ const infoBanner = (text) => `
 // ============================================================
 // SEND — base function (all emails go through here)
 // ============================================================
-const sendEmail = async (to, subject, html) => {
+const sendEmail = async (to, subject, html, extraAttachments = []) => {
   try {
     await transporter.sendMail({
       from: `CDC HMS <${process.env.SMTP_USER}>`,
@@ -146,7 +146,7 @@ const sendEmail = async (to, subject, html) => {
         filename: "cdc.jpg",
         path: LOGO_PATH,
         cid: "cdclogo",
-      }],
+      }, ...extraAttachments],
     });
   } catch (err) {
     // Log but don't crash the request — email failure should never block account creation
@@ -408,6 +408,52 @@ const sendDoctorAppointmentCancellationEmail = async ({ to, doctorName, patientN
 };
 
 // ============================================================
+// EMAIL: Patient Barcode Card
+// Called when staff / doctor / admin emails a patient their
+// identification barcode. The Code128 PNG is rendered
+// server-side (utils/code128png) and embedded inline via cid;
+// it is also attached so the patient can save or print it.
+// ============================================================
+const sendPatientBarcodeEmail = async ({ to, name, uhid, dob, pngBuffer }) => {
+  const dobRow = dob
+    ? credentialRow('Date of Birth', new Date(dob).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }))
+    : '';
+
+  const body = `
+    <h2 style="margin:0 0 8px 0;font-size:20px;color:#111827;">Your Patient Identification Card</h2>
+    <p style="margin:0 0 24px 0;font-size:14px;color:#6B7280;">
+      Hi <strong>${name}</strong>, this is your identification barcode for the
+      <strong>Comprehensive Diabetes Centre</strong>. Show it at reception &mdash;
+      on your phone or printed &mdash; and we'll find your record instantly.
+    </p>
+
+    <table width="100%" cellpadding="0" cellspacing="0">
+      ${credentialRow('Patient ID (UHID)', monoBlue(uhid))}
+      ${dobRow}
+    </table>
+
+    <table width="100%" cellpadding="0" cellspacing="0" style="margin-top:24px;">
+      <tr>
+        <td align="center" style="background-color:#FFFFFF;border:2px solid #E5E7EB;border-radius:12px;padding:24px;">
+          <img src="cid:patientbarcode" alt="Barcode ${uhid}" style="max-width:100%;height:auto;display:block;margin:0 auto;" />
+          <p style="margin:10px 0 0 0;font-family:monospace;font-size:16px;letter-spacing:3px;color:#111827;">${uhid}</p>
+        </td>
+      </tr>
+    </table>
+
+    ${infoBanner('Keep this email &mdash; the barcode does not expire. The attached image can be saved to your phone or printed. This code only identifies you at the clinic; it cannot be used to access your medical records.')}
+  `;
+
+  await sendEmail(to, 'CDC HMS — Your Patient Identification Barcode', baseTemplate(body), [
+    {
+      filename: `${uhid}-barcode.png`,
+      content: pngBuffer,
+      cid: 'patientbarcode',
+    },
+  ]);
+};
+
+// ============================================================
 // EXPORTS
 // ============================================================
 module.exports = {
@@ -419,4 +465,5 @@ module.exports = {
   sendDoctorAppointmentNotificationEmail,
   sendAppointmentCancellationEmail,
   sendDoctorAppointmentCancellationEmail,
+  sendPatientBarcodeEmail,
 };

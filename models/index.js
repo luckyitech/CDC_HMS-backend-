@@ -33,6 +33,7 @@ const Glp1SideEffect         = require('./Glp1SideEffect');
 const Glp1Administration     = require('./Glp1Administration');
 const CatalogItem         = require('./CatalogItem');
 const Setting             = require('./Setting');
+const BarcodeScan         = require('./BarcodeScan');
 
 // =============================================
 // ASSOCIATIONS
@@ -187,6 +188,12 @@ Glp1Administration.belongsTo(User, { as: 'administeredByUser', foreignKey: 'admi
 Glp1Therapy.belongsTo(Glp1Therapy, { as: 'switchedFrom', foreignKey: 'switchedFromTherapyId' });
 Glp1Therapy.hasOne  (Glp1Therapy, { as: 'switchedTo',   foreignKey: 'switchedFromTherapyId' });
 
+// --- Barcode scan audit (append-only) ---
+Patient.hasMany(BarcodeScan);
+BarcodeScan.belongsTo(Patient);
+User.hasMany(BarcodeScan, { foreignKey: 'scannedBy', as: 'barcodeScans' });
+BarcodeScan.belongsTo(User, { foreignKey: 'scannedBy', as: 'scannedByUser' });
+
 // =============================================
 // EXPORTS
 // =============================================
@@ -224,6 +231,7 @@ const db = {
   Glp1Administration,
   CatalogItem,
   Setting,
+  BarcodeScan,
 };
 
 module.exports = db;
