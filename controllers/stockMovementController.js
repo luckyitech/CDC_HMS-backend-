@@ -11,7 +11,7 @@ const {
 
 const {
   sequelize, StockItem, StockBatch, StockMovement, StockLevel, StockLocation,
-  Supplier, User,
+  Supplier, User, Patient,
 } = db;
 const { runExpirySweepIfDue } = require('../utils/stockExpirySweep');
 const { resolvePatient } = require('../utils/patientFamily');
@@ -32,6 +32,9 @@ const MOVEMENT_INCLUDE = [
   { model: StockLocation, as: 'fromLocation',   attributes: ['id', 'name'] },
   { model: StockLocation, as: 'toLocation',     attributes: ['id', 'name'] },
   { model: User,          as: 'performedByUser', attributes: ['id', 'firstName', 'lastName'] },
+  // Patient a dispense went to (null on over-the-counter / non-patient rows).
+  // Unaliased belongsTo → the row comes back as movement.Patient.
+  { model: Patient,       attributes: ['id', 'uhid', 'firstName', 'lastName'], required: false },
 ];
 
 // Resolve a batch by id or by its printed label code (scan-first UX).
@@ -316,11 +319,11 @@ const reverse = async (req, res) => {
 // ------------------------------------
 // GET /api/stock/movements — the filterable history (straight SQL over the
 // ledger). Filters: itemId, batchId, locationId (from OR to), type,
-// performedById, from, to (dates), page, limit.
+// performedById, uhid (patient), from, to (dates), page, limit.
 // ------------------------------------
 const listMovements = async (req, res) => {
   try {
-    const { itemId, batchId, locationId, type, performedById, from, to } = req.query;
+    const { itemId, batchId, locationId, type, performedById, uhid, from, to } = req.query;
     const where = {};
     if (itemId) where.stockItemId = itemId;
     if (batchId) where.stockBatchId = batchId;
@@ -328,6 +331,13 @@ const listMovements = async (req, res) => {
     if (performedById) where.performedById = performedById;
     if (locationId) {
       where[Op.or] = [{ fromLocationId: locationId }, { toLocationId: locationId }];
+    }
+    // Patient filter — merge-aware: a merged-away UHID still finds the family's
+    // movements (reads across family.patientIds).
+    if (uhid) {
+      const family = await resolvePatient(uhid);
+      if (!family) return error(res, 'Patient not found', 404);
+      where.PatientId = { [Op.in]: family.patientIds };
     }
     if (from || to) {
       where.createdAt = {};
@@ -583,6 +593,38 @@ const checkoutDispense = async (req, res) => {
 };
 
 // ------------------------------------
+// GET /api/stock/patient-dispenses?uhid= — every stock item dispensed to a
+// patient (merge-aware), newest first. Drives the "dispensed to this patient"
+// panel on the patient profile. Clinical/reception roles, not authorizeStock —
+// it's patient care context, and only exposes this patient's own rows.
+// ------------------------------------
+const patientDispenses = async (req, res) => {
+  try {
+    const { uhid } = req.query;
+    if (!uhid) return error(res, 'Patient UHID is required');
+
+    const family = await resolvePatient(uhid);
+    if (!family) return error(res, 'Patient not found', 404);
+
+    const rows = await StockMovement.findAll({
+      where: { type: 'dispense', PatientId: { [Op.in]: family.patientIds } },
+      include: [
+        { model: StockItem,  as: 'item',  attributes: ['id', 'name', 'unit'] },
+        { model: StockBatch, as: 'batch', attributes: ['id', 'labelCode', 'batchNo', 'expiryDate'] },
+        { model: User, as: 'performedByUser', attributes: ['id', 'firstName', 'lastName'] },
+      ],
+      order: [['createdAt', 'DESC'], ['id', 'DESC']],
+      limit: 200,
+    });
+
+    return success(res, rows);
+  } catch (err) {
+    console.error('Stock.patientDispenses error:', err);
+    return error(res, 'Failed to load dispensing history', 500);
+  }
+};
+
+// ------------------------------------
 // GET /api/stock/fefo-suggestion?stockItemId=&locationId= — the earliest-
 // expiring batch of an item at a location. Drives the checkout FEFO nudge:
 // the desk compares this against the batch it just scanned. Clinical/reception
@@ -686,6 +728,7 @@ module.exports = {
   dashboard,
   useOptions,
   fefoSuggestion,
+  patientDispenses,
   checkoutDispense,
   rebuild,
 };

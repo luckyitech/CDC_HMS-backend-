@@ -3,7 +3,7 @@ const db = require('../models');
 const { Op } = require('sequelize');
 
 const {
-  StockItem, StockBatch, StockMovement, StockLevel, StockLocation, Supplier, User,
+  StockItem, StockBatch, StockMovement, StockLevel, StockLocation, Supplier, User, Patient,
 } = db;
 
 // Reports — all straight reads over the ledger and levels. No money anywhere.
@@ -14,6 +14,9 @@ const MOVEMENT_INCLUDE = [
   { model: StockLocation, as: 'fromLocation',    attributes: ['id', 'name'] },
   { model: StockLocation, as: 'toLocation',      attributes: ['id', 'name'] },
   { model: User,          as: 'performedByUser', attributes: ['id', 'firstName', 'lastName'] },
+  // Patient a dispense went to — powers the recall report's "who received it"
+  // trail. Unaliased belongsTo → the row comes back as movement.Patient.
+  { model: Patient,       attributes: ['id', 'uhid', 'firstName', 'lastName'], required: false },
 ];
 
 // ------------------------------------
@@ -130,20 +133,37 @@ const recall = async (req, res) => {
     });
     if (!batches.length) return error(res, 'No batch matches that number or label', 404);
 
-    const results = await Promise.all(batches.map(async (b) => ({
-      batch: {
-        id: b.id, labelCode: b.labelCode, batchNo: b.batchNo, expiryDate: b.expiryDate,
-        status: b.status, qtyReceived: b.qtyReceived, receivedAt: b.receivedAt,
-        supplier: b.supplier?.name || null,
-      },
-      item: b.item,
-      currentLocations: (b.levels || []).map((l) => ({ name: l.location?.name, quantity: l.quantity })),
-      movements: await StockMovement.findAll({
+    const results = await Promise.all(batches.map(async (b) => {
+      const movements = await StockMovement.findAll({
         where: { stockBatchId: b.id },
         include: MOVEMENT_INCLUDE,
         order: [['createdAt', 'ASC']],
-      }),
-    })));
+      });
+
+      // "Who received it" — unique patients this batch was dispensed to, with
+      // the total quantity each got. The half that was stubbed for the
+      // patient-linking phase, now live.
+      const byPatient = {};
+      movements.forEach((m) => {
+        if (m.type !== 'dispense' || !m.Patient) return;
+        const p = m.Patient;
+        byPatient[p.id] = byPatient[p.id]
+          || { uhid: p.uhid, name: `${p.firstName} ${p.lastName}`, quantity: 0 };
+        byPatient[p.id].quantity += m.quantity;
+      });
+
+      return {
+        batch: {
+          id: b.id, labelCode: b.labelCode, batchNo: b.batchNo, expiryDate: b.expiryDate,
+          status: b.status, qtyReceived: b.qtyReceived, receivedAt: b.receivedAt,
+          supplier: b.supplier?.name || null,
+        },
+        item: b.item,
+        currentLocations: (b.levels || []).map((l) => ({ name: l.location?.name, quantity: l.quantity })),
+        recipients: Object.values(byPatient),
+        movements,
+      };
+    }));
 
     return success(res, results);
   } catch (err) {

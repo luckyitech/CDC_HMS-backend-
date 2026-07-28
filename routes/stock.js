@@ -61,6 +61,10 @@ router.post('/use', authenticate, authorize('doctor', 'staff', 'admin'), [
 // FEFO suggestion for the checkout nudge — clinical/reception roles.
 router.get('/fefo-suggestion', authenticate, authorize('doctor', 'staff', 'admin'), movements.fefoSuggestion);
 
+// A patient's dispensing history — patient-care context, clinical/reception
+// roles (exposes only this patient's own rows), not authorizeStock.
+router.get('/patient-dispenses', authenticate, authorize('doctor', 'staff', 'admin'), movements.patientDispenses);
+
 // Checkout dispense — reception dispenses the supplies scanned on a patient's
 // discharge charge sheet, patient-linked, in one transaction. Clinical/
 // reception roles, NOT authorizeStock (same rationale as /use).
