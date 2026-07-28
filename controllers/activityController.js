@@ -2,7 +2,7 @@ const { Op } = require('sequelize');
 const { success } = require('../utils/response');
 const db = require('../models');
 
-const { Queue, Patient, MedicalDocument, MedicalEquipment, EquipmentHistory, User, Prescription, LabTest, TreatmentPlan, ConsultationNote, PhysicalExamination, InitialAssessment, UserLoginLog, Appointment, DoctorBlock } = db;
+const { Queue, Patient, MedicalDocument, MedicalEquipment, EquipmentHistory, User, Prescription, LabTest, TreatmentPlan, ConsultationNote, PhysicalExamination, InitialAssessment, UserLoginLog, Appointment, DoctorBlock, BarcodeScan } = db;
 
 // ── Shared event shape ────────────────────────────────────────────────────────
 
@@ -41,6 +41,8 @@ const SUMMARY_KEYS = {
   appointment_booked:      'appointmentBooked',
   appointment_cancelled:   'appointmentCancelled',
   slot_blocked:            'slotBlocked',
+  barcode_scanned:         'barcodeScanned',
+  barcode_generated:       'barcodeGenerated',
 };
 
 const buildSummary = (events) => {
@@ -383,6 +385,46 @@ const getDoctorBlockEvents = async (dateFilter, hasDateFilter) => {
   });
 };
 
+const BARCODE_ACTION_META = {
+  scan:        { type: 'barcode_scanned',   label: 'Scanned Barcode' },
+  print_card:  { type: 'barcode_generated', label: 'Generated Barcode' },
+  print_label: { type: 'barcode_generated', label: 'Generated Barcode' },
+  email:       { type: 'barcode_generated', label: 'Generated Barcode' },
+};
+
+const BARCODE_DETAIL = {
+  print_card:  'ID card printed',
+  print_label: 'File label printed',
+  email:       'Card emailed to patient',
+};
+
+const getBarcodeEvents = async (dateFilter, hasDateFilter) => {
+  const rows = await BarcodeScan.findAll({
+    where: hasDateFilter ? { createdAt: dateFilter } : {},
+    include: [
+      { model: Patient, attributes: ['uhid', 'firstName', 'lastName'] },
+      { model: User, as: 'scannedByUser', attributes: ['firstName', 'lastName', 'role'] },
+    ],
+  });
+
+  return rows.map(r => {
+    const meta = BARCODE_ACTION_META[r.action] || BARCODE_ACTION_META.scan;
+    const role = r.scannedByUser?.role?.toLowerCase() || 'staff';
+    const user = r.scannedByUser
+      ? (role === 'doctor' ? `Dr. ${r.scannedByUser.firstName} ${r.scannedByUser.lastName}` : `${r.scannedByUser.firstName} ${r.scannedByUser.lastName}`)
+      : 'Unknown';
+    const detail = (r.action === 'scan' || !r.action)
+      ? `${r.source === 'camera' ? 'Camera' : 'USB scanner'}${r.redirectedFromUhid ? ` · redirected from ${r.redirectedFromUhid}` : ''}`
+      : BARCODE_DETAIL[r.action] || null;
+    return makeEvent(
+      meta.type, meta.label, user,
+      r.Patient ? `${r.Patient.firstName} ${r.Patient.lastName}` : null,
+      r.Patient ? r.Patient.uhid : r.rawPayload,
+      r.createdAt, detail, role
+    );
+  });
+};
+
 // ── Controller ────────────────────────────────────────────────────────────────
 
 const getActivityLog = async (req, res) => {
@@ -410,6 +452,7 @@ const getActivityLog = async (req, res) => {
     getAppointmentEvents(dateFilter, hasDateFilter),
     getAppointmentCancellationEvents(dateFilter, hasDateFilter),
     getDoctorBlockEvents(dateFilter, hasDateFilter),
+    getBarcodeEvents(dateFilter, hasDateFilter),
   ])).flat();
 
   // Summary uses all events (unfiltered)

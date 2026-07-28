@@ -74,12 +74,13 @@ const resolveScan = async (req, res) => {
 
     // Append-only audit. Non-blocking: a logging failure must not break a scan.
     // resolvedType/PatientId-nullable keep this table reusable when lab,
-    // pharmacy, asset and stock scans go live.
+    // pharmacy, asset and stock scans go live. Feeds the admin Activity Log.
     BarcodeScan.create({
       PatientId:          patient.id,
       scannedBy:          req.user.id,
       rawPayload:         payload,
       resolvedType:       'patient',
+      action:             'scan',
       redirectedFromUhid: redirectedFrom,
       source:             req.query.source === 'camera' ? 'camera' : 'usb',
     }).catch((e) => console.error('Barcode.resolveScan audit error:', e));
@@ -130,6 +131,16 @@ const emailBarcode = async (req, res) => {
       pngBuffer: png,
     });
 
+    // Activity Log event (non-blocking).
+    BarcodeScan.create({
+      PatientId:    patient.id,
+      scannedBy:    req.user.id,
+      rawPayload:   patient.uhid,
+      resolvedType: 'patient',
+      action:       'email',
+      source:       null,
+    }).catch((e) => console.error('Barcode.emailBarcode audit error:', e));
+
     return success(res, { message: `Barcode card sent to ${patient.email}` });
   } catch (err) {
     console.error('Barcode.emailBarcode error:', err);
@@ -137,4 +148,38 @@ const emailBarcode = async (req, res) => {
   }
 };
 
-module.exports = { resolveScan, emailBarcode };
+// ------------------------------------
+// POST /api/patients/:uhid/barcode-event
+// Log a client-side barcode generation (card / label print) so it appears in
+// the admin Activity Log. Printing happens in the browser, so the frontend
+// reports it here. Route uses findPatient.
+// ------------------------------------
+const GENERATE_ACTIONS = ['print_card', 'print_label'];
+
+const logBarcodeGenerated = async (req, res) => {
+  try {
+    if (req.isDeactivated) {
+      return error(res, 'This patient was merged into another record.', 403);
+    }
+    const { action } = req.body;
+    if (!GENERATE_ACTIONS.includes(action)) {
+      return error(res, 'Invalid barcode event action', 400);
+    }
+
+    await BarcodeScan.create({
+      PatientId:    req.patient.id,
+      scannedBy:    req.user.id,
+      rawPayload:   req.patient.uhid,
+      resolvedType: 'patient',
+      action,
+      source:       null,
+    });
+
+    return success(res, { message: 'Logged' });
+  } catch (err) {
+    console.error('Barcode.logBarcodeGenerated error:', err);
+    return error(res, 'Failed to log barcode event', 500);
+  }
+};
+
+module.exports = { resolveScan, emailBarcode, logBarcodeGenerated };

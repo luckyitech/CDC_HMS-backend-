@@ -70,6 +70,11 @@ router.get('/scan/:payload', authenticate, authorize('staff', 'admin', 'doctor',
 router.post('/:uhid/barcode-email', authenticate, authorize('staff', 'admin', 'doctor'), findPatient, barcodeController.emailBarcode);
 
 // ------------------------------------
+// POST /api/patients/:uhid/barcode-event — log a barcode print for the activity log
+// ------------------------------------
+router.post('/:uhid/barcode-event', authenticate, authorize('staff', 'admin', 'doctor'), findPatient, barcodeController.logBarcodeGenerated);
+
+// ------------------------------------
 // PATCH /api/patients/:uhid/reactivate — admin: undo a merge and restore an inactive patient
 // MUST be before /:uhid generic routes
 // ------------------------------------

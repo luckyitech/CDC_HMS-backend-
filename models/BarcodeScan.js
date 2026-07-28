@@ -1,7 +1,8 @@
 const { defineModel, DataTypes } = require('../utils/defineModel');
 
-// Append-only audit of barcode scans. One row per successful resolution.
-// Never updated or deleted.
+// Append-only audit of barcode events — scans AND generations (prints, emails).
+// One row per event. Never updated or deleted. Feeds the admin Activity Log
+// via activityController.getBarcodeEvents.
 // PatientId is association-generated (Patient.hasMany(BarcodeScan) in models/index.js)
 // and points at the RESOLVED canonical patient for patient scans — see
 // redirectedFromUhid for the raw code when it belonged to a merged-away record.
@@ -37,11 +38,20 @@ const BarcodeScan = defineModel('BarcodeScan', {
     defaultValue: null,
   },
 
-  // How the scan arrived. 'camera' reserved for the future in-app camera path.
+  // What happened: 'scan' | 'print_card' | 'print_label' | 'email'.
+  // Plain STRING (not ENUM) so new event kinds need no schema change.
+  action: {
+    type: DataTypes.STRING,
+    allowNull: false,
+    defaultValue: 'scan',
+  },
+
+  // How a scan arrived ('camera' reserved for the future in-app camera path).
+  // null for generation events (prints, emails).
   source: {
     type: DataTypes.ENUM('usb', 'camera'),
-    allowNull: false,
-    defaultValue: 'usb',
+    allowNull: true,
+    defaultValue: null,
   },
 });
 
