@@ -180,7 +180,9 @@ const dispense = async (req, res) => {
     if (!location || location.status !== 'active') return error(res, 'Location not found or retired', 404);
     if (!location.isDispensing) return error(res, `${location.name} is not a dispensing location`);
 
-    // Merge-aware patient attach (optional).
+    // Patient is required on this endpoint — a dispense is a named handover, so
+    // it always traces to a patient (bad-batch recall depends on it).
+    if (!uhid) return error(res, 'A patient is required to dispense — attach the patient');
     const { PatientId } = await resolveOptionalPatient(uhid);
 
     const fefo = await fefoCheck(batch, location.id, fefoOverrideReason);
