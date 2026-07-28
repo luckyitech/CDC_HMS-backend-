@@ -63,8 +63,10 @@ module.exports = {
         references: { model: 'Users', key: 'id' }, onUpdate: 'CASCADE', onDelete: 'RESTRICT',
       },
       // Required by the controller for adjustment, write-offs, reversal and
-      // FEFO overrides.
-      reason: { type: Sequelize.STRING, allowNull: true, defaultValue: null },
+      // FEFO overrides. TEXT — free-text reasons and the concatenated
+      // stocktake string can exceed 255 chars; MySQL 8 strict mode errors
+      // on overflow rather than truncating.
+      reason: { type: Sequelize.TEXT, allowNull: true, defaultValue: null },
       // Set on 'reversal' rows, pointing at the corrected entry.
       reversesMovementId: {
         type: Sequelize.INTEGER, allowNull: true,

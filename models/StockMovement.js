@@ -26,9 +26,12 @@ const StockMovement = defineModel('StockMovement', {
     validate: { min: 1 },
   },
   // Required by the controller for adjustment, write-offs, reversal and FEFO
-  // overrides.
+  // overrides. TEXT (not STRING) to match every other reason/note column in
+  // the codebase — free-text overrides and the concatenated stocktake string
+  // ("Stocktake: <note> (expected 12, counted 10)") can exceed 255 chars, and
+  // MySQL 8's strict mode errors on overflow rather than truncating.
   reason: {
-    type: DataTypes.STRING,
+    type: DataTypes.TEXT,
     defaultValue: null,
   },
 }, {
