@@ -14,6 +14,7 @@ const {
   Supplier, User,
 } = db;
 const { runExpirySweepIfDue } = require('../utils/stockExpirySweep');
+const { resolvePatient } = require('../utils/patientFamily');
 
 // Every action here writes through utils/stockLedger inside one transaction —
 // the append-only ledger and the materialized levels can never disagree.
@@ -511,6 +512,104 @@ const dashboard = async (req, res) => {
 };
 
 // ------------------------------------
+// POST /api/stock/checkout-dispense — reception dispenses the supplies scanned
+// on the discharge/checkout charge sheet, all in ONE transaction, attached to
+// the patient. This is the patient-linked dispensing path (the standalone
+// Dispense tab stays patient-free for over-the-counter collection).
+//
+// Merge-aware: writes family.patient.id and refuses a merged-away/inactive
+// record. Skips the FEFO "earlier batch exists" nag — reception is holding the
+// physical box, so the scanned batch is what goes — but applyMovement still
+// hard-blocks an expired batch and refuses to take a level below zero.
+//
+// Open to reception/clinical roles (staff/admin/doctor), NOT authorizeStock —
+// dispensing at checkout must not require the stock-management flag, same
+// rationale as POST /use.
+// Body: { uhid, lines: [{ stockBatchId, locationId, quantity }] }
+// ------------------------------------
+const checkoutDispense = async (req, res) => {
+  try {
+    const { uhid, lines } = req.body;
+    if (!uhid) return error(res, 'Patient UHID is required');
+    if (!Array.isArray(lines) || lines.length === 0) return error(res, 'No supplies to dispense');
+
+    const family = await resolvePatient(uhid);
+    if (!family) return error(res, 'Patient not found', 404);
+    if (family.isDeactivated) {
+      return error(res, 'This patient record was merged into another. Dispense from the current record.', 403);
+    }
+
+    for (const l of lines) {
+      if (!l.stockBatchId || !l.locationId) return error(res, 'Each supply needs a batch and a location');
+      if (!Number.isInteger(Number(l.quantity)) || Number(l.quantity) < 1) {
+        return error(res, 'Each supply needs a whole quantity of at least 1');
+      }
+    }
+
+    const movements = await sequelize.transaction(async (t) => {
+      const out = [];
+      for (const l of lines) {
+        // FEFO nudge is advisory at the desk (reception holds the box), but a
+        // logged override keeps it honest — if this isn't the earliest-expiring
+        // batch at the location, record why in the FEFO-overrides report.
+        let reason = null;
+        const batch = await StockBatch.findByPk(l.stockBatchId, { transaction: t });
+        if (batch) {
+          const suggestion = await suggestFefoBatch(batch.stockItemId, l.locationId);
+          if (suggestion && suggestion.batch.id !== batch.id) {
+            reason = `FEFO override (checkout): earlier batch ${suggestion.batch.labelCode || suggestion.batch.id}` +
+              (suggestion.batch.expiryDate ? ` exp ${suggestion.batch.expiryDate}` : '');
+          }
+        }
+        out.push(await applyMovement({
+          type: 'dispense',
+          stockBatchId: l.stockBatchId,
+          quantity: l.quantity,
+          fromLocationId: l.locationId,
+          performedById: req.user.id,       // from the JWT, never the client
+          PatientId: family.patient.id,     // merge-aware canonical id
+          reason,
+        }, t));
+      }
+      return out;
+    });
+
+    return success(res, { dispensed: movements.length, movements }, 201);
+  } catch (err) {
+    if (err instanceof LedgerError) return error(res, err.message, err.statusCode);
+    console.error('Stock.checkoutDispense error:', err);
+    return error(res, 'Failed to dispense supplies', 500);
+  }
+};
+
+// ------------------------------------
+// GET /api/stock/fefo-suggestion?stockItemId=&locationId= — the earliest-
+// expiring batch of an item at a location. Drives the checkout FEFO nudge:
+// the desk compares this against the batch it just scanned. Clinical/reception
+// roles (used at checkout), not authorizeStock.
+// ------------------------------------
+const fefoSuggestion = async (req, res) => {
+  try {
+    const { stockItemId, locationId } = req.query;
+    if (!stockItemId || !locationId) return error(res, 'stockItemId and locationId are required');
+    const suggestion = await suggestFefoBatch(Number(stockItemId), Number(locationId));
+    if (!suggestion) return success(res, { suggestion: null });
+    return success(res, {
+      suggestion: {
+        stockBatchId: suggestion.batch.id,
+        labelCode:    suggestion.batch.labelCode,
+        batchNo:      suggestion.batch.batchNo,
+        expiryDate:   suggestion.batch.expiryDate,
+        available:    suggestion.available,
+      },
+    });
+  } catch (err) {
+    console.error('Stock.fefoSuggestion error:', err);
+    return error(res, 'Failed to check FEFO', 500);
+  }
+};
+
+// ------------------------------------
 // GET /api/stock/use-options?locationId= — the data the Record Use flow
 // needs, open to ALL clinical roles (the full levels endpoint stays
 // permission-gated; this returns only what point-of-care recording requires):
@@ -586,5 +685,7 @@ module.exports = {
   listBatches,
   dashboard,
   useOptions,
+  fefoSuggestion,
+  checkoutDispense,
   rebuild,
 };

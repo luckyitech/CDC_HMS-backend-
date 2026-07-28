@@ -58,6 +58,18 @@ router.post('/use', authenticate, authorize('doctor', 'staff', 'admin'), [
   validate,
 ], movements.use);
 
+// FEFO suggestion for the checkout nudge — clinical/reception roles.
+router.get('/fefo-suggestion', authenticate, authorize('doctor', 'staff', 'admin'), movements.fefoSuggestion);
+
+// Checkout dispense — reception dispenses the supplies scanned on a patient's
+// discharge charge sheet, patient-linked, in one transaction. Clinical/
+// reception roles, NOT authorizeStock (same rationale as /use).
+router.post('/checkout-dispense', authenticate, authorize('doctor', 'staff', 'admin'), [
+  body('uhid').notEmpty().withMessage('Patient UHID is required'),
+  body('lines').isArray({ min: 1 }).withMessage('At least one supply line is required'),
+  validate,
+], movements.checkoutDispense);
+
 router.post('/transfer', authenticate, authorizeStock, [
   body('fromLocationId').isInt().withMessage('fromLocationId is required'),
   body('toLocationId').isInt().withMessage('toLocationId is required'),

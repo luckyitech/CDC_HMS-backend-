@@ -86,6 +86,7 @@ const formatItem = (item, position) => {
     doctorNotes:           q.doctorNotes           || null,
     finalCharges:          q.finalCharges          || [],
     finalProcedures:       q.finalProcedures       || [],
+    finalSupplies:         q.finalSupplies         || [],
     dischargeComment:      q.dischargeComment      || null,
     addedBy:               q.addedBy               || null,
     triagedBy:             q.triagedBy             || null,
