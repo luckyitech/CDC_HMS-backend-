@@ -799,9 +799,21 @@ const returnStock = async (req, res) => {
         return error(res, 'Destination location not found or retired', 404);
       }
     } else {
-      destination = await StockLocation.findOne({ where: { kind: FAULTY_BOX_KIND, status: 'active' } });
+      // Self-healing: the Faulty Box is seeded by migration, but create it on
+      // demand if it is ever missing (migration skipped) or reactivate it if an
+      // admin retired it — a return must never fail for lack of a quarantine
+      // location, and end users are never asked to set one up.
+      destination = await StockLocation.findOne({ where: { kind: FAULTY_BOX_KIND } });
       if (!destination) {
-        return error(res, 'No Faulty Box is set up — an admin can add a non-dispensing quarantine location', 400);
+        destination = await StockLocation.create({
+          name: 'Faulty Box',
+          kind: FAULTY_BOX_KIND,
+          isColdChain: false,
+          isDispensing: false,
+          status: 'active',
+        });
+      } else if (destination.status !== 'active') {
+        await destination.update({ status: 'active' });
       }
     }
 
