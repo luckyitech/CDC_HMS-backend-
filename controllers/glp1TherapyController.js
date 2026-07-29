@@ -7,6 +7,7 @@ const {
   buildCustomSchedule, reviewWeeksForSchedule,
 } = require('../utils/glp1Schedule');
 const { buildWeeklySummary } = require('../utils/glp1Summary');
+const { buildReviewStatus } = require('../utils/glp1ReviewStatus');
 // One formatter, many consumers — /full and /api/glp1-reviews must not drift.
 const { formatReview, reviewIncludes } = require('./glp1ReviewController');
 const { formatAdministration, administrationIncludes } = require('./glp1AdministrationController');
@@ -173,8 +174,9 @@ const list = async (req, res) => {
  * minutes per IP, and a doctor opening several patients in a clinic session
  * would otherwise burn through it.
  *
- * Returns the therapy, every active review with its side effects, and the weekly
- * side-effect summary that sits above the entry grid.
+ * Returns the therapy, every active review with its side effects, the weekly
+ * side-effect summary that sits above the entry grid, and whether a planned
+ * doctor review is outstanding.
  *
  * Authorization: doctor, staff
  */
@@ -198,12 +200,17 @@ const getFull = async (req, res) => {
     });
 
     const formattedReviews = reviews.map(formatReview);
+    const formattedTherapy = formatTherapy(therapy);
 
     return success(res, {
-      therapy:         formatTherapy(therapy),
+      therapy:         formattedTherapy,
       reviews:         formattedReviews,
       administrations: administrations.map(formatAdministration),
       summary:         buildWeeklySummary(therapy, formattedReviews),
+      // Whether a planned doctor review is outstanding. Sent from here so the
+      // nurse's triage card and the doctor's tracker read one answer rather
+      // than each deciding for themselves — see utils/glp1ReviewStatus.
+      reviewStatus:    buildReviewStatus(formattedTherapy, formattedReviews),
     });
   } catch (err) {
     console.error('Glp1Therapy.getFull error:', err);
