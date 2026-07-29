@@ -28,7 +28,27 @@ module.exports = {
   async up(queryInterface, Sequelize) {
     const tables = (await queryInterface.showAllTables())
       .map((t) => String(typeof t === 'string' ? t : t.tableName).toLowerCase());
-    if (tables.includes('glp1weeknotes')) return;
+
+    // Guard on the column, not just the table name: server.js runs sync() on
+    // boot, which can create this table from the bare model — without the
+    // association FK columns — before this migration runs. In that state the
+    // table must be repaired, not skipped (see the ...000002 repair migration).
+    if (tables.includes('glp1weeknotes')) {
+      const cols = await queryInterface.describeTable('Glp1WeekNotes');
+      if (cols.Glp1TherapyId && cols.PatientId && cols.authorId) return;
+
+      const [[{ n }]] = await queryInterface.sequelize.query(
+        'SELECT COUNT(*) AS n FROM `Glp1WeekNotes`'
+      );
+      if (Number(n) > 0) {
+        throw new Error(
+          `Glp1WeekNotes is malformed (missing FK columns) but holds ${n} row(s) — ` +
+          'refusing to drop it. Inspect and migrate the rows manually.'
+        );
+      }
+      await queryInterface.dropTable('Glp1WeekNotes');
+      console.log('Glp1WeekNotes was malformed (sync() race) — rebuilding');
+    }
 
     await queryInterface.createTable('Glp1WeekNotes', {
       id: {
