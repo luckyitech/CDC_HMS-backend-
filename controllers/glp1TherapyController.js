@@ -10,10 +10,11 @@ const { buildWeeklySummary } = require('../utils/glp1Summary');
 // One formatter, many consumers — /full and /api/glp1-reviews must not drift.
 const { formatReview, reviewIncludes } = require('./glp1ReviewController');
 const { formatAdministration, administrationIncludes } = require('./glp1AdministrationController');
+const { formatNote, noteIncludes } = require('./glp1WeekNoteController');
 const db = require('../models');
 
 const {
-  sequelize, Glp1Therapy, Glp1Review, Glp1Administration, Patient, User,
+  sequelize, Glp1Therapy, Glp1Review, Glp1Administration, Glp1WeekNote, Patient, User,
 } = db;
 
 // The standard monitoring schedule. Doctors add weeks per patient on top of this.
@@ -197,12 +198,19 @@ const getFull = async (req, res) => {
       order: [['weekNumber', 'ASC']],
     });
 
+    const weekNotes = await Glp1WeekNote.findAll({
+      where: { Glp1TherapyId: therapy.id, status: 'active' },
+      include: noteIncludes,
+      order: [['weekNumber', 'ASC'], ['id', 'ASC']],
+    });
+
     const formattedReviews = reviews.map(formatReview);
 
     return success(res, {
       therapy:         formatTherapy(therapy),
       reviews:         formattedReviews,
       administrations: administrations.map(formatAdministration),
+      weekNotes:       weekNotes.map(formatNote),
       summary:         buildWeeklySummary(therapy, formattedReviews),
     });
   } catch (err) {

@@ -31,6 +31,7 @@ const Glp1Review             = require('./Glp1Review');
 const Glp1SideEffectCatalog  = require('./Glp1SideEffectCatalog');
 const Glp1SideEffect         = require('./Glp1SideEffect');
 const Glp1Administration     = require('./Glp1Administration');
+const Glp1WeekNote           = require('./Glp1WeekNote');
 const CatalogItem         = require('./CatalogItem');
 const Setting             = require('./Setting');
 const BarcodeScan         = require('./BarcodeScan');
@@ -188,6 +189,16 @@ Glp1Administration.belongsTo(User, { as: 'administeredByUser', foreignKey: 'admi
 Glp1Therapy.belongsTo(Glp1Therapy, { as: 'switchedFrom', foreignKey: 'switchedFromTherapyId' });
 Glp1Therapy.hasOne  (Glp1Therapy, { as: 'switchedTo',   foreignKey: 'switchedFromTherapyId' });
 
+// Per-week notes — the nurse's injection note and the doctor's clinical note,
+// both shown against the same week. Separate from an administration's
+// missed/omitted reason. Soft-deleted, never overwritten.
+Glp1Therapy.hasMany(Glp1WeekNote);
+Glp1WeekNote.belongsTo(Glp1Therapy);
+Patient.hasMany(Glp1WeekNote);                                                // PatientId denormalised
+Glp1WeekNote.belongsTo(Patient);                                              //   for merge-aware reads
+Glp1WeekNote.belongsTo(User, { as: 'author',        foreignKey: 'authorId'  }); // from the JWT
+Glp1WeekNote.belongsTo(User, { as: 'deletedByUser', foreignKey: 'deletedBy' });
+
 // --- Barcode scan audit (append-only) ---
 Patient.hasMany(BarcodeScan);
 BarcodeScan.belongsTo(Patient);
@@ -229,6 +240,7 @@ const db = {
   Glp1SideEffectCatalog,
   Glp1SideEffect,
   Glp1Administration,
+  Glp1WeekNote,
   CatalogItem,
   Setting,
   BarcodeScan,

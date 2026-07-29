@@ -56,6 +56,7 @@ app.use('/api/glp1-medications',   require('./routes/glp1Medications'));
 app.use('/api/glp1-therapies',     require('./routes/glp1Therapies'));
 app.use('/api/glp1-reviews',       require('./routes/glp1Reviews'));
 app.use('/api/glp1-administrations', require('./routes/glp1Administrations'));
+app.use('/api/glp1-week-notes',    require('./routes/glp1WeekNotes'));
 app.use('/api/glp1-symptoms',      require('./routes/glp1Symptoms'));
 app.use('/api/appointments',       require('./routes/appointments'));
 app.use('/api/doctor-blocks',      require('./routes/doctorBlocks'));
