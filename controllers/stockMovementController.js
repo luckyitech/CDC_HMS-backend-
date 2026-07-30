@@ -22,10 +22,13 @@ const { resolvePatient } = require('../utils/patientFamily');
 // the append-only ledger and the materialized levels can never disagree.
 
 // Translate ledger validation failures into clean 400s; anything else is a 500.
-const handleErr = (label) => (res, err) => {
+//
+// `action` completes the sentence "Failed to …". Deriving it from the handler
+// name produced things like "Failed to adjustment" and "Failed to writeoff".
+const handleErr = (label, action) => (res, err) => {
   if (err instanceof LedgerError) return error(res, err.message, err.statusCode);
   console.error(`Stock.${label} error:`, err);
-  return error(res, `Failed to ${label.replace(/([A-Z])/g, ' $1').toLowerCase()}`, 500);
+  return error(res, `Failed to ${action}`, 500);
 };
 
 const MOVEMENT_INCLUDE = [
@@ -65,15 +68,46 @@ const fefoOverrideReasonFor = async (batch, locationId, label) => {
   return null;
 };
 
-// Resolve a location that stock is allowed to leave from, or throw a clean
-// LedgerError. The ONE definition of the quarantine rule, shared by /dispense,
-// /use and /checkout-dispense.
+// ------------------------------------
+// Location resolution. Three rules, one place each, because the direction
+// stock is moving decides which one applies:
 //
-// It has to be shared: the rule was previously inlined per endpoint and /use
-// never got a copy, so returned faulty stock could be used on a patient
-// straight out of the Faulty Box — the single thing a non-dispensing location
-// exists to prevent. A new dispensing path should call this rather than
-// re-deriving it.
+//   stock LEAVING  — the location need only exist. A retired location must
+//                    still be emptiable, or retiring one strands its contents
+//                    forever.
+//   stock ARRIVING — the location must still be in service. Stock allowed into
+//                    a retired location is invisible on every screen that
+//                    filters to active locations: lost, in effect.
+//   stock LEAVING WITH A PATIENT — must also be a dispensing location.
+//
+// Before this, transfer/adjustment/writeoff validated nothing: an unknown
+// locationId surfaced as a raw foreign-key 500, and a transfer INTO a retired
+// location was accepted outright.
+// ------------------------------------
+
+const resolveSourceLocation = async (locationId) => {
+  const location = await StockLocation.findByPk(locationId);
+  if (!location) throw new LedgerError('Location not found', 404);
+  return location;
+};
+
+const resolveDestinationLocation = async (locationId) => {
+  const location = await StockLocation.findByPk(locationId);
+  if (!location) throw new LedgerError('Destination location not found', 404);
+  if (location.status !== 'active') {
+    throw new LedgerError(
+      `${location.name} is retired — stock cannot be moved into it. ` +
+      'Choose a location still in use.'
+    );
+  }
+  return location;
+};
+
+// The ONE definition of the quarantine rule, shared by /dispense, /use and
+// /checkout-dispense. It has to be shared: the rule was previously inlined per
+// endpoint and /use never got a copy, so returned faulty stock could be used on
+// a patient straight out of the Faulty Box — the single thing a non-dispensing
+// location exists to prevent.
 const resolveDispensingLocation = async (locationId) => {
   const location = await StockLocation.findByPk(locationId);
   if (!location || location.status !== 'active') {
@@ -181,7 +215,7 @@ const intake = async (req, res) => {
       item: { id: item.id, name: item.name, unit: item.unit },
     }, 201);
   } catch (err) {
-    return handleErr('intake')(res, err);
+    return handleErr('intake', 'receive the stock')(res, err);
   }
 };
 
@@ -229,7 +263,7 @@ const dispense = async (req, res) => {
 
     return success(res, movement, 201);
   } catch (err) {
-    return handleErr('dispense')(res, err);
+    return handleErr('dispense', 'dispense the stock')(res, err);
   }
 };
 
@@ -268,7 +302,7 @@ const use = async (req, res) => {
 
     return success(res, movement, 201);
   } catch (err) {
-    return handleErr('use')(res, err);
+    return handleErr('use', 'record the usage')(res, err);
   }
 };
 
@@ -287,6 +321,11 @@ const transfer = async (req, res) => {
 
     const batch = await findBatch(req.body.stockBatchId, req.body.labelCode);
     if (!batch) return error(res, 'Batch not found', 404);
+
+    // Source may be retired (emptying it is exactly why you'd transfer out);
+    // the destination may not be, or the stock lands somewhere unmanaged.
+    await resolveSourceLocation(fromLocationId);
+    await resolveDestinationLocation(toLocationId);
 
     const fefo = await fefoCheck(batch, fromLocationId, fefoOverrideReason);
     if (fefo?.blocked) {
@@ -309,7 +348,7 @@ const transfer = async (req, res) => {
 
     return success(res, movement, 201);
   } catch (err) {
-    return handleErr('transfer')(res, err);
+    return handleErr('transfer', 'transfer the stock')(res, err);
   }
 };
 
@@ -325,6 +364,11 @@ const adjustment = async (req, res) => {
       return error(res, "direction must be 'increase' or 'decrease'");
     }
 
+    // Counting stock down is allowed anywhere it sits; counting it UP into a
+    // retired location is not, for the same reason a transfer there is not.
+    if (direction === 'increase') await resolveDestinationLocation(locationId);
+    else await resolveSourceLocation(locationId);
+
     const movement = await sequelize.transaction((t) => applyMovement({
       type: 'adjustment',
       stockBatchId,
@@ -337,7 +381,7 @@ const adjustment = async (req, res) => {
 
     return success(res, movement, 201);
   } catch (err) {
-    return handleErr('adjustment')(res, err);
+    return handleErr('adjustment', 'record the adjustment')(res, err);
   }
 };
 
@@ -356,6 +400,10 @@ const writeoff = async (req, res) => {
     const batch = await findBatch(req.body.stockBatchId, req.body.labelCode);
     if (!batch) return error(res, 'Batch not found', 404);
 
+    // Stock leaving, so a retired location is fine — writing off what is left
+    // in one is part of decommissioning it.
+    await resolveSourceLocation(locationId);
+
     const movement = await sequelize.transaction((t) => applyMovement({
       type: `${kind}_writeoff`,
       stockBatchId: batch.id,
@@ -367,7 +415,7 @@ const writeoff = async (req, res) => {
 
     return success(res, movement, 201);
   } catch (err) {
-    return handleErr('writeoff')(res, err);
+    return handleErr('writeoff', 'record the write-off')(res, err);
   }
 };
 
@@ -381,7 +429,7 @@ const reverse = async (req, res) => {
       reverseMovement(req.params.id, req.user.id, req.body.reason, t));
     return success(res, movement, 201);
   } catch (err) {
-    return handleErr('reverse')(res, err);
+    return handleErr('reverse', 'reverse the movement')(res, err);
   }
 };
 
@@ -871,7 +919,7 @@ const returnStock = async (req, res) => {
 
     return success(res, movement, 201);
   } catch (err) {
-    return handleErr('returnStock')(res, err);
+    return handleErr('returnStock', 'record the return')(res, err);
   }
 };
 

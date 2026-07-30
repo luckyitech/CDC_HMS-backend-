@@ -249,6 +249,35 @@ describe('reversal is the only correction', () => {
     assert.equal(await qtyAt(batch.id, store.id), 10, 'a refused double-reversal must not inflate stock');
   });
 
+  test('concurrent reversals of the same movement cannot both apply', async () => {
+    const batch = await stockUp(itemPlain, 100, store);
+    const dispense = await move({ type: 'dispense', stockBatchId: batch.id, quantity: 30, fromLocationId: store.id });
+    assert.equal(await qtyAt(batch.id, store.id), 70);
+
+    // The "already reversed?" check is a read, and under REPEATABLE READ both
+    // transactions take their snapshot before either commits — so both used to
+    // pass it and both applied, crediting the stock twice and inventing 30
+    // units that were never received. A unique index on reversesMovementId is
+    // what actually stops the second one.
+    const attempt = () => db.sequelize.transaction((t) =>
+      reverseMovement(dispense.id, admin.id, 'concurrent', t));
+    const results = await Promise.allSettled([attempt(), attempt(), attempt()]);
+    results.forEach((r) => { if (r.status === 'fulfilled') made.movements.push(r.value.id); });
+
+    const applied = results.filter((r) => r.status === 'fulfilled').length;
+    assert.equal(applied, 1, 'exactly one reversal may apply');
+    assert.equal(
+      await db.StockMovement.count({ where: { reversesMovementId: dispense.id } }), 1,
+      'exactly one reversal row may exist'
+    );
+    assert.equal(await qtyAt(batch.id, store.id), 100, 'no stock may be invented');
+
+    results.filter((r) => r.status === 'rejected').forEach((r) => {
+      assert.ok(r.reason instanceof LedgerError, 'losers get a clean error, not a raw SQL failure');
+      assert.match(r.reason.message, /already been reversed/);
+    });
+  });
+
   test('a reversal cannot itself be reversed', async () => {
     const batch = await stockUp(itemPlain, 10, store);
     const dispense = await move({ type: 'dispense', stockBatchId: batch.id, quantity: 2, fromLocationId: store.id });
@@ -372,6 +401,75 @@ describe('the ledger is authoritative', () => {
 
     assert.equal(await qtyAt(batch.id, store.id), before.store, 'rebuild must recompute from the ledger');
     assert.equal(await qtyAt(batch.id, quarantine.id), before.quar);
+  });
+});
+
+describe('locations are validated by direction of travel', () => {
+  const ctrl = require('../controllers/stockMovementController');
+  const call = async (fn, body) => {
+    const res = { code: 200, body: null };
+    res.status = (c) => { res.code = c; return res; };
+    res.json = (b) => { res.body = b; return res; };
+    await fn({ body, params: {}, query: {}, user: admin }, res);
+    return res;
+  };
+
+  test('an unknown location is a clean 404, not a foreign-key 500', async () => {
+    const batch = await stockUp(itemPlain, 20, store);
+    const missing = 99999999;
+
+    for (const [label, res] of [
+      ['transfer', await call(ctrl.transfer, { stockBatchId: batch.id, fromLocationId: store.id, toLocationId: missing, quantity: 1 })],
+      ['adjustment', await call(ctrl.adjustment, { stockBatchId: batch.id, locationId: missing, direction: 'increase', quantity: 1, reason: 'x' })],
+      ['writeoff', await call(ctrl.writeoff, { stockBatchId: batch.id, locationId: missing, kind: 'damage', quantity: 1, reason: 'x' })],
+    ]) {
+      assert.equal(res.code, 404, `${label} should 404, got ${res.code}`);
+      assert.doesNotMatch(res.body?.message || '', /Failed to/, `${label} leaked an internal error`);
+    }
+  });
+
+  test('stock cannot move INTO a retired location', async () => {
+    const retired = await db.StockLocation.create({
+      name: `${TAG} Retired`, kind: 'store', isColdChain: false, isDispensing: true, status: 'retired',
+    });
+    made.locations.push(retired.id);
+    const batch = await stockUp(itemPlain, 20, store);
+
+    const moved = await call(ctrl.transfer, {
+      stockBatchId: batch.id, fromLocationId: store.id, toLocationId: retired.id, quantity: 1,
+    });
+    assert.equal(moved.code, 400, 'a retired destination hides the stock from every screen');
+    assert.match(moved.body.message, /retired/);
+    assert.equal(await qtyAt(batch.id, retired.id), 0);
+
+    const countedUp = await call(ctrl.adjustment, {
+      stockBatchId: batch.id, locationId: retired.id, direction: 'increase', quantity: 1, reason: 'x',
+    });
+    assert.equal(countedUp.code, 400);
+  });
+
+  test('stock can still be moved OUT of a retired location', async () => {
+    const retired = await db.StockLocation.create({
+      name: `${TAG} Retired Source`, kind: 'store', isColdChain: false, isDispensing: true, status: 'active',
+    });
+    made.locations.push(retired.id);
+    const batch = await stockUp(itemPlain, 10, retired);
+    await retired.update({ status: 'retired' });   // retired with stock still in it
+
+    // Otherwise retiring a room would strand its contents permanently.
+    const out = await call(ctrl.transfer, {
+      stockBatchId: batch.id, fromLocationId: retired.id, toLocationId: store.id, quantity: 4,
+    });
+    assert.equal(out.code, 201, out.body?.message || '');
+    if (out.body?.data?.id) made.movements.push(out.body.data.id);
+
+    const off = await call(ctrl.writeoff, {
+      stockBatchId: batch.id, locationId: retired.id, kind: 'damage', quantity: 6, reason: 'decommissioned',
+    });
+    assert.equal(off.code, 201, off.body?.message || '');
+    if (off.body?.data?.id) made.movements.push(off.body.data.id);
+
+    assert.equal(await qtyAt(batch.id, retired.id), 0, 'the retired room can be fully emptied');
   });
 });
 

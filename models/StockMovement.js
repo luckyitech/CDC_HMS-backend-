@@ -39,6 +39,11 @@ const StockMovement = defineModel('StockMovement', {
     { fields: ['stockItemId', 'createdAt'], name: 'idx_stock_movements_item_created' },
     { fields: ['stockBatchId'],             name: 'idx_stock_movements_batch' },
     { fields: ['type', 'createdAt'],        name: 'idx_stock_movements_type_created' },
+    // A movement may be reversed at most once. Enforced here rather than by a
+    // read-then-write check in reverseMovement, which two concurrent reversals
+    // can both pass under REPEATABLE READ — crediting the stock twice. MySQL
+    // allows repeated NULLs, so ordinary movements are unaffected.
+    { fields: ['reversesMovementId'], unique: true, name: 'unique_reversal_per_movement' },
   ],
 });
 

@@ -404,6 +404,65 @@ process out of memory. Now two grouped `SUM` queries (stock out of a location, s
 into one), returning at most one row per (batch, location): the size of the table being
 rebuilt, not of the history behind it.
 
+---
+
+# Third pass — data integrity
+
+| ID | Severity | Issue |
+|----|----------|-------|
+| INT-1 | **Critical** | Concurrent reversals invent stock that was never received |
+| INT-2 | Medium | Stock can be moved into a retired location and disappear |
+| INT-3 | Low | Unknown location returns a raw 500 with an SQL stack trace |
+
+### INT-1 · Concurrent reversals invent stock — *reproduced*
+
+`reverseMovement` checked for an existing reversal before writing one. That is a
+check-then-act race, and MySQL's default REPEATABLE READ makes it a losing one: both
+transactions take their snapshot before either commits, both see no reversal, and both
+proceed. The `StockLevel` row lock serialises the *writes* but does not invalidate the
+second transaction's stale snapshot.
+
+Reproduced against the dev database: a batch of 100 with a dispense of 30 reversed
+twice ended at **130 units** — thirty that were never received, in the ledger that is
+supposed to be the source of truth. Three concurrent attempts gave three reversals.
+
+This is worse than the level races fixed earlier, because each reversal is individually
+*valid*: nothing goes negative, no constraint complains, and `rebuildLevels()` faithfully
+reproduces the wrong number because the ledger itself is wrong.
+
+No application-level read can close that window, so the invariant now lives in the
+database: a unique index on `reversesMovementId`
+(`migrations/20260730120000-unique-reversal-per-movement.js`). NULL is exempt, so
+ordinary movements are unaffected. `reverseMovement` also locks the movement being
+reversed, and translates the index rejection into the same "already been reversed"
+message the fast path gives.
+
+The migration refuses to run if duplicates already exist rather than failing halfway,
+and says how to resolve them — silently deleting rows from an append-only ledger would
+be worse than stopping.
+
+### INT-2 · Stock can be moved into a retired location
+
+`transfer` and `adjustment` never checked the destination, so stock could be moved into
+a retired location and accepted with a 201. Every screen filters to active locations, so
+those units are then invisible — lost in practice, though the ledger still counts them.
+
+Locations are now validated by direction of travel, which is the distinction that
+matters:
+
+- **arriving** — must be active (`resolveDestinationLocation`)
+- **leaving** — need only exist (`resolveSourceLocation`), because a retired location
+  must still be emptiable or retiring one strands its contents forever
+- **leaving with a patient** — must also be a dispensing location
+
+### INT-3 · Unknown location returned a raw 500
+
+`transfer`, `adjustment` and `writeoff` passed the client's `locationId` straight to the
+ledger, so a bad one surfaced as a `SequelizeForeignKeyConstraintError` — a 500, a stack
+trace in the logs, and "Failed to adjustment" to the user. Now a clean 404. The mangled
+messages came from deriving the text from the handler name; each handler now supplies a
+readable phrase.
+
 ### Deliberately left uncapped
 
 `GET /levels` and `GET /batches` return every matching row with no limit. Adding one

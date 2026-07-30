@@ -190,26 +190,46 @@ const applyMovement = async ({
 // original movement changed.
 // ---------------------------------------------------------------------
 const reverseMovement = async (movementId, performedById, reason, t) => {
-  const original = await StockMovement.findByPk(movementId, { transaction: t });
+  // Lock the movement being reversed, so two reversals of it queue up rather
+  // than running side by side.
+  const original = await StockMovement.findByPk(movementId, {
+    lock: t.LOCK.UPDATE,
+    transaction: t,
+  });
   if (!original) throw new LedgerError('Movement not found', 404);
   if (original.type === 'reversal') throw new LedgerError('A reversal cannot itself be reversed');
 
+  // Fast path for the ordinary case, giving a clean message without waiting for
+  // the database to reject the insert.
   const already = await StockMovement.findOne({
     where: { reversesMovementId: original.id },
     transaction: t,
   });
   if (already) throw new LedgerError('This movement has already been reversed');
 
-  return applyMovement({
-    type: 'reversal',
-    stockBatchId: original.stockBatchId,
-    quantity: original.quantity,
-    fromLocationId: original.toLocationId,   // swapped — undoes the original
-    toLocationId: original.fromLocationId,
-    performedById,
-    reason,
-    reversesMovementId: original.id,
-  }, t);
+  try {
+    return await applyMovement({
+      type: 'reversal',
+      stockBatchId: original.stockBatchId,
+      quantity: original.quantity,
+      fromLocationId: original.toLocationId,   // swapped — undoes the original
+      toLocationId: original.fromLocationId,
+      performedById,
+      reason,
+      reversesMovementId: original.id,
+    }, t);
+  } catch (err) {
+    // The check above cannot be trusted on its own: under REPEATABLE READ two
+    // concurrent reversals both read their snapshot before either commits, both
+    // see no reversal, and both proceed — crediting the stock twice and
+    // inventing units that were never received. The unique index on
+    // reversesMovementId is what actually stops the second one; this turns its
+    // rejection into the same clean message the fast path gives.
+    if (err?.name === 'SequelizeUniqueConstraintError') {
+      throw new LedgerError('This movement has already been reversed');
+    }
+    throw err;
+  }
 };
 
 // ---------------------------------------------------------------------
