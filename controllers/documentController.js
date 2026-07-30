@@ -1,6 +1,7 @@
 const { Op } = require('sequelize');
 const { success, error } = require('../utils/response');
 const { resolvePatient } = require('../utils/patientFamily');
+const { clinicToday } = require('../utils/clinicTime');
 const db = require('../models');
 const fs = require('fs');
 const path = require('path');
@@ -108,7 +109,7 @@ const upload = async (req, res) => {
         return error(res, 'Invalid testDate format. Use YYYY-MM-DD (e.g., 2026-02-10)', 400);
       }
       // Validate date is not in the future (compare as strings to avoid timezone issues)
-      const todayStr = new Date().toISOString().split('T')[0];
+      const todayStr = clinicToday();
       if (testDate > todayStr) {
         fs.unlinkSync(req.file.path);
         return error(res, 'Test date cannot be in the future.', 400);

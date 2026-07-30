@@ -1,5 +1,6 @@
 const { Op } = require('sequelize');
 const { success, error } = require('../utils/response');
+const { clinicDatePlusDays } = require('../utils/clinicTime');
 const db = require('../models');
 
 const { BloodSugarReading } = db;
@@ -94,9 +95,7 @@ const get = async (req, res) => {
     where.date = { [Op.between]: [from, to] };                  // inclusive range
   } else {
     const n      = parseInt(days) || 30;                        // last N days, default 30
-    const cutoff = new Date();
-    cutoff.setDate(cutoff.getDate() - n);
-    where.date   = { [Op.gte]: cutoff.toISOString().split('T')[0] };
+    where.date   = { [Op.gte]: clinicDatePlusDays(-n) };
   }
 
   const readings = await BloodSugarReading.findAll({ where });

@@ -4,6 +4,8 @@
 // Centralized helpers used across multiple controllers
 // to eliminate code duplication and ensure consistency.
 
+const { clinicToday, clinicDatePlusDays } = require('./clinicTime');
+
 // ====================================
 // NAME FORMATTERS
 // ====================================
@@ -54,22 +56,21 @@ const formatUserName = (user) => {
 
 /**
  * Get today's date as ISO string (YYYY-MM-DD)
+ *
+ * The CLINIC's today — see utils/clinicTime. This used to return the UTC date,
+ * so between midnight and 03:00 local the dashboard compared against yesterday
+ * and showed yesterday's appointments and lab results as "today".
+ *
  * @returns {string} Today's date in ISO format
  */
-const getTodayISO = () => {
-  return new Date().toISOString().split('T')[0];
-};
+const getTodayISO = () => clinicToday();
 
 /**
  * Get date N days ago as ISO string (YYYY-MM-DD)
  * @param {number} days - Number of days to go back
  * @returns {string} Date N days ago in ISO format
  */
-const getDaysAgo = (days) => {
-  const date = new Date();
-  date.setDate(date.getDate() - days);
-  return date.toISOString().split('T')[0];
-};
+const getDaysAgo = (days) => clinicDatePlusDays(-days);
 
 /**
  * Get date range for a given period

@@ -1,5 +1,6 @@
 const { Op } = require('sequelize');
 const { success } = require('../utils/response');
+const { clinicToday, clinicStartOfDay } = require('../utils/clinicTime');
 const db = require('../models');
 const { resolvePatient } = require('../utils/patientFamily');
 const sequelize = require('../config/database');
@@ -58,7 +59,7 @@ const formatPatient = (patient, latestVital, nextAppointment = null, lastQueue =
 
   // Derive last visit date from the most recent completed queue entry
   const lastVisitDate = lastQueue
-    ? new Date(lastQueue.createdAt).toISOString().split('T')[0]
+    ? clinicToday(new Date(lastQueue.createdAt))
     : p.lastVisit || null;
 
   return {
@@ -140,7 +141,7 @@ const duplicateIdResponse = (res, idNumber, existing) =>
  * Centralises the repeated Promise.all pattern across create / update / completeRegistration.
  */
 const fetchFullPatient = (patientId) => {
-  const today = new Date().toISOString().split('T')[0];
+  const today = clinicToday();
   return Promise.all([
     Patient.findByPk(patientId, { include: [doctorInclude, mergedIntoInclude] }),
     PatientVital.findOne({
@@ -394,7 +395,7 @@ const list = async (req, res) => {
   });
 
   const patientIds = rows.map(p => p.id);
-  const today      = new Date().toISOString().split('T')[0];
+  const today      = clinicToday();
 
   // Bulk-fetch vitals, next scheduled appointments, and last completed queue visits in parallel
   const [vitals, nextAppts, lastQueues] = await Promise.all([
@@ -649,8 +650,7 @@ const destroy = async (req, res) => {
 // GET /api/patients/stats — aggregate counts
 // ------------------------------------
 const stats = async (req, res) => {
-  const startOfToday = new Date();
-  startOfToday.setHours(0, 0, 0, 0);
+  const startOfToday = clinicStartOfDay();
 
   const [total, active, inactive, highRisk, mediumRisk, lowRisk, type1, type2, registeredToday] =
     await Promise.all([

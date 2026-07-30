@@ -1,5 +1,6 @@
 const { Op, fn, col } = require('sequelize');
 const { success, error } = require('../utils/response');
+const { clinicToday } = require('../utils/clinicTime');
 const db = require('../models');
 
 // Shared utilities — eliminates duplication across controllers
@@ -317,7 +318,7 @@ const getPatientSummary = async (req, res) => {
     const upcomingAppointments = await Appointment.findAll({
       where: {
         PatientId: patient.id,
-        date: { [Op.gte]: new Date().toISOString().split('T')[0] },
+        date: { [Op.gte]: clinicToday() },
         status: { [Op.in]: ['scheduled', 'confirmed'] },
       },
       order: [['date', 'ASC']],

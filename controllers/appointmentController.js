@@ -1,6 +1,7 @@
 const { Op } = require('sequelize');
 const { success, error } = require('../utils/response');
 const { generateNumber } = require('../utils/generateId');
+const { clinicToday } = require('../utils/clinicTime');
 const db = require('../models');
 const {
   sendAppointmentConfirmationEmail,
@@ -227,7 +228,7 @@ const list = async (req, res) => {
   if (date) {
     // Support "today" keyword
     if (date === 'today') {
-      where.date = new Date().toISOString().split('T')[0];
+      where.date = clinicToday();
     } else {
       where.date = date;
     }
@@ -365,7 +366,10 @@ const updateStatus = async (req, res) => {
 
   // Check-in validation — must be today and currently scheduled
   if (newStatus === 'checked-in') {
-    const today = new Date().toISOString().split('T')[0];
+    const today = clinicToday();
+    // NOTE: appointment.date is a DATEONLY. When Sequelize hands it back as a
+    // Date it is midnight UTC of that calendar day, so UTC extraction is the
+    // correct way to read it back — clinicToday() here would shift it a day.
     const appointmentDate = appointment.date instanceof Date
       ? appointment.date.toISOString().split('T')[0]
       : appointment.date;
@@ -446,7 +450,7 @@ const updateStatus = async (req, res) => {
  * Authorization: Doctor, admin
  */
 const stats = async (req, res) => {
-  const today = new Date().toISOString().split('T')[0];
+  const today = clinicToday();
 
   // Total appointments
   const total = await Appointment.count();

@@ -1,6 +1,7 @@
 const { Op } = require('sequelize');
 const { success, error } = require('../utils/response');
 const { resolvePatient } = require('../utils/patientFamily');
+const { clinicToday, clinicClockTime } = require('../utils/clinicTime');
 const db = require('../models');
 
 const { PhysicalExamination, Patient, User } = db;
@@ -147,15 +148,11 @@ const create = async (req, res) => {
 
   const { patient } = family;
 
-  // Step 2: Get current date and time
+  // Step 2: Date and time as the clinic experiences them — the pair has to
+  // agree. This was a UTC date beside a server-local time.
   const now = new Date();
-  const date = now.toISOString().split('T')[0]; // YYYY-MM-DD
-  const time = now.toLocaleTimeString('en-US', {
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-    hour12: false,
-  }); // "14:30:00"
+  const date = clinicToday(now);                                          // YYYY-MM-DD
+  const time = clinicClockTime({ second: '2-digit', hour12: false }, now); // "14:30:00"
 
   // Step 3: Derive TEXT column values from structured data if not provided directly
   let derivedGeneral = generalAppearance;

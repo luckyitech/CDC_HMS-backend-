@@ -1,5 +1,6 @@
 const { Op } = require('sequelize');
 const { success, error } = require('../utils/response');
+const { clinicStartOfDay, clinicMidnight, clinicDatePlusDays } = require('../utils/clinicTime');
 const db = require('../models');
 
 // Reuse existing utilities
@@ -20,13 +21,12 @@ const {
 // ====================================
 // HELPER: Get today's date range for createdAt queries
 // ====================================
-const getTodayDateRange = () => {
-  const todayStart = new Date();
-  todayStart.setHours(0, 0, 0, 0);
-  const tomorrowStart = new Date(todayStart);
-  tomorrowStart.setDate(tomorrowStart.getDate() + 1);
-  return { [Op.gte]: todayStart, [Op.lt]: tomorrowStart };
-};
+// Clinic-local, not server-local: "today's patients" means the clinic's today,
+// which is only the same thing while the server happens to run in clinic time.
+const getTodayDateRange = () => ({
+  [Op.gte]: clinicStartOfDay(),
+  [Op.lt]: clinicMidnight(clinicDatePlusDays(1)),
+});
 
 // ====================================
 // ROLE-SPECIFIC STAT BUILDERS
