@@ -23,6 +23,12 @@
 
 const TABLE = 'StockMovements';
 const INDEX = 'unique_reversal_per_movement';
+// reversesMovementId is a self-referencing foreign key, and MySQL requires an
+// index on it. It will refuse to drop the LAST such index, so down() has to put
+// a plain one in place before removing the unique one — otherwise the rollback
+// fails with "needed in a foreign key constraint" and the migration is
+// effectively irreversible.
+const FALLBACK_INDEX = 'idx_stock_movements_reverses';
 
 const tableExists = async (queryInterface) => {
   const tables = (await queryInterface.showAllTables())
@@ -30,9 +36,9 @@ const tableExists = async (queryInterface) => {
   return tables.includes(TABLE.toLowerCase());
 };
 
-const indexExists = async (queryInterface) => {
+const hasIndex = async (queryInterface, name) => {
   const indexes = await queryInterface.showIndex(TABLE);
-  return indexes.some((i) => i.name === INDEX);
+  return indexes.some((i) => i.name === name);
 };
 
 module.exports = {
@@ -41,7 +47,7 @@ module.exports = {
       console.log(`${TABLE} does not exist yet — skipping`);
       return;
     }
-    if (await indexExists(queryInterface)) {
+    if (await hasIndex(queryInterface, INDEX)) {
       console.log(`${INDEX} already exists — skipping`);
       return;
     }
@@ -68,11 +74,23 @@ module.exports = {
       name: INDEX,
       unique: true,
     });
+
+    // The unique index satisfies the foreign key on its own, so a fallback left
+    // behind by a previous down() is now redundant.
+    if (await hasIndex(queryInterface, FALLBACK_INDEX)) {
+      await queryInterface.removeIndex(TABLE, FALLBACK_INDEX);
+    }
   },
 
   async down(queryInterface) {
     if (!(await tableExists(queryInterface))) return;
-    if (!(await indexExists(queryInterface))) return;
+    if (!(await hasIndex(queryInterface, INDEX))) return;
+
+    // Put a plain index in place BEFORE removing the unique one — MySQL will not
+    // drop the last index backing a foreign key.
+    if (!(await hasIndex(queryInterface, FALLBACK_INDEX))) {
+      await queryInterface.addIndex(TABLE, ['reversesMovementId'], { name: FALLBACK_INDEX });
+    }
     await queryInterface.removeIndex(TABLE, INDEX);
   },
 };
