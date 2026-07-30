@@ -463,6 +463,32 @@ trace in the logs, and "Failed to adjustment" to the user. Now a clean 404. The 
 messages came from deriving the text from the handler name; each handler now supplies a
 readable phrase.
 
+---
+
+# Fourth pass — reference data
+
+The first three passes were all on the ledger and the movement controllers. This one
+covers `stockCatalogController`, which had not been reviewed at all.
+
+### CAT-1 · Retiring a location or item orphans the stock it holds — *reproduced*
+
+Retiring is a status update, and nothing checked whether the row still held stock. Both
+were accepted silently, with different consequences:
+
+- **A retired LOCATION** disappears from every picker, so its contents can no longer be
+  transferred, dispensed or written off through the UI — while still counting towards
+  on-hand totals. Reproduced: 40 units left counted but unreachable.
+- **A retired ITEM** is worse, because the two figures disagree. Its units stay in the
+  ledger and on the Items screen's `totalQuantity`, but `itemsBelowReorder` filters to
+  active items, so it silently drops out of the reorder report. The clinic can be short
+  of something it still stocks and never be told.
+
+Both are now refused with a 409 naming the quantity, so the stock has to be moved or
+written off first. The guard fires only on the transition to `retired` — ordinary edits,
+and re-retiring something already retired, are unaffected. Wired into the shared CRUD
+factory as a `stockHeld` hook, so a future reference table gets it by declaring one
+function.
+
 ### Deliberately left uncapped
 
 `GET /levels` and `GET /batches` return every matching row with no limit. Adding one

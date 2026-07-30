@@ -25,8 +25,33 @@ const pick = (source, fields) => {
   return out;
 };
 
+// Units still held, for the row about to be retired. `stockHeld` is supplied
+// per model because "stock belonging to this row" is a different join for a
+// location than for an item.
+//
+// Retiring something that still holds stock used to be accepted silently, and
+// the stock was then orphaned: a retired LOCATION disappears from every picker,
+// so its contents can no longer be transferred, dispensed or written off, while
+// still counting towards on-hand totals. A retired ITEM is worse — its units
+// stay in the ledger and on the Items screen, but it drops out of the reorder
+// report, so the clinic can be silently short of something it still stocks.
+//
+// Refusing is the only safe answer: the stock has to be moved or written off
+// deliberately, and only then can the row be retired.
+const stockHeldByLocation = async (locationId) =>
+  (await StockLevel.sum('quantity', { where: { locationId, quantity: { [Op.gt]: 0 } } })) || 0;
+
+const stockHeldByItem = async (stockItemId) => {
+  const levels = await StockLevel.findAll({
+    where: { quantity: { [Op.gt]: 0 } },
+    include: [{ model: StockBatch, as: 'batch', attributes: [], where: { stockItemId }, required: true }],
+    attributes: ['quantity'],
+  });
+  return levels.reduce((n, l) => n + l.quantity, 0);
+};
+
 // Generic list/create/update for a soft-deleted reference table.
-const crudFor = (Model, { label, fields, extraInclude = [], validate = null }) => ({
+const crudFor = (Model, { label, fields, extraInclude = [], validate = null, stockHeld = null }) => ({
   list: async (req, res) => {
     try {
       const where = {};
@@ -83,6 +108,21 @@ const crudFor = (Model, { label, fields, extraInclude = [], validate = null }) =
       if (req.body.status !== undefined) {
         if (!['active', 'retired'].includes(req.body.status)) return error(res, 'Invalid status');
         data.status = req.body.status;
+
+        // Retiring something that still holds stock orphans that stock — see
+        // the note above stockHeldByLocation.
+        if (data.status === 'retired' && row.status !== 'retired' && stockHeld) {
+          const held = await stockHeld(row.id);
+          if (held > 0) {
+            return error(
+              res,
+              `${row.name} still holds ${held} unit(s) of stock. ` +
+              'Move them elsewhere or write them off first — retiring now would leave them ' +
+              'counted but unreachable.',
+              409
+            );
+          }
+        }
       }
       if (data.name !== undefined) {
         data.name = String(data.name).trim();
@@ -130,6 +170,7 @@ const itemsCrud = crudFor(StockItem, {
   fields: ITEM_FIELDS,
   extraInclude: [{ model: CatalogItem, as: 'catalogItem', attributes: ['id', 'name', 'detail', 'drugClass'] }],
   validate: validateItem,
+  stockHeld: stockHeldByItem,
 });
 
 // List items with their clinic-wide total quantity (levels summed through
@@ -183,6 +224,7 @@ const locationsCrud = crudFor(StockLocation, {
   label: 'location',
   fields: LOCATION_FIELDS,
   validate: validateLocation,
+  stockHeld: stockHeldByLocation,
 });
 
 const SUPPLIER_FIELDS = ['name', 'contactPhone', 'contactEmail'];

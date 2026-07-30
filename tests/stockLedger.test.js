@@ -473,6 +473,70 @@ describe('locations are validated by direction of travel', () => {
   });
 });
 
+describe('nothing holding stock can be retired out from under it', () => {
+  const catalog = require('../controllers/stockCatalogController');
+  const ctrl = require('../controllers/stockMovementController');
+  const call = async (fn, req) => {
+    const res = { code: 200, body: null };
+    res.status = (c) => { res.code = c; return res; };
+    res.json = (b) => { res.body = b; return res; };
+    await fn({ query: {}, params: {}, body: {}, user: admin, ...req }, res);
+    return res;
+  };
+
+  test('a location still holding stock cannot be retired', async () => {
+    const room = await db.StockLocation.create({
+      name: `${TAG} Closing Ward`, kind: 'store', isColdChain: false, isDispensing: true, status: 'active',
+    });
+    made.locations.push(room.id);
+    const batch = await stockUp(itemPlain, 40, room);
+
+    // Retiring silently used to be allowed. The room then vanishes from every
+    // picker while its stock still counts as on hand — unreachable, but
+    // inflating the totals the clinic orders against.
+    const blocked = await call(catalog.updateLocation, { params: { id: room.id }, body: { status: 'retired' } });
+    assert.equal(blocked.code, 409);
+    assert.match(blocked.body.message, /still holds 40 unit/);
+    await room.reload();
+    assert.equal(room.status, 'active', 'the refusal must not half-apply');
+
+    // Deal with the stock, and it retires normally.
+    const off = await call(ctrl.writeoff, {
+      body: { stockBatchId: batch.id, locationId: room.id, kind: 'damage', quantity: 40, reason: 'ward closed' },
+    });
+    assert.equal(off.code, 201);
+    if (off.body?.data?.id) made.movements.push(off.body.data.id);
+
+    const allowed = await call(catalog.updateLocation, { params: { id: room.id }, body: { status: 'retired' } });
+    assert.equal(allowed.code, 200);
+  });
+
+  test('an item still in stock cannot be retired', async () => {
+    const item = await db.StockItem.create({
+      name: `${TAG} Discontinued`, category: 'consumable', unit: 'piece', reorderLevel: 5, status: 'active',
+    });
+    made.items.push(item.id);
+    await stockUp(item, 12, store);
+
+    const res = await call(catalog.updateItem, { params: { id: item.id }, body: { status: 'retired' } });
+    assert.equal(res.code, 409, 'a retired item drops out of the reorder report while its stock remains');
+    assert.match(res.body.message, /still holds 12 unit/);
+  });
+
+  test('ordinary edits are unaffected by the guard', async () => {
+    const room = await db.StockLocation.create({
+      name: `${TAG} Busy Ward`, kind: 'store', isColdChain: false, isDispensing: true, status: 'active',
+    });
+    made.locations.push(room.id);
+    await stockUp(itemPlain, 5, room);
+
+    const renamed = await call(catalog.updateLocation, {
+      params: { id: room.id }, body: { name: `${TAG} Busy Ward 2` },
+    });
+    assert.equal(renamed.code, 200, 'the guard must only fire on retirement');
+  });
+});
+
 describe('behaviour under production load', () => {
   test('rebuildLevels sums in SQL and still matches a hand-computed ledger', async () => {
     const room = await db.StockLocation.create({
