@@ -543,3 +543,44 @@ these ever need paginating, the stocktake flow has to be reworked in the same ch
 *(STK-05's question resolved itself: nothing calls `expiringWithinDays` yet —
 `getBatches()` is invoked with no params from `StockAnalyticsTab` — so there was no
 frontend contract to preserve.)*
+
+---
+
+# Sixth pass — the Dispense screen
+
+The stock UI had never been reviewed. Two bugs in `StockDispenseTab.jsx`, the
+scan-to-cart dispensing screen.
+
+### UI-1 · The FEFO warning fires only intermittently
+
+`addScan` assigned the target location inside the `setLines` updater and read it back
+on the next line:
+
+```js
+let targetLocation;
+setLines((prev) => { targetLocation = …; return …; });
+evaluateFefo(batchId, itemId, targetLocation);   // usually still undefined
+```
+
+React only guarantees a state updater runs during render, so by the time
+`evaluateFefo` saw the variable it was normally still `undefined` — and that function
+returns early on a falsy location. The nudge therefore fired only when React happened
+to compute the state eagerly (empty update queue) and silently did nothing otherwise.
+
+A safety warning that works *sometimes* is worse than one that doesn't exist, because
+staff learn to trust it. The location is now derived before the state update, so it
+fires every time.
+
+Note the same call from the location dropdown (`onChange`) always worked — it passes an
+explicit value — which is exactly why the failure would be so hard to pin down.
+
+### UI-2 · The cart can build a list the server must reject whole
+
+Every scan of the same label adds one unit and the `+` button has no ceiling, so the
+cart counts past what the shelf holds. Nothing checked it before submitting, and
+`checkout-dispense` is all-or-nothing — one over-counted line threw away a whole
+correctly-scanned trolley with a single unhelpful message.
+
+The quantity is now checked against the level the scan reported, naming the line at
+fault. The server-side check remains the real guard; this just stops the desk losing
+work to it.
