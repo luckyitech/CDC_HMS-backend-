@@ -1,5 +1,6 @@
 const db = require('../models');
 const { Op } = require('sequelize');
+const { clinicToday } = require('./clinicTime');
 
 const { StockBatch, Setting } = db;
 
@@ -21,7 +22,11 @@ const { StockBatch, Setting } = db;
 const SWEEP_KEY = 'stockExpirySweepDate';
 
 const runExpirySweepIfDue = async () => {
-  const today = new Date().toISOString().slice(0, 10);
+  // Clinic-local date, matching the ledger's isExpired(). These two used to
+  // disagree — the sweep used the UTC date and the ledger used local midnight —
+  // so a batch could be blocked from dispensing on a different day than it was
+  // marked expired.
+  const today = clinicToday();
 
   const [setting] = await Setting.findOrCreate({
     where: { key: SWEEP_KEY },

@@ -2,6 +2,8 @@ const { success, error } = require('../utils/response');
 const db = require('../models');
 const { Op } = require('sequelize');
 const { applyMovement, LedgerError } = require('../utils/stockLedger');
+const { itemLocationTotals } = require('../utils/stockTotals');
+const { clinicToday } = require('../utils/clinicTime');
 
 const {
   sequelize, StockItem, StockBatch, StockLevel, StockLocation, StockParLevel, User,
@@ -9,24 +11,9 @@ const {
 
 // Room balancing: par levels per item per room, the red/amber/green grid,
 // the FEFO restock picklist and per-location stocktakes.
-
-// Shared: current quantity per (item, location), summed across batches.
-const itemLocationTotals = async (locationIds = null) => {
-  const where = { quantity: { [Op.gt]: 0 } };
-  if (locationIds) where.locationId = { [Op.in]: locationIds };
-  const levels = await StockLevel.findAll({
-    where,
-    include: [{ model: StockBatch, as: 'batch', attributes: ['id', 'stockItemId'] }],
-  });
-  const totals = {}; // `${itemId}:${locationId}` → qty
-  levels.forEach((l) => {
-    const itemId = l.batch?.stockItemId;
-    if (!itemId) return;
-    const key = `${itemId}:${l.locationId}`;
-    totals[key] = (totals[key] || 0) + l.quantity;
-  });
-  return totals;
-};
+//
+// Quantity roll-ups come from utils/stockTotals — see the note there on why
+// every derived total lives in one place.
 
 // RAG per the design: below min → red; within the bottom fifth of the
 // min→max range (or exactly at min) → amber; otherwise green.
@@ -124,6 +111,14 @@ const copyParLevels = async (req, res) => {
     if (!fromLocationId || !toLocationId || fromLocationId === toLocationId) {
       return error(res, 'Choose two different locations');
     }
+    // Validate the destination before destroying anything there — setParLevels
+    // checks its location and this did not, so a mistyped id silently wiped the
+    // destination's par levels and left orphan rows pointing at no location.
+    const destination = await StockLocation.findByPk(toLocationId);
+    if (!destination || destination.status !== 'active') {
+      return error(res, 'Destination location not found or retired', 404);
+    }
+
     const source = await StockParLevel.findAll({ where: { locationId: fromLocationId } });
     if (!source.length) return error(res, 'The source room has no par levels to copy');
 
@@ -216,7 +211,7 @@ const restockPlan = async (req, res) => {
     const totals = await itemLocationTotals();
 
     // Source stock per item as FEFO-ordered batch queues (undated last).
-    const today = new Date().toISOString().slice(0, 10);
+    const today = clinicToday();
     const sourceLevels = await StockLevel.findAll({
       where: { locationId: sourceLocationId, quantity: { [Op.gt]: 0 } },
       include: [{
@@ -286,34 +281,69 @@ const restockPlan = async (req, res) => {
 
 // ------------------------------------
 // POST /api/stock/stocktake — one confirmed submission per location.
-// Body: { locationId, counts: [{ stockBatchId, countedQty }], note? }
-// Variances become adjustment movements (ledger rows, reason recorded);
-// matching counts write nothing. Runs in ONE transaction — a failed line
-// rolls the whole count back rather than leaving it half-applied.
+// Body: { locationId, counts: [{ stockBatchId, countedQty }], note?,
+//         mode? 'full' | 'partial', startedAt? }
+//
+// Variances become adjustment movements (ledger rows, reason recorded); matching
+// counts write nothing. Runs in ONE transaction — a failed line rolls the whole
+// count back rather than leaving it half-applied.
+//
+// mode 'full' (the default) reconciles the WHOLE location: a batch the system
+// holds here that was not scanned is recorded as counted zero, because "we
+// looked and it isn't on the shelf" is the finding a stocktake exists to
+// produce. Previously those batches were skipped, so a count could never detect
+// stock that had gone missing without being scanned.
+//
+// mode 'partial' keeps the old behaviour for counting one shelf of a big room:
+// only the submitted batches are touched.
+//
+// startedAt (ISO timestamp of when the counter's list was drawn) protects a
+// delivery that arrives mid-count: stock that landed here after the count began
+// was never on the shelf to be scanned, so zeroing it would erase a legitimate
+// receipt. Those are reported as `arrivedDuringCount` and left alone.
 // ------------------------------------
 const stocktake = async (req, res) => {
   try {
-    const { locationId, counts, note } = req.body;
+    const { locationId, counts, note, mode = 'full', startedAt } = req.body;
     if (!locationId || !Array.isArray(counts) || counts.length === 0) {
       return error(res, 'locationId and counts are required');
     }
-
-    const levels = await StockLevel.findAll({ where: { locationId } });
-    const current = Object.fromEntries(levels.map((l) => [l.stockBatchId, l.quantity]));
+    if (!['full', 'partial'].includes(mode)) {
+      return error(res, "mode must be 'full' or 'partial'");
+    }
+    const cutoff = startedAt ? new Date(startedAt) : null;
+    if (cutoff && Number.isNaN(cutoff.getTime())) {
+      return error(res, 'startedAt must be a valid date');
+    }
 
     const reasonBase = `Stocktake${note ? `: ${String(note).trim()}` : ''}`;
-    const results = { adjusted: 0, unchanged: 0 };
 
-    await sequelize.transaction(async (t) => {
+    const results = await sequelize.transaction(async (t) => {
+      // Read the expected quantities INSIDE the transaction, holding the same
+      // row locks applyMovement takes. Reading them outside meant a dispense
+      // landing between the read and the write made `expected` stale — the
+      // adjustment then moved the ledger to the wrong figure AND recorded a
+      // variance that never happened, which is worse than no variance at all
+      // because the reconciliation reports treat it as fact.
+      const levels = await StockLevel.findAll({
+        where: { locationId },
+        lock: t.LOCK.UPDATE,
+        transaction: t,
+      });
+      const current = Object.fromEntries(levels.map((l) => [l.stockBatchId, l.quantity]));
+      const tally = { adjusted: 0, unchanged: 0, missing: 0, arrivedDuringCount: 0 };
+      const scanned = new Set();
+
       for (const c of counts) {
         const counted = parseInt(c.countedQty, 10);
         if (!Number.isInteger(counted) || counted < 0) {
           throw new LedgerError('Counted quantities must be whole numbers ≥ 0');
         }
+        scanned.add(Number(c.stockBatchId));
         const expected = current[c.stockBatchId] || 0;
         const delta = counted - expected;
         if (delta === 0) {
-          results.unchanged += 1;
+          tally.unchanged += 1;
           continue;
         }
         await applyMovement({
@@ -325,11 +355,48 @@ const stocktake = async (req, res) => {
           performedById: req.user.id,
           reason: `${reasonBase} (expected ${expected}, counted ${counted})`,
         }, t);
-        results.adjusted += 1;
+        tally.adjusted += 1;
       }
+
+      // Full count: whatever the system still holds here that nobody scanned is
+      // not on the shelf. Recording it as counted zero is the whole point of a
+      // full count — it is the only way missing stock ever surfaces.
+      if (mode === 'full') {
+        for (const lvl of levels) {
+          if (lvl.quantity <= 0 || scanned.has(Number(lvl.stockBatchId))) continue;
+
+          // Arrived after the counter drew their list — it was never on the
+          // shelf to scan, so leave it be and say so in the response.
+          if (cutoff && lvl.updatedAt > cutoff) {
+            tally.arrivedDuringCount += 1;
+            continue;
+          }
+
+          await applyMovement({
+            type: 'adjustment',
+            stockBatchId: lvl.stockBatchId,
+            quantity: lvl.quantity,
+            fromLocationId: locationId,
+            performedById: req.user.id,
+            // Same 'expected X, counted Y' shape the inventory report parses,
+            // with the cause spelled out for the variances register.
+            reason: `${reasonBase} (expected ${lvl.quantity}, counted 0 — not scanned during full count)`,
+          }, t);
+          tally.missing += 1;
+        }
+      }
+
+      return tally;
     });
 
-    return success(res, { message: `Stocktake recorded — ${results.adjusted} adjustment(s), ${results.unchanged} matched`, ...results });
+    const parts = [
+      `${results.adjusted} adjustment(s)`,
+      `${results.unchanged} matched`,
+    ];
+    if (results.missing) parts.push(`${results.missing} not found and written down to zero`);
+    if (results.arrivedDuringCount) parts.push(`${results.arrivedDuringCount} arrived mid-count and left untouched`);
+
+    return success(res, { message: `Stocktake recorded — ${parts.join(', ')}`, ...results });
   } catch (err) {
     if (err instanceof LedgerError) return error(res, err.message, err.statusCode);
     console.error('Stock.stocktake error:', err);

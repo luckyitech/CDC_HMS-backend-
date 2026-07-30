@@ -14,6 +14,8 @@ const {
   Supplier, User, Patient,
 } = db;
 const { runExpirySweepIfDue } = require('../utils/stockExpirySweep');
+const { itemsBelowReorder } = require('../utils/stockTotals');
+const { clinicToday, clinicDatePlusDays, clinicStartOfDay } = require('../utils/clinicTime');
 const { resolvePatient } = require('../utils/patientFamily');
 
 // Every action here writes through utils/stockLedger inside one transaction —
@@ -61,6 +63,29 @@ const fefoOverrideReasonFor = async (batch, locationId, label) => {
       (suggestion.batch.expiryDate ? ` exp ${suggestion.batch.expiryDate}` : '');
   }
   return null;
+};
+
+// Resolve a location that stock is allowed to leave from, or throw a clean
+// LedgerError. The ONE definition of the quarantine rule, shared by /dispense,
+// /use and /checkout-dispense.
+//
+// It has to be shared: the rule was previously inlined per endpoint and /use
+// never got a copy, so returned faulty stock could be used on a patient
+// straight out of the Faulty Box — the single thing a non-dispensing location
+// exists to prevent. A new dispensing path should call this rather than
+// re-deriving it.
+const resolveDispensingLocation = async (locationId) => {
+  const location = await StockLocation.findByPk(locationId);
+  if (!location || location.status !== 'active') {
+    throw new LedgerError('Location not found or retired', 404);
+  }
+  if (!location.isDispensing) {
+    throw new LedgerError(
+      `${location.name} is a non-dispensing location — its stock is quarantined. ` +
+      'Transfer it back into normal stock first.'
+    );
+  }
+  return location;
 };
 
 // Resolve a batch by id or by its printed label code (scan-first UX).
@@ -163,8 +188,8 @@ const intake = async (req, res) => {
 // ------------------------------------
 // POST /api/stock/dispense — stock leaves the world with the patient.
 // Body: stockBatchId | labelCode, locationId, quantity, fefoOverrideReason?,
-//       uhid? (optional — attaches the patient who collected it; over-the-
-//       counter collection omits it).
+//       uhid (REQUIRED — a dispense is a named handover, so it always traces to
+//       the patient who collected it; bad-batch recall depends on it).
 // FEFO: if an earlier-expiring batch of the same item sits at this location,
 // respond 409 with the suggestion; the user may resubmit with a reason
 // (logged override — the report reads these).
@@ -176,9 +201,7 @@ const dispense = async (req, res) => {
     const batch = await findBatch(req.body.stockBatchId, req.body.labelCode);
     if (!batch) return error(res, 'Batch not found', 404);
 
-    const location = await StockLocation.findByPk(locationId);
-    if (!location || location.status !== 'active') return error(res, 'Location not found or retired', 404);
-    if (!location.isDispensing) return error(res, `${location.name} is not a dispensing location`);
+    const location = await resolveDispensingLocation(locationId);
 
     // Patient is required on this endpoint — a dispense is a named handover, so
     // it always traces to a patient (bad-batch recall depends on it).
@@ -227,14 +250,17 @@ const use = async (req, res) => {
     const batch = await findBatch(req.body.stockBatchId, req.body.labelCode);
     if (!batch) return error(res, 'Batch not found', 404);
 
+    // This guard was missing entirely — see resolveDispensingLocation.
+    const location = await resolveDispensingLocation(locationId);
+
     const { PatientId } = await resolveOptionalPatient(uhid);
-    const reason = await fefoOverrideReasonFor(batch, locationId, 'use');
+    const reason = await fefoOverrideReasonFor(batch, location.id, 'use');
 
     const movement = await sequelize.transaction((t) => applyMovement({
       type: 'use',
       stockBatchId: batch.id,
       quantity,
-      fromLocationId: locationId,
+      fromLocationId: location.id,
       performedById: req.user.id,
       PatientId,
       reason,
@@ -452,10 +478,14 @@ const listBatches = async (req, res) => {
 
     if (req.query.expiringWithinDays) {
       const days = parseInt(req.query.expiringWithinDays, 10);
-      const horizon = new Date();
-      horizon.setDate(horizon.getDate() + days);
-      where.expiryDate = { [Op.ne]: null, [Op.lte]: horizon.toISOString().slice(0, 10) };
-      where.status = 'active';
+      where.expiryDate = { [Op.ne]: null, [Op.lte]: clinicDatePlusDays(days) };
+      // 'expired' belongs in this list as much as 'active' does: the daily sweep
+      // flips a passed-expiry batch to 'expired', but the stock is still on the
+      // shelf and still has to be found and written off. Filtering to 'active'
+      // alone hid exactly the batches this endpoint exists to surface.
+      // 'depleted' and 'recalled' stay out — the levels join below already
+      // requires quantity > 0, and recalled stock has its own handling.
+      where.status = { [Op.in]: ['active', 'expired'] };
     }
 
     const batches = await StockBatch.findAll({
@@ -491,10 +521,12 @@ const dashboard = async (req, res) => {
     const sweep = await runExpirySweepIfDue()
       .catch((e) => { console.error('Stock.expirySweep error:', e); return { ran: false, newlyExpired: 0 }; });
 
-    const today = new Date();
-    const iso = (d) => d.toISOString().slice(0, 10);
-    const plusDays = (n) => { const d = new Date(today); d.setDate(d.getDate() + n); return d; };
-    const startOfDay = new Date(today.toDateString());
+    // Clinic-local dates, matching the ledger's expiry rule (utils/clinicTime).
+    const today = clinicToday();
+    const d30 = clinicDatePlusDays(30);
+    const d60 = clinicDatePlusDays(60);
+    const d90 = clinicDatePlusDays(90);
+    const startOfDay = clinicStartOfDay();
 
     // Levels joined to batches once; totals derived in JS.
     const levels = await StockLevel.findAll({
@@ -506,18 +538,16 @@ const dashboard = async (req, res) => {
       }, { model: StockLocation, as: 'location', attributes: ['id', 'name'] }],
     });
 
-    const totalsByItem = {};
-    levels.forEach((l) => {
-      const item = l.batch?.item;
-      if (!item) return;
-      totalsByItem[item.id] = totalsByItem[item.id]
-        || { id: item.id, name: item.name, unit: item.unit, reorderLevel: item.reorderLevel, total: 0 };
-      totalsByItem[item.id].total += l.quantity;
-    });
-
     const activeItemCount = await StockItem.count({ where: { status: 'active' } });
-    const itemsBelowReorder = Object.values(totalsByItem)
-      .filter((i) => i.reorderLevel > 0 && i.total <= i.reorderLevel);
+
+    // Shared with the reorder report (utils/stockTotals). This used to iterate
+    // `levels` instead, which silently omitted any item that had run out
+    // everywhere — an item at zero has no level rows — so the card under-counted
+    // exactly the items that needed ordering, and disagreed with the report.
+    // `total` (not `totalQuantity`) is this endpoint's existing field name.
+    const belowReorder = (await itemsBelowReorder()).map((i) => ({
+      id: i.id, name: i.name, unit: i.unit, reorderLevel: i.reorderLevel, total: i.totalQuantity,
+    }));
 
     // Expiry buckets from the held batches (unique per batch).
     const seen = new Set();
@@ -536,10 +566,10 @@ const dashboard = async (req, res) => {
           .filter((x) => x.batch?.id === b.id)
           .map((x) => ({ id: x.location.id, name: x.location.name, quantity: x.quantity })),
       };
-      if (b.expiryDate < iso(today)) buckets.expired.push(entry);
-      else if (b.expiryDate <= iso(plusDays(30))) buckets.d30.push(entry);
-      else if (b.expiryDate <= iso(plusDays(60))) buckets.d60.push(entry);
-      else if (b.expiryDate <= iso(plusDays(90))) buckets.d90.push(entry);
+      if (b.expiryDate < today) buckets.expired.push(entry);
+      else if (b.expiryDate <= d30) buckets.d30.push(entry);
+      else if (b.expiryDate <= d60) buckets.d60.push(entry);
+      else if (b.expiryDate <= d90) buckets.d90.push(entry);
     });
     Object.values(buckets).forEach((arr) => arr.sort((a, b) => (a.expiryDate < b.expiryDate ? -1 : 1)));
 
@@ -550,11 +580,11 @@ const dashboard = async (req, res) => {
     return success(res, {
       cards: {
         activeItems: activeItemCount,
-        itemsBelowReorder: itemsBelowReorder.length,
+        itemsBelowReorder: belowReorder.length,
         batchesExpiring30: buckets.expired.length + buckets.d30.length,
         todaysMovements,
       },
-      itemsBelowReorder,
+      itemsBelowReorder: belowReorder,
       expiry: buckets,
       sweep,   // { ran, newlyExpired } — dashboard banner when batches expired
     });
@@ -599,20 +629,11 @@ const checkoutDispense = async (req, res) => {
       }
     }
 
-    // Non-dispensing locations (e.g. the Faulty Box) quarantine stock — it must
-    // not go out with a patient from there. To re-dispense a returned faulty
-    // item, move it back into normal stock first (a logged transfer with a
-    // reason), then dispense.
+    // Every distinct location is checked BEFORE the transaction opens, so a bad
+    // line fails the whole submission with nothing applied. Same quarantine rule
+    // as /dispense and /use — see resolveDispensingLocation.
     const locIds = [...new Set(lines.map((l) => Number(l.locationId)))];
-    const locs = await StockLocation.findAll({ where: { id: locIds } });
-    const locById = Object.fromEntries(locs.map((l) => [l.id, l]));
-    for (const l of lines) {
-      const loc = locById[Number(l.locationId)];
-      if (!loc || loc.status !== 'active') return error(res, 'A dispensing location was not found or is retired', 404);
-      if (!loc.isDispensing) {
-        return error(res, `${loc.name} is a non-dispensing location — its stock is quarantined and cannot be dispensed`);
-      }
-    }
+    await Promise.all(locIds.map(resolveDispensingLocation));
 
     const movements = await sequelize.transaction(async (t) => {
       const out = [];

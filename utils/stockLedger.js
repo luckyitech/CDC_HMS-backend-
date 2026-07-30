@@ -1,5 +1,6 @@
 const db = require('../models');
 const { Op } = require('sequelize');
+const { clinicToday } = require('./clinicTime');
 
 const { StockItem, StockBatch, StockMovement, StockLevel, StockLocation, sequelize } = db;
 
@@ -44,21 +45,34 @@ class LedgerError extends Error {
   }
 }
 
-const isExpired = (batch) =>
-  !!batch.expiryDate && new Date(batch.expiryDate) < new Date(new Date().toDateString());
+// Expired means the expiry date is BEFORE today at the clinic — stock is good
+// through the whole of its expiry day. Both sides are 'YYYY-MM-DD' strings, so
+// this is a plain lexicographic compare with no timezone conversion (see
+// utils/clinicTime for why that matters).
+const isExpired = (batch) => !!batch.expiryDate && String(batch.expiryDate) < clinicToday();
 
 // ---------------------------------------------------------------------
 // Adjust one StockLevel row inside an open transaction, with a row lock so
 // two people dispensing the last box simultaneously cannot go negative.
 // ---------------------------------------------------------------------
 const adjustLevel = async (stockBatchId, locationId, delta, t) => {
-  // Ensure the row exists (unique index makes concurrent creates safe — the
-  // loser of the race falls through to the locked read below).
-  await StockLevel.findOrCreate({
-    where: { stockBatchId, locationId },
-    defaults: { stockBatchId, locationId, quantity: 0 },
-    transaction: t,
-  }).catch(() => {});
+  // Ensure the row exists. Two concurrent creates are expected and safe — the
+  // unique index rejects the loser, which then falls through to the locked read
+  // below and sees the winner's row.
+  //
+  // ONLY that collision is swallowed. A blanket catch here also hid foreign-key
+  // violations (a bad locationId), validation errors and connection failures,
+  // which then resurfaced as the misleading 'could not be created' below with
+  // the real cause never reaching the logs.
+  try {
+    await StockLevel.findOrCreate({
+      where: { stockBatchId, locationId },
+      defaults: { stockBatchId, locationId, quantity: 0 },
+      transaction: t,
+    });
+  } catch (err) {
+    if (err?.name !== 'SequelizeUniqueConstraintError') throw err;
+  }
 
   const level = await StockLevel.findOne({
     where: { stockBatchId, locationId },
@@ -203,7 +217,7 @@ const reverseMovement = async (movementId, performedById, reason, t) => {
 // batch the system suggests for an item at a location, or null.
 // ---------------------------------------------------------------------
 const suggestFefoBatch = async (stockItemId, locationId) => {
-  const today = new Date().toISOString().slice(0, 10);
+  const today = clinicToday();
   const levels = await StockLevel.findAll({
     where: { locationId, quantity: { [Op.gt]: 0 } },
     include: [{

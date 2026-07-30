@@ -2,6 +2,9 @@ const { success, error } = require('../utils/response');
 const db = require('../models');
 const { Op } = require('sequelize');
 
+const { itemsBelowReorder } = require('../utils/stockTotals');
+const { clinicToday, clinicMonthStart, clinicMidnight } = require('../utils/clinicTime');
+
 const {
   StockItem, StockBatch, StockMovement, StockLevel, StockLocation, Supplier, User, Patient,
 } = db;
@@ -25,29 +28,13 @@ const MOVEMENT_INCLUDE = [
 // ------------------------------------
 const reorder = async (req, res) => {
   try {
-    const items = await StockItem.findAll({
-      where: { status: 'active', reorderLevel: { [Op.gt]: 0 } },
-      attributes: ['id', 'name', 'unit', 'category', 'reorderLevel', 'reorderQuantity'],
-      order: [['name', 'ASC']],
-    });
-
-    const levels = await StockLevel.findAll({
-      where: { quantity: { [Op.gt]: 0 } },
-      include: [{ model: StockBatch, as: 'batch', attributes: ['stockItemId'] }],
-    });
-    const totals = {};
-    levels.forEach((l) => {
-      const id = l.batch?.stockItemId;
-      if (id) totals[id] = (totals[id] || 0) + l.quantity;
-    });
-
-    const rows = items
-      .map((i) => ({ ...i.toJSON(), totalQuantity: totals[i.id] || 0 }))
-      .filter((i) => i.totalQuantity <= i.reorderLevel)
-      .map((i) => ({
-        ...i,
-        suggestedOrder: i.reorderQuantity || Math.max(i.reorderLevel * 2 - i.totalQuantity, i.reorderLevel),
-      }));
+    // The "below reorder" rule lives in utils/stockTotals so the dashboard card
+    // and this report can never disagree again. Only the order suggestion is
+    // this report's own.
+    const rows = (await itemsBelowReorder()).map((i) => ({
+      ...i,
+      suggestedOrder: i.reorderQuantity || Math.max(i.reorderLevel * 2 - i.totalQuantity, i.reorderLevel),
+    }));
 
     return success(res, rows);
   } catch (err) {
@@ -64,10 +51,9 @@ const reorder = async (req, res) => {
 const consumption = async (req, res) => {
   try {
     const months = Math.min(Math.max(parseInt(req.query.months, 10) || 6, 1), 24);
-    const from = new Date();
-    from.setMonth(from.getMonth() - (months - 1));
-    from.setDate(1);
-    from.setHours(0, 0, 0, 0);
+    // The clinic's calendar months — the buckets below are labelled with clinic
+    // dates, so the window they are cut from has to use the same calendar.
+    const from = clinicMidnight(clinicMonthStart(months - 1));
 
     const rows = await StockMovement.findAll({
       where: {
@@ -79,16 +65,17 @@ const consumption = async (req, res) => {
     });
 
     // itemId → { item, months: { 'YYYY-MM': { consumed, writtenOff } } }
+    // Both the column labels and the bucket a movement falls into are the
+    // CLINIC's month. Deriving either from toISOString() put anything recorded
+    // in the small hours of the 1st into the previous month's column.
     const byItem = {};
     const monthKeys = [];
-    for (let i = 0; i < months; i += 1) {
-      const d = new Date(from);
-      d.setMonth(d.getMonth() + i);
-      monthKeys.push(d.toISOString().slice(0, 7));
+    for (let i = months - 1; i >= 0; i -= 1) {
+      monthKeys.push(clinicMonthStart(i).slice(0, 7));
     }
     rows.forEach((m) => {
       if (!m.item) return;
-      const key = new Date(m.createdAt).toISOString().slice(0, 7);
+      const key = clinicToday(new Date(m.createdAt)).slice(0, 7);
       const entry = (byItem[m.item.id] = byItem[m.item.id]
         || { item: m.item, months: Object.fromEntries(monthKeys.map((k) => [k, { consumed: 0, writtenOff: 0 }])) });
       if (!entry.months[key]) entry.months[key] = { consumed: 0, writtenOff: 0 };
@@ -109,9 +96,8 @@ const consumption = async (req, res) => {
 // ------------------------------------
 // GET /api/stock/reports/recall/:query — batch recall trail.
 // Matches manufacturer batch number OR internal label code; returns every
-// matching batch with its full movement history and everywhere it sits now.
-// (The "every patient who received it" half activates with the future
-// patient-linking phase — the schema already carries PatientId.)
+// matching batch with its full movement history, everywhere it sits now, and
+// every patient who received it (both 'dispense' and 'use' — see below).
 // ------------------------------------
 const recall = async (req, res) => {
   try {
@@ -140,11 +126,9 @@ const recall = async (req, res) => {
         order: [['createdAt', 'ASC']],
       });
 
-      // "Who received it" — unique patients this batch was dispensed to, with
-      // the total quantity each got. The half that was stubbed for the
-      // patient-linking phase, now live.
-      // Both 'dispense' (taken home) and 'use' (administered in the room)
-      // count as "received it" for a recall.
+      // "Who received it" — unique patients this batch reached, with the total
+      // quantity each got. Both 'dispense' (taken home) and 'use' (administered
+      // in the room) count as "received it" for a recall.
       const byPatient = {};
       movements.forEach((m) => {
         if (!['dispense', 'use'].includes(m.type) || !m.Patient) return;
@@ -203,9 +187,14 @@ const disposal = movementReport('disposal', () => ({
 }));
 
 // GET /api/stock/reports/fefo-overrides — who bypassed the suggested batch,
-// when and why (dispense/transfer store the override in the reason prefix).
+// when and why (every dispensing path stores the override in the reason prefix).
+//
+// No colon in the pattern: the blocking paths write 'FEFO override: <reason>'
+// but the advisory ones write 'FEFO override (use): …' / '(checkout): …', and
+// matching on the colon dropped those — which was most of them, since use and
+// checkout are the higher-volume paths.
 const fefoOverrides = movementReport('fefoOverrides', () => ({
-  reason: { [Op.like]: 'FEFO override:%' },
+  reason: { [Op.like]: 'FEFO override%' },
 }));
 
 // GET /api/stock/reports/variances — every stock adjustment: stocktake variances
