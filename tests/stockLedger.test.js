@@ -375,6 +375,127 @@ describe('the ledger is authoritative', () => {
   });
 });
 
+describe('behaviour under production load', () => {
+  test('rebuildLevels sums in SQL and still matches a hand-computed ledger', async () => {
+    const room = await db.StockLocation.create({
+      name: `${TAG} Rebuild Room`, kind: 'store', isColdChain: false, isDispensing: true, status: 'active',
+    });
+    made.locations.push(room.id);
+
+    // A batch with movement in both directions across two locations, so the
+    // two grouped queries (out of a location, into a location) both contribute.
+    const batch = await stockUp(itemPlain, 100, room);
+    await move({ type: 'transfer', stockBatchId: batch.id, quantity: 40, fromLocationId: room.id, toLocationId: store.id });
+    await move({ type: 'dispense', stockBatchId: batch.id, quantity: 15, fromLocationId: room.id });
+    await move({ type: 'dispense', stockBatchId: batch.id, quantity: 5, fromLocationId: store.id });
+    const back = await move({ type: 'return', stockBatchId: batch.id, quantity: 3, toLocationId: room.id });
+    assert.ok(back.id);
+
+    const expected = { room: 100 - 40 - 15 + 3, store: 40 - 5 };
+    assert.deepEqual(
+      { room: await qtyAt(batch.id, room.id), store: await qtyAt(batch.id, store.id) },
+      expected
+    );
+
+    // Corrupt both rows, then prove the SQL rebuild restores them.
+    await db.StockLevel.update({ quantity: 4242 }, { where: { stockBatchId: batch.id } });
+    await rebuildLevels();
+
+    assert.equal(await qtyAt(batch.id, room.id), expected.room);
+    assert.equal(await qtyAt(batch.id, store.id), expected.store);
+  });
+
+  test('a multi-line checkout applies every line in one transaction', async () => {
+    const patient = await db.Patient.findOne({ where: { status: 'Active' } })
+      || await db.Patient.findOne();
+    if (!patient) return; // no patients in this database — nothing to assert against
+
+    const ctrl = require('../controllers/stockMovementController');
+    const a = await stockUp(itemPlain, 20, store);
+    const b = await stockUp(itemPlain, 20, store);
+
+    const res = { code: 200, body: null };
+    res.status = (c) => { res.code = c; return res; };
+    res.json = (x) => { res.body = x; return res; };
+
+    // Lines deliberately out of id order — the controller sorts them so
+    // concurrent checkouts always take row locks in the same sequence.
+    await ctrl.checkoutDispense({
+      body: {
+        uhid: patient.uhid,
+        lines: [
+          { stockBatchId: b.id, locationId: store.id, quantity: 2 },
+          { stockBatchId: a.id, locationId: store.id, quantity: 3 },
+        ],
+      },
+      user: admin,
+    }, res);
+
+    (res.body?.data?.movements || []).forEach((m) => made.movements.push(m.id));
+    assert.equal(res.code, 201, res.body?.message || '');
+    assert.equal(await qtyAt(a.id, store.id), 17);
+    assert.equal(await qtyAt(b.id, store.id), 18);
+  });
+
+  test('the inventory report reports the LATEST intake per item, not an arbitrary one', async () => {
+    const reports = require('../controllers/stockReportController');
+    const item = await db.StockItem.create({
+      name: `${TAG} Reordered Item`, category: 'consumable', unit: 'piece', reorderLevel: 5, status: 'active',
+    });
+    made.items.push(item.id);
+
+    // Three deliveries. Only the newest should appear as lastOrder — the
+    // narrowing now happens in SQL rather than by scanning every intake ever.
+    await stockUp(item, 10, store);
+    await new Promise((r) => setTimeout(r, 1100)); // MySQL DATETIME is second-resolution
+    await stockUp(item, 25, store);
+    await new Promise((r) => setTimeout(r, 1100));
+    await stockUp(item, 7, store);
+
+    const res = { code: 200, body: null };
+    res.status = (c) => { res.code = c; return res; };
+    res.json = (b) => { res.body = b; return res; };
+    await reports.inventory({ query: {}, params: {}, body: {}, user: admin }, res);
+
+    assert.equal(res.code, 200, res.body?.message || '');
+    const row = (res.body.data || []).find((r) => r.id === item.id);
+    assert.ok(row, 'the item must appear on the inventory sheet');
+    assert.equal(row.totalQuantity, 42, '10 + 25 + 7');
+    assert.equal(row.lastOrder?.quantity, 7, 'the most recent delivery, not the largest or the first');
+  });
+
+  test('FEFO inside a transaction sees that transaction, not a stale snapshot', async () => {
+    const item = await db.StockItem.create({
+      name: `${TAG} Txn FEFO`, category: 'consumable', unit: 'piece', status: 'active',
+    });
+    made.items.push(item.id);
+    const loc = await db.StockLocation.create({
+      name: `${TAG} Txn Room`, kind: 'store', isColdChain: false, isDispensing: true, status: 'active',
+    });
+    made.locations.push(loc.id);
+
+    const soon = await stockUp(item, 5, loc, { expiryDate: clinicDatePlusDays(5) });
+    const later = await stockUp(item, 5, loc, { expiryDate: clinicDatePlusDays(60) });
+
+    await db.sequelize.transaction(async (t) => {
+      const before = await suggestFefoBatch(item.id, loc.id, t);
+      assert.equal(before.batch.id, soon.id, 'earliest expiry first');
+
+      // Empty the earliest batch inside this transaction...
+      const mv = await applyMovement({
+        type: 'dispense', stockBatchId: soon.id, quantity: 5,
+        fromLocationId: loc.id, performedById: admin.id,
+      }, t);
+      made.movements.push(mv.id);
+
+      // ...and FEFO must now see that, which it only can on the same connection.
+      const after = await suggestFefoBatch(item.id, loc.id, t);
+      assert.equal(after.batch.id, later.id,
+        'without the transaction this read would still show the depleted batch');
+    });
+  });
+});
+
 describe('stocktake reconciles the whole location', () => {
   const rooms = require('../controllers/stockRoomController');
 

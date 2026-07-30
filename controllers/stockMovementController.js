@@ -549,6 +549,17 @@ const dashboard = async (req, res) => {
       id: i.id, name: i.name, unit: i.unit, reorderLevel: i.reorderLevel, total: i.totalQuantity,
     }));
 
+    // Group the level rows by batch ONCE. This used to re-scan the whole array
+    // for every batch it emitted, which is O(levels²) — fine on a demo, tens of
+    // millions of comparisons on a clinic with a few thousand level rows.
+    const levelsByBatch = new Map();
+    levels.forEach((l) => {
+      if (!l.batch) return;
+      const list = levelsByBatch.get(l.batch.id);
+      if (list) list.push(l);
+      else levelsByBatch.set(l.batch.id, [l]);
+    });
+
     // Expiry buckets from the held batches (unique per batch).
     const seen = new Set();
     const buckets = { expired: [], d30: [], d60: [], d90: [] };
@@ -562,8 +573,8 @@ const dashboard = async (req, res) => {
         batchNo: b.batchNo,
         expiryDate: b.expiryDate,
         item: b.item ? { id: b.item.id, name: b.item.name, unit: b.item.unit } : null,
-        locations: levels
-          .filter((x) => x.batch?.id === b.id)
+        locations: (levelsByBatch.get(b.id) || [])
+          .filter((x) => x.location)
           .map((x) => ({ id: x.location.id, name: x.location.name, quantity: x.quantity })),
       };
       if (b.expiryDate < today) buckets.expired.push(entry);
@@ -635,16 +646,26 @@ const checkoutDispense = async (req, res) => {
     const locIds = [...new Set(lines.map((l) => Number(l.locationId)))];
     await Promise.all(locIds.map(resolveDispensingLocation));
 
+    // Deterministic lock order. applyMovement takes a FOR UPDATE lock per
+    // (batch, location); if two checkouts touched the same two batches in
+    // opposite orders they would deadlock, and InnoDB would kill one at random
+    // mid-dispense. Sorting by the same key everywhere removes that entirely.
+    const ordered = [...lines].sort((a, b) =>
+      Number(a.stockBatchId) - Number(b.stockBatchId)
+      || Number(a.locationId) - Number(b.locationId));
+
     const movements = await sequelize.transaction(async (t) => {
       const out = [];
-      for (const l of lines) {
+      for (const l of ordered) {
         // FEFO nudge is advisory at the desk (reception holds the box), but a
         // logged override keeps it honest — if this isn't the earliest-expiring
         // batch at the location, record why in the FEFO-overrides report.
         let reason = null;
         const batch = await StockBatch.findByPk(l.stockBatchId, { transaction: t });
         if (batch) {
-          const suggestion = await suggestFefoBatch(batch.stockItemId, l.locationId);
+          // `t` matters: without it this runs on a second pooled connection
+          // while this transaction holds the first — see suggestFefoBatch.
+          const suggestion = await suggestFefoBatch(batch.stockItemId, l.locationId, t);
           if (suggestion && suggestion.batch.id !== batch.id) {
             reason = `FEFO override (checkout): earlier batch ${suggestion.batch.labelCode || suggestion.batch.id}` +
               (suggestion.batch.expiryDate ? ` exp ${suggestion.batch.expiryDate}` : '');

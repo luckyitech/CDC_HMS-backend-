@@ -1,6 +1,6 @@
 const { success, error } = require('../utils/response');
 const db = require('../models');
-const { Op } = require('sequelize');
+const { Op, fn, col } = require('sequelize');
 
 const { itemsBelowReorder } = require('../utils/stockTotals');
 const { clinicToday, clinicMonthStart, clinicMidnight } = require('../utils/clinicTime');
@@ -158,6 +158,31 @@ const recall = async (req, res) => {
   }
 };
 
+// The newest movement per item matching `where`, at most one row per item.
+//
+// Two queries rather than one correlated subquery: the first groups to find the
+// newest timestamp per item (rows = number of items), the second fetches just
+// those rows. Both stay proportional to the catalogue, not to the movement
+// history, which is the point — the history only ever grows.
+const latestPerItem = async (where, attributes) => {
+  const newest = await StockMovement.findAll({
+    where,
+    attributes: ['stockItemId', [fn('MAX', col('createdAt')), 'latestAt']],
+    group: ['stockItemId'],
+    raw: true,
+  });
+  if (!newest.length) return [];
+
+  return StockMovement.findAll({
+    where: {
+      ...where,
+      [Op.or]: newest.map((r) => ({ stockItemId: r.stockItemId, createdAt: r.latestAt })),
+    },
+    attributes,
+    order: [['createdAt', 'DESC']],
+  });
+};
+
 // Shared: filtered movement report (disposal register, FEFO overrides).
 const movementReport = (label, whereBuilder) => async (req, res) => {
   try {
@@ -238,24 +263,24 @@ const inventory = async (req, res) => {
       byLocation[id][name] = (byLocation[id][name] || 0) + l.quantity;
     });
 
-    // Most recent order (intake) per item.
-    const intakes = await StockMovement.findAll({
-      where: { type: 'intake' },
-      attributes: ['stockItemId', 'quantity', 'createdAt'],
-      order: [['createdAt', 'DESC']],
-    });
+    // Most recent order (intake) per item, and most recent stocktake variance
+    // per item. Both used to pull EVERY matching movement ever recorded and
+    // discard all but the newest per item in JS — a full scan that grows
+    // without bound for the life of the clinic. latestPerItem does the
+    // narrowing in SQL, so the result set is at most one row per item.
+    const [intakes, adjustments] = await Promise.all([
+      latestPerItem({ type: 'intake' }, ['stockItemId', 'quantity', 'createdAt']),
+      latestPerItem(
+        { type: 'adjustment', reason: { [Op.like]: 'Stocktake%' } },
+        ['stockItemId', 'quantity', 'reason', 'createdAt', 'toLocationId']
+      ),
+    ]);
+
     const lastOrder = {};
     intakes.forEach((m) => {
-      if (!lastOrder[m.stockItemId]) lastOrder[m.stockItemId] = { quantity: m.quantity, date: m.createdAt };
+      lastOrder[m.stockItemId] = { quantity: m.quantity, date: m.createdAt };
     });
 
-    // Most recent stocktake variance per item (adjustments whose reason starts
-    // 'Stocktake'), with expected/counted parsed from the reason string.
-    const adjustments = await StockMovement.findAll({
-      where: { type: 'adjustment', reason: { [Op.like]: 'Stocktake%' } },
-      attributes: ['stockItemId', 'quantity', 'reason', 'createdAt', 'toLocationId'],
-      order: [['createdAt', 'DESC']],
-    });
     const lastStocktake = {};
     adjustments.forEach((m) => {
       if (lastStocktake[m.stockItemId]) return;

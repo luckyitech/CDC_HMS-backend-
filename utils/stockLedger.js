@@ -1,5 +1,5 @@
 const db = require('../models');
-const { Op } = require('sequelize');
+const { Op, fn, col } = require('sequelize');
 const { clinicToday } = require('./clinicTime');
 
 const { StockItem, StockBatch, StockMovement, StockLevel, StockLocation, sequelize } = db;
@@ -215,8 +215,15 @@ const reverseMovement = async (movementId, performedById, reason, t) => {
 // ---------------------------------------------------------------------
 // FEFO — First-Expiry, First-Out (receipt date as tiebreaker). Returns the
 // batch the system suggests for an item at a location, or null.
+//
+// Pass `t` when calling from inside a transaction. It is not optional in
+// practice: without it this runs on a SECOND connection from the pool while the
+// caller still holds the first, so under load every pooled connection can end
+// up held by a transaction waiting for a free connection that will never come —
+// the requests then hang until the 30s acquire timeout. It would also read
+// outside the transaction and miss the caller's own uncommitted movements.
 // ---------------------------------------------------------------------
-const suggestFefoBatch = async (stockItemId, locationId) => {
+const suggestFefoBatch = async (stockItemId, locationId, t = null) => {
   const today = clinicToday();
   const levels = await StockLevel.findAll({
     where: { locationId, quantity: { [Op.gt]: 0 } },
@@ -229,6 +236,7 @@ const suggestFefoBatch = async (stockItemId, locationId) => {
         [Op.or]: [{ expiryDate: null }, { expiryDate: { [Op.gte]: today } }],
       },
     }],
+    transaction: t,
   });
   if (!levels.length) return null;
 
@@ -248,15 +256,33 @@ const suggestFefoBatch = async (stockItemId, locationId) => {
 // ---------------------------------------------------------------------
 const rebuildLevels = async () => {
   return sequelize.transaction(async (t) => {
-    const movements = await StockMovement.findAll({ order: [['id', 'ASC']], transaction: t });
+    // Summed in SQL, in two grouped passes (stock leaving a location, stock
+    // arriving at one). This used to load EVERY movement ever recorded into
+    // memory to add them up in JS — the ledger is append-only, so that set only
+    // grows, and the rebuild would eventually be the thing that runs the
+    // process out of memory. Both queries now return at most one row per
+    // (batch, location), which is the size of the table being rebuilt.
+    const sums = (locationField, sign) => StockMovement.findAll({
+      where: { [locationField]: { [Op.ne]: null } },
+      attributes: [
+        'stockBatchId',
+        [col(locationField), 'locationId'],
+        [fn('SUM', col('quantity')), 'total'],
+      ],
+      group: ['stockBatchId', locationField],
+      raw: true,
+      transaction: t,
+    }).then((rows) => rows.map((r) => ({ ...r, total: sign * Number(r.total) })));
+
+    const [out, incoming] = await Promise.all([
+      sums('fromLocationId', -1),
+      sums('toLocationId', 1),
+    ]);
+
     const map = new Map(); // 'batch:location' → qty
-    const bump = (batchId, locId, delta) => {
-      const key = `${batchId}:${locId}`;
-      map.set(key, (map.get(key) || 0) + delta);
-    };
-    movements.forEach((m) => {
-      if (m.fromLocationId) bump(m.stockBatchId, m.fromLocationId, -m.quantity);
-      if (m.toLocationId) bump(m.stockBatchId, m.toLocationId, m.quantity);
+    [...out, ...incoming].forEach((r) => {
+      const key = `${r.stockBatchId}:${r.locationId}`;
+      map.set(key, (map.get(key) || 0) + r.total);
     });
 
     await StockLevel.destroy({ where: {}, transaction: t });

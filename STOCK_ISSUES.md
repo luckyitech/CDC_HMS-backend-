@@ -335,6 +335,85 @@ stocktake is for. **Decision needed:** leave as-is and document it, or add an ex
 
 No migrations, no schema changes, no API response-shape changes.
 
+---
+
+# Production-readiness pass
+
+A second review looking only for things that behave differently under real load
+and real data volume than they do on a demo database. Five found, all fixed.
+
+| ID | Severity | Issue |
+|----|----------|-------|
+| PROD-1 | **High** | Checkout dispensing can hang every request under load |
+| PROD-2 | **High** | Two concurrent checkouts can deadlock |
+| PROD-3 | Medium | Inventory report scans the entire movement history, forever |
+| PROD-4 | Medium | Dashboard expiry buckets are O(levels²) |
+| PROD-5 | Medium | `rebuildLevels` loads the whole ledger into memory |
+
+### PROD-1 · Checkout dispensing can hang every request under load
+
+`checkoutDispense` opened a transaction, then called `suggestFefoBatch` **without
+passing it**. That query therefore ran on a *second* connection from the pool while
+the first was still held.
+
+The pool is `max: 20` with a 30-second acquire timeout. With 20 concurrent checkouts,
+all 20 connections are held by transactions, each waiting for a free connection to run
+its FEFO lookup — which never arrives. Every request hangs for 30 seconds and then
+fails. Classic pool self-deadlock, and it only shows up under concurrency, which is
+exactly when a clinic is busiest.
+
+It was also silently wrong: reading outside the transaction meant FEFO couldn't see
+the caller's own uncommitted lines, so a multi-line checkout kept suggesting a batch
+its earlier line had just emptied.
+
+`suggestFefoBatch` now takes a transaction, and the doc comment says why it is not
+optional. The other callers (`/dispense`, `/use`) were already fine — they run FEFO
+before opening their transaction.
+
+### PROD-2 · Two concurrent checkouts can deadlock
+
+`applyMovement` takes a `FOR UPDATE` lock per (batch, location), in whatever order the
+client happened to list the lines. Two checkouts sharing two batches in opposite order
+deadlock, and InnoDB kills one of them mid-dispense.
+
+Lines are now sorted by batch then location before the loop, so every checkout acquires
+locks in the same global order and the cycle cannot form.
+
+### PROD-3 · Inventory report scans the entire movement history
+
+To find each item's most recent delivery, the report loaded **every intake movement
+ever recorded** and threw away all but the newest per item — and did the same for every
+stocktake adjustment. The ledger is append-only, so that scan grows for the life of the
+clinic: fine in month one, minutes and hundreds of megabytes in year three.
+
+Replaced with `latestPerItem()`: one grouped query for the newest timestamp per item,
+one fetch of just those rows. Both are proportional to the *catalogue*, which is
+roughly constant, rather than to the history.
+
+### PROD-4 · Dashboard expiry buckets are quadratic
+
+Building each batch's location list re-scanned the entire levels array, inside a loop
+over that same array. At a few thousand level rows that is tens of millions of
+comparisons on every dashboard load. Now grouped into a `Map` once, then looked up.
+
+### PROD-5 · `rebuildLevels` loads the whole ledger into memory
+
+The admin repair tool read every movement ever recorded to sum them in JavaScript — so
+the tool you reach for when the levels table is wrong is the one most likely to run the
+process out of memory. Now two grouped `SUM` queries (stock out of a location, stock
+into one), returning at most one row per (batch, location): the size of the table being
+rebuilt, not of the history behind it.
+
+### Deliberately left uncapped
+
+`GET /levels` and `GET /batches` return every matching row with no limit. Adding one
+would be actively dangerous now that a stocktake is a full count: the count screen
+builds its list from `GET /levels`, so a silent truncation would make the client submit
+a partial list and the server would write off every batch that fell past the cap. If
+these ever need paginating, the stocktake flow has to be reworked in the same change.
+
+---
+
 ## Open questions
 
 1. **STK-06 — assumption made, please confirm.** `CLINIC_TIMEZONE` defaults to
