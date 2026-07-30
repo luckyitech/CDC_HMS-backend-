@@ -109,6 +109,7 @@ const applyMovement = async ({
   performedById,
   reason = null,
   PatientId = null,
+  QueueId = null,
   prescriptionId = null,
   reversesMovementId = null,
 }, t) => {
@@ -166,6 +167,7 @@ const applyMovement = async ({
     fromLocationId,
     toLocationId,
     PatientId,
+    QueueId,
     prescriptionId,
     performedById,
     reason: reason ? String(reason).trim() : null,

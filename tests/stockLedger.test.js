@@ -626,6 +626,44 @@ describe('behaviour under production load', () => {
     assert.equal(row.lastOrder?.quantity, 7, 'the most recent delivery, not the largest or the first');
   });
 
+  test('a retried discharge cannot dispense the same supplies twice', async () => {
+    const patient = await db.Patient.findOne();
+    const queue = await db.Queue.findOne();
+    if (!patient || !queue) return;   // nothing to attach to in this database
+
+    const ctrl = require('../controllers/stockMovementController');
+    const call = async (body) => {
+      const res = { code: 200, body: null };
+      res.status = (c) => { res.code = c; return res; };
+      res.json = (b) => { res.body = b; return res; };
+      await ctrl.checkoutDispense({ body, params: {}, query: {}, user: admin }, res);
+      (res.body?.data?.movements || []).forEach((m) => made.movements.push(m.id));
+      return res;
+    };
+
+    const batch = await stockUp(itemPlain, 10, store);
+    const lines = [{ stockBatchId: batch.id, locationId: store.id, quantity: 3 }];
+
+    // Discharging is dispense-then-save. When the save failed, the desk retried
+    // the whole flow and the supplies went out again: billed once, deducted
+    // twice, and the difference walked off the shelf.
+    const first = await call({ uhid: patient.uhid, lines, queueId: queue.id });
+    assert.equal(first.code, 201);
+    assert.equal(await qtyAt(batch.id, store.id), 7);
+
+    const retry = await call({ uhid: patient.uhid, lines, queueId: queue.id });
+    assert.equal(retry.code, 409);
+    assert.equal(retry.body.alreadyDispensed, true,
+      'the desk must be able to tell a repeat from a real failure, or the visit can never be discharged');
+    assert.equal(await qtyAt(batch.id, store.id), 7, 'the retry must not move any stock');
+
+    // Dispensing with no visit attached (the standalone Dispense tab) is
+    // unaffected — it has no visit to be a repeat of.
+    const standalone = await call({ uhid: patient.uhid, lines });
+    assert.equal(standalone.code, 201);
+    assert.equal(await qtyAt(batch.id, store.id), 4);
+  });
+
   test('FEFO inside a transaction sees that transaction, not a stale snapshot', async () => {
     const item = await db.StockItem.create({
       name: `${TAG} Txn FEFO`, category: 'consumable', unit: 'piece', status: 'active',

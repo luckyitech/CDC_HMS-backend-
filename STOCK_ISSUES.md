@@ -489,6 +489,35 @@ and re-retiring something already retired, are unaffected. Wired into the shared
 factory as a `stockHeld` hook, so a future reference table gets it by declaring one
 function.
 
+---
+
+# Fifth pass — cross-module seams
+
+### SEAM-1 · A retried discharge dispenses the same supplies twice — *reproduced*
+
+Discharging is two steps at the desk: dispense the supplies, then save the discharge.
+Nothing tied the first step to the visit, so it had no idea it had already run.
+
+`QueueManagement.jsx` closed the discharge modal **unconditionally**, including when the
+save failed — sending reception back to the queue to start the discharge again. The
+second attempt re-dispensed everything. Reproduced: two discharge attempts took a batch
+of 10 down to 4 for a patient billed for 3. The bill records the supplies once, the
+ledger twice, and the difference walks off the shelf with nobody able to explain it.
+
+Fixed in three places, because all three contributed:
+
+- **`StockMovements.QueueId`** (new, nullable) records the visit a checkout dispense
+  belongs to, so a repeat is recognisable at all. `ON DELETE SET NULL` — removing a
+  visit must never delete ledger rows.
+- **`checkoutDispense`** refuses a second dispense for a visit that already has one,
+  with a 409 carrying `alreadyDispensed: true` and a list of what went out. The flag
+  matters: the desk has to tell "these already left, carry on" apart from a real
+  failure, or a visit whose save failed could never be discharged at all. Callers with
+  no visit (the standalone Dispense tab) pass no `queueId` and are unaffected.
+- **The discharge modal stays open when the save fails.** The supplies have already left
+  stock by that point, so closing it was what sent staff round the loop in the first
+  place.
+
 ### Deliberately left uncapped
 
 `GET /levels` and `GET /batches` return every matching row with no limit. Adding one

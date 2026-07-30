@@ -44,6 +44,9 @@ const StockMovement = defineModel('StockMovement', {
     // can both pass under REPEATABLE READ — crediting the stock twice. MySQL
     // allows repeated NULLs, so ordinary movements are unaffected.
     { fields: ['reversesMovementId'], unique: true, name: 'unique_reversal_per_movement' },
+    // The visit a checkout dispense belongs to — read to stop a retried
+    // discharge dispensing the same supplies twice.
+    { fields: ['QueueId'], name: 'idx_stock_movements_queue' },
   ],
 });
 

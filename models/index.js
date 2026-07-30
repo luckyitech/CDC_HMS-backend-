@@ -228,6 +228,12 @@ StockMovement.belongsTo(StockMovement, { as: 'reverses',     foreignKey: 'revers
 Patient.hasMany(StockMovement);        // generates PatientId — nullable until
 StockMovement.belongsTo(Patient);      //   the patient-linking phase activates
 
+// generates QueueId — the visit a checkout dispense belongs to. Null on every
+// other movement type. It exists so a repeated discharge cannot dispense the
+// same supplies twice; see checkoutDispense.
+Queue.hasMany(StockMovement);
+StockMovement.belongsTo(Queue);
+
 StockLevel.belongsTo(StockBatch,    { as: 'batch',    foreignKey: 'stockBatchId' });
 StockBatch.hasMany(StockLevel,      { as: 'levels',   foreignKey: 'stockBatchId' });
 StockLevel.belongsTo(StockLocation, { as: 'location', foreignKey: 'locationId' });

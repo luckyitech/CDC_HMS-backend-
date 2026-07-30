@@ -671,9 +671,40 @@ const dashboard = async (req, res) => {
 // ------------------------------------
 const checkoutDispense = async (req, res) => {
   try {
-    const { uhid, lines } = req.body;
+    const { uhid, lines, queueId } = req.body;
     if (!uhid) return error(res, 'Patient UHID is required');
     if (!Array.isArray(lines) || lines.length === 0) return error(res, 'No supplies to dispense');
+
+    // Discharging is two steps — dispense the supplies, then save the discharge
+    // — and the desk retries the whole thing if the second step fails. Without
+    // this the supplies go out again on every retry: the bill records them once,
+    // the ledger twice, and the difference walks off the shelf.
+    //
+    // Tying the dispense to the visit makes the repeat recognisable. Callers
+    // that have no visit (the standalone Dispense tab) simply omit queueId and
+    // are unaffected.
+    if (queueId) {
+      const already = await StockMovement.findAll({
+        where: { QueueId: queueId, type: 'dispense' },
+        include: [{ model: StockItem, as: 'item', attributes: ['name'] }],
+      });
+      if (already.length) {
+        // Machine-readable, like the FEFO 409: the desk retrying a failed
+        // discharge needs to tell "these already went out, carry on" apart from
+        // a real failure, or the visit could never be discharged at all.
+        return res.status(409).json({
+          success: false,
+          alreadyDispensed: true,
+          message:
+            'Supplies for this visit have already been dispensed ' +
+            `(${already.map((m) => `${m.quantity} × ${m.item?.name || 'item'}`).join(', ')}). ` +
+            'Reverse those movements first if they were wrong.',
+          movements: already.map((m) => ({
+            id: m.id, quantity: m.quantity, item: m.item?.name || null, at: m.createdAt,
+          })),
+        });
+      }
+    }
 
     const family = await resolvePatient(uhid);
     if (!family) return error(res, 'Patient not found', 404);
@@ -726,6 +757,7 @@ const checkoutDispense = async (req, res) => {
           fromLocationId: l.locationId,
           performedById: req.user.id,       // from the JWT, never the client
           PatientId: family.patient.id,     // merge-aware canonical id
+          QueueId: queueId || null,         // the visit — makes a retry detectable
           reason,
         }, t));
       }
