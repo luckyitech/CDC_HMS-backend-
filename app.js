@@ -12,7 +12,15 @@ app.set('trust proxy', 1);
 
 // CORS — MUST be first to handle preflight OPTIONS requests
 app.use(cors({
-  origin: ['http://localhost:5173', 'http://localhost:5174', 'https://cdiabetescentre.com', 'https://www.cdiabetescentre.com'],
+  origin: [
+    'http://localhost:5173', 'http://localhost:5174',
+    // Local Thyroid site preview (python http.server, port 8080+). Local testing only.
+    'http://localhost:8080', 'http://localhost:8081', 'http://localhost:8082',
+    'https://cdiabetescentre.com', 'https://www.cdiabetescentre.com',
+    // Public booking websites (read-only slots fetch runs from the browser;
+    // the booking POST goes via each site's same-origin server proxy).
+    'https://thyroidkenya.com', 'https://www.thyroidkenya.com',
+  ],
   credentials: true,
 }));
 
@@ -58,6 +66,7 @@ app.use('/api/glp1-reviews',       require('./routes/glp1Reviews'));
 app.use('/api/glp1-administrations', require('./routes/glp1Administrations'));
 app.use('/api/glp1-symptoms',      require('./routes/glp1Symptoms'));
 app.use('/api/appointments',       require('./routes/appointments'));
+app.use('/api/public/booking',     require('./routes/publicBooking'));
 app.use('/api/doctor-blocks',      require('./routes/doctorBlocks'));
 app.use('/api/users',              require('./routes/users'));
 app.use('/api/documents',          require('./routes/documents'));

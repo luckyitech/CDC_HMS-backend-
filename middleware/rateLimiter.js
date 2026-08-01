@@ -92,6 +92,24 @@ const sseLimiter = rateLimit({
 });
 
 // ------------------------------------
+// Public Booking Rate Limiter
+// ------------------------------------
+// For the unauthenticated website booking POST. Tighter than the general
+// limiter because it writes real appointments into the live schedule.
+// Allows 10 booking attempts per 15 minutes per IP.
+const publicBookingLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 10,
+  message: {
+    success: false,
+    message: 'Too many booking attempts from this device. Please try again shortly, or contact the clinic.',
+  },
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator,
+});
+
+// ------------------------------------
 // EXPORTS
 // ------------------------------------
 module.exports = {
@@ -99,4 +117,5 @@ module.exports = {
   authLimiter,
   strictLimiter,
   sseLimiter,
+  publicBookingLimiter,
 };

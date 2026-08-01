@@ -9,9 +9,9 @@ const {
   sendDoctorAppointmentCancellationEmail,
 } = require('../utils/emailService');
 
-const { Appointment, Patient, User, DoctorProfile, DoctorBlock } = db;
+const { SLOT_LABELS, SEATS_PER_SLOT, FULL_DAY } = require('../utils/appointmentSlots');
 
-const FULL_DAY = 'ALL_DAY';
+const { Appointment, Patient, User, DoctorProfile, DoctorBlock } = db;
 
 // ====================================
 // HELPER FUNCTIONS
@@ -127,7 +127,7 @@ const book = async (req, res) => {
   const existingCount = await Appointment.count({
     where: { doctorId, date, timeSlot, status: { [Op.ne]: 'cancelled' } },
   });
-  if (existingCount >= 2) {
+  if (existingCount >= SEATS_PER_SLOT) {
     return error(res, 'This time slot is full (2 patients already booked). Please choose a different time.', 409);
   }
 
@@ -479,14 +479,6 @@ const stats = async (req, res) => {
 };
 
 
-// Clinic time slots — must match AppointmentContext.jsx on the frontend exactly.
-// Lunch break: 12:30 PM–1:30 PM excluded.
-const ALL_SLOTS = [
-  '8:00 AM', '8:30 AM', '9:00 AM', '9:30 AM', '10:00 AM', '10:30 AM',
-  '11:00 AM', '11:30 AM', '12:00 PM',
-  '2:00 PM', '2:30 PM', '3:00 PM', '3:30 PM', '4:00 PM', '4:30 PM', '5:00 PM',
-];
-
 /**
  * GET /api/appointments/slots?doctorId=X&date=YYYY-MM-DD
  * Returns all time slots for a doctor on a given date,
@@ -524,7 +516,7 @@ const getSlots = async (req, res) => {
   const blockedSlots = new Set(blocks.map(b => b.timeSlot));
   const dayBlocked   = blockedSlots.has(FULL_DAY);
 
-  const slots = ALL_SLOTS.map(slot => {
+  const slots = SLOT_LABELS.map(slot => {
     if (dayBlocked || blockedSlots.has(slot)) {
       return { time: slot, status: 'blocked', appointments: [] };
     }
@@ -533,7 +525,7 @@ const getSlots = async (req, res) => {
       return { time: slot, status: 'free', appointments: [] };
     }
     // 'full' when both seats are taken; otherwise use the single appointment's own status
-    const slotStatus = appts.length >= 2 ? 'full' : appts[0].status;
+    const slotStatus = appts.length >= SEATS_PER_SLOT ? 'full' : appts[0].status;
     return {
       time:         slot,
       status:       slotStatus,
