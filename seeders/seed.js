@@ -4,10 +4,20 @@
  *   npm run seed              full seed, including the demo patient
  *   npm run seed -- --no-demo real clinic: system users only, no sample data
  *
- * Every account gets its OWN randomly generated passphrase, printed once at the
- * end. Nothing is hardcoded: this file used to set 'password123' on all five
- * accounts, which meant the credentials for a deployed clinic were readable by
- * anyone with access to this repository.
+ * PASSWORDS
+ *
+ *   SEED_PASSWORD set in .env   every seeded account gets that password
+ *   SEED_PASSWORD unset         each account gets its own random passphrase,
+ *                               printed once
+ *
+ * Use SEED_PASSWORD for an environment you log into yourself — a shared, known
+ * password across the test accounts is the whole point, and .env is gitignored
+ * so it never reaches the repository. That was the real problem with the old
+ * hardcoded 'password123': not that it was shared, but that it was published.
+ *
+ * Leave it unset when seeding a real clinic, where each person should have a
+ * password nobody else knows. Either way the password must pass the same policy
+ * the app enforces on its own auth routes; a weak SEED_PASSWORD is refused.
  *
  * Two properties worth keeping:
  *
@@ -25,18 +35,29 @@
 require('dotenv').config();
 const bcrypt = require('bcryptjs');
 const db = require('../models');
-const { generatePassphrase, entropyBits } = require('../utils/passphrase');
+const { generatePassphrase, entropyBits, meetsPolicy } = require('../utils/passphrase');
 
 const { User, DoctorProfile, StaffProfile, LabTechProfile, Patient } = db;
 
 const skipDemo = process.argv.includes('--no-demo');
 
+// SEED_PASSWORD sets one known password across every seeded account. It lives in
+// .env, which is gitignored, so the password is knowable by whoever runs the
+// seed without ever being readable in the repository — which was the actual
+// problem with the old hardcoded 'password123', not the fact that it was shared.
+//
+// These accounts get logged into daily for testing, so a different random
+// password per account would be worse than useless. Leave SEED_PASSWORD unset
+// and each account gets its own generated passphrase instead, which is the
+// right default for a real clinic where nobody should share a login.
+const sharedPassword = process.env.SEED_PASSWORD || null;
+
 const created = [];    // [{ email, role, password }] — printed once at the end
 const untouched = [];  // accounts that already existed; their passwords are left alone
 
 /**
- * Create a user if absent, with a fresh passphrase. Existing users are returned
- * as-is and never re-passworded.
+ * Create a user if absent. Existing users are returned as-is and never
+ * re-passworded, so re-running the seed cannot undo a password someone changed.
  */
 const ensureUser = async ({ email, firstName, lastName, role, phone }) => {
   const found = await User.findOne({ where: { email } });
@@ -45,7 +66,7 @@ const ensureUser = async ({ email, firstName, lastName, role, phone }) => {
     return found;
   }
 
-  const password = generatePassphrase();
+  const password = sharedPassword || generatePassphrase();
   const user = await User.create({
     firstName, lastName, email, role, phone,
     password: await bcrypt.hash(password, 10),   // 10 rounds, as everywhere else
@@ -57,6 +78,16 @@ const ensureUser = async ({ email, firstName, lastName, role, phone }) => {
 
 async function seed() {
   try {
+    // Refuse a weak SEED_PASSWORD rather than quietly seeding one. The whole
+    // point of replacing 'password123' was to stop a guessable credential
+    // reaching a live clinic; letting it back in through .env would undo that.
+    if (sharedPassword && !meetsPolicy(sharedPassword)) {
+      console.error('SEED_PASSWORD does not meet the policy the app enforces on its own');
+      console.error('auth routes: at least 8 characters with an uppercase letter, a');
+      console.error('lowercase letter, a number and a symbol. Nothing was seeded.');
+      process.exit(1);
+    }
+
     await db.sequelize.authenticate();
     console.log(`Connected to ${db.sequelize.config.database}.\n`);
 
@@ -164,7 +195,13 @@ async function seed() {
 
     // ── Report ────────────────────────────────────────────────────────────────
     console.log('\n' + '='.repeat(62));
-    if (created.length) {
+    if (created.length && sharedPassword) {
+      console.log('  NEW ACCOUNTS — all using your SEED_PASSWORD from .env');
+      console.log('='.repeat(62));
+      created.forEach(({ email, role }) => console.log(`  ${role.padEnd(8)} ${email}`));
+      console.log('='.repeat(62));
+      console.log('  Password: the SEED_PASSWORD you set in .env (gitignored).');
+    } else if (created.length) {
       console.log('  NEW ACCOUNTS — these passwords are shown ONCE and stored nowhere');
       console.log('='.repeat(62));
       created.forEach(({ email, role, password }) => {
