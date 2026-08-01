@@ -2292,13 +2292,27 @@ These features should be implemented after the frontend-backend integration is c
 
 ## 22. Test Users Reference
 
-| Role | Email | Password | Notes |
-|------|-------|----------|-------|
-| Doctor | ahmed.hassan@cdc.com | password123 | Has DoctorProfile |
-| Admin | admin@cdc.com | password123 | Full system access |
-| Staff | staff@cdc.com | password123 | Has StaffProfile |
-| Patient | patient@cdc.com | password123 | Linked to CDC001 John Doe |
-| Lab Tech | lab@cdc.com | password123 | Has LabTechProfile |
+| Role | Email | Notes |
+|------|-------|-------|
+| Doctor | ahmed.hassan@cdc.com | Has DoctorProfile |
+| Admin | admin@cdc.com | Full system access |
+| Staff | staff@cdc.com | Has StaffProfile |
+| Patient | patient@cdc.com | Linked to CDC001 John Doe |
+| Lab Tech | lab@cdc.com | Has LabTechProfile |
+
+**Passwords are no longer fixed.** `npm run seed` generates a different random
+passphrase per account and prints them once, because a shared password written
+down in this repository was readable by anyone with access to it — including on
+a deployed clinic.
+
+- Seed a new environment: `npm run seed` (add `--no-demo` for a real clinic,
+  which skips the John Doe sample patient).
+- Re-running the seed never changes an existing account's password.
+- Rotate one deliberately: `npm run set-password -- admin@cdc.com`. The
+  passphrase is printed once and stored nowhere.
+- The admin needs no mailbox to change their own password — Settings → Change
+  Password (`PUT /api/auth/change-password`) asks for the current one, not an
+  emailed link.
 
 ---
 
