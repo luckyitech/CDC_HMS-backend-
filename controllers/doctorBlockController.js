@@ -1,6 +1,5 @@
 const { Op } = require('sequelize');
 const { success, error } = require('../utils/response');
-const { PERMISSIONS, hasPermission } = require('../constants/permissions');
 const db = require('../models');
 
 const { DoctorBlock } = db;
@@ -195,7 +194,7 @@ const blockRecurring = async (req, res) => {
  */
 const getUpcoming = async (req, res) => {
   // Admin can query any doctor; doctor always sees their own blocks
-  const doctorId = hasPermission(req.user, PERMISSIONS.ADMIN_ACCESS) && req.query.doctorId
+  const doctorId = req.user.role === 'admin' && req.query.doctorId
     ? parseInt(req.query.doctorId)
     : req.user.id;
 

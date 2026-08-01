@@ -2,12 +2,8 @@ const express = require('express');
 const router = express.Router();
 const { body } = require('express-validator');
 const validate = require('../middleware/validate');
-const { authenticate, authorize, requirePermission } = require('../middleware/auth');
-const { PERMISSIONS } = require('../constants/permissions');
-
-// The stock module's capability. Was a bespoke authorizeStock middleware reading
-// a dedicated boolean column; now one of the generic per-user permissions.
-const authorizeStock = requirePermission(PERMISSIONS.STOCK_MANAGE);
+const { authenticate, authorize } = require('../middleware/auth');
+const authorizeStock = require('../middleware/authorizeStock');
 const catalog = require('../controllers/stockCatalogController');
 const movements = require('../controllers/stockMovementController');
 const rooms = require('../controllers/stockRoomController');
@@ -17,11 +13,10 @@ const reports = require('../controllers/stockReportController');
 // UNDERSTANDING AUTHORIZATION
 // ====================================
 // Everything here requires authentication. Beyond that:
-//   authorizeStock  — admins (implicitly), plus anyone granted the
-//                     'stock.manage' permission. Read from the DB on every
-//                     request, so a grant or revoke takes effect without
-//                     re-login. Hiding the sidebar link is UX; THIS is the
-//                     security boundary.
+//   authorizeStock  — admins, plus staff/doctors the admin granted
+//                     canManageStock (read from the DB, so a grant takes
+//                     effect without re-login). Hiding the sidebar link is
+//                     UX; THIS is the security boundary.
 //   POST /use       — the one exception: point-of-care usage recording is
 //                     open to all clinical roles. Gating it would guarantee
 //                     unrecorded usage and rotten room counts.

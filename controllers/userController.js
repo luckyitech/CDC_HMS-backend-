@@ -1,7 +1,4 @@
 const { success, error } = require('../utils/response');
-const {
-  PERMISSIONS, PERMISSIBLE_ROLES, isTrueAdmin, sanitizePermissions, hasPermission,
-} = require('../constants/permissions');
 const db = require('../models');
 const sequelize = require('../config/database');
 const bcrypt = require('bcryptjs');
@@ -35,13 +32,8 @@ const formatUserResponse = (user, profile) => {
     role:      user.role,
     status:    user.isActive ? 'Active' : 'Inactive',
     createdAt: user.createdAt,
-    // Capabilities granted to this account — drives the Manage Users toggles.
-    // Derived from `permissions`, NOT from the superseded canManageStock
-    // column: writes go to `permissions`, so reading the old column here would
-    // show a toggle that disagrees with what the server actually enforces.
-    permissions: Array.isArray(user.permissions) ? user.permissions : [],
-    canManageStock: hasPermission(user, PERMISSIONS.STOCK_MANAGE),
-    hasAdminAccess: hasPermission(user, PERMISSIONS.ADMIN_ACCESS),
+    // Stock permission flag — drives the Manage Users toggle.
+    canManageStock: !!user.canManageStock,
   };
 
   if (user.role === 'doctor' && profile) {
@@ -479,38 +471,12 @@ const updateUser = async (req, res) => {
       if (updates[field] !== undefined) userUpdates[field] = updates[field];
     });
 
-    // ── Permissions ──────────────────────────────────────────────────────────
-    // Restricted to a REAL admin account, even though this route now admits
-    // anyone holding admin.access. If a granted user could grant, the
-    // capability would propagate on its own and could never be reliably taken
-    // back — see middleware/auth.js requireTrueAdmin.
-    //
-    // Both branches write `permissions`, never canManageStock, so there is one
-    // source of truth. Anything pushed into userFields is picked up by the
-    // UserEditLog audit below, so grants and revokes are recorded with who did
-    // them — which matters more for admin access than for anything else here.
-    if (updates.permissions !== undefined) {
-      if (!isTrueAdmin(req.user)) {
-        return error(res, 'Only an administrator account can change permissions', 403);
-      }
-      if (!PERMISSIBLE_ROLES.includes(user.role)) {
-        return error(res, `Permissions cannot be granted to a ${user.role} account`, 400);
-      }
-      userFields.push('permissions');
-      userUpdates.permissions = sanitizePermissions(updates.permissions);
-
-    // Back-compat: the Manage Users screen still sends a canManageStock
-    // boolean. Translated into the permission rather than stored separately,
-    // so the two can never disagree.
-    } else if (updates.canManageStock !== undefined && PERMISSIBLE_ROLES.includes(user.role)) {
-      if (!isTrueAdmin(req.user)) {
-        return error(res, 'Only an administrator account can change permissions', 403);
-      }
-      const next = new Set(user.permissions || []);
-      if (updates.canManageStock) next.add(PERMISSIONS.STOCK_MANAGE);
-      else next.delete(PERMISSIONS.STOCK_MANAGE);
-      userFields.push('permissions');
-      userUpdates.permissions = [...next];
+    // Stock permission toggle (this route is already admin-only). Doctor and
+    // staff only — admins have stock access implicitly, other roles never do.
+    // Included in userFields so the change lands in the UserEditLog audit.
+    if (updates.canManageStock !== undefined && ['doctor', 'staff'].includes(user.role)) {
+      userFields.push('canManageStock');
+      userUpdates.canManageStock = !!updates.canManageStock;
     }
 
     const userBefore = {};
