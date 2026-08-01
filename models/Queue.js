@@ -84,6 +84,13 @@ const Queue = defineModel('Queue', {
     type: DataTypes.JSON,
     defaultValue: null,
   },
+  // Itemised supplies scanned at the checkout desk and billed to the visit:
+  // [{ name, quantity, labelCode, stockBatchId }]. Labels + quantities only,
+  // no prices. The stock ledger holds the inventory truth; this is the bill.
+  finalSupplies: {
+    type: DataTypes.JSON,
+    defaultValue: null,
+  },
   dischargeComment: {
     type: DataTypes.TEXT,
     defaultValue: null,

@@ -1,3 +1,5 @@
+const { clinicToday, clinicMidnight } = require('./clinicTime');
+
 /**
  * Dose ladder helpers for the GLP-1 monitoring tool.
  *
@@ -181,13 +183,19 @@ const reviewWeeksForSchedule = (schedule, followUpWks = 12) => {
 const weeksSince = (startDate, asOf = new Date()) => {
   if (!startDate) return null;
 
-  const start = new Date(startDate);
+  // Whole DAYS between two clinic dates, then whole weeks from that. Counting
+  // in milliseconds from a UTC-parsed startDate to an instant made the answer
+  // depend on the time of day the question was asked — it could tick over to
+  // the next week up to three hours early, advancing the dose ladder a day
+  // sooner than the patient actually reached it.
+  const start = clinicMidnight(String(startDate).slice(0, 10));
   if (Number.isNaN(start.getTime())) return null;
 
-  const MS_PER_WEEK = 7 * 24 * 60 * 60 * 1000;
-  const elapsed = Math.floor((asOf.getTime() - start.getTime()) / MS_PER_WEEK);
+  const today = clinicMidnight(clinicToday(asOf));
+  const MS_PER_DAY = 24 * 60 * 60 * 1000;
+  const days = Math.round((today.getTime() - start.getTime()) / MS_PER_DAY);
 
-  return elapsed < 0 ? null : elapsed;
+  return days < 0 ? null : Math.floor(days / 7);
 };
 
 /**

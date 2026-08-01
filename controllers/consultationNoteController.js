@@ -1,6 +1,7 @@
 const { Op } = require('sequelize');
 const { success, error } = require('../utils/response');
 const { resolvePatient } = require('../utils/patientFamily');
+const { clinicToday, clinicClockTime } = require('../utils/clinicTime');
 const db = require('../models');
 
 const { ConsultationNote, Patient, User } = db;
@@ -79,14 +80,12 @@ const create = async (req, res) => {
     if (!family) return error(res, `Patient ${uhid} not found`, 404);
     if (family.isDeactivated) return error(res, 'This patient profile is inactive. No new notes can be created.', 403);
 
-    // Get current date and time
+    // Date and time as the clinic experiences them — the pair has to agree.
+    // These were a UTC date beside a server-local time, so a note written at
+    // 01:00 was filed under the previous day with a 01:00 AM timestamp.
     const now = new Date();
-    const date = now.toISOString().split('T')[0];
-    const time = now.toLocaleTimeString('en-US', {
-      hour: '2-digit',
-      minute: '2-digit',
-      hour12: true,
-    });
+    const date = clinicToday(now);
+    const time = clinicClockTime({}, now);
 
     // Create the consultation note
     const consultationNote = await ConsultationNote.create({
@@ -257,8 +256,10 @@ const update = async (req, res) => {
       return error(res, 'You can only update your own consultation notes', 403);
     }
 
-    // Medical records law: notes can only be edited on the day they were written
-    const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+    // Medical records law: notes can only be edited on the day they were
+    // written — the clinic's day, so the window closes at local midnight rather
+    // than at 03:00 the next morning (which is what a UTC "today" gave).
+    const today = clinicToday();
     if (consultationNote.date !== today) {
       return error(res, 'Consultation notes can only be edited on the day they were written', 403);
     }

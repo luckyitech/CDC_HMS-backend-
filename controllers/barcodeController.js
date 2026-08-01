@@ -4,7 +4,8 @@ const { resolvePatient } = require('../utils/patientFamily');
 const { code128Png } = require('../utils/code128png');
 const { sendPatientBarcodeEmail } = require('../utils/emailService');
 
-const { Patient, BarcodeScan, User } = db;
+const { Patient, BarcodeScan, User, StockBatch, StockItem, StockLevel, StockLocation } = db;
+const { Op } = require('sequelize');
 
 // Normalise a scanned payload.
 const normalise = (raw) => String(raw || '').trim().toUpperCase();
@@ -26,7 +27,7 @@ const NAMESPACES = [
   { type: 'labTest',      pattern: /^LAB-/,    live: false },
   { type: 'prescription', pattern: /^RX-/,     live: false },
   { type: 'asset',        pattern: /^AST-/,    live: false },
-  { type: 'stock',        pattern: /^STK-/,    live: false },
+  { type: 'stock',        pattern: /^STK-/,    live: true  },   // batch shelf labels (stock module)
 ];
 
 const classify = (payload) =>
@@ -52,10 +53,55 @@ const resolveScan = async (req, res) => {
     const ns = classify(payload);
 
     // Recognised-but-not-yet-live namespaces — clean message, no lookup.
-    // When the lab / pharmacy / asset / stock service lands, replace this
-    // with a branch that resolves and returns { type: ns.type, ... }.
+    // When the lab / pharmacy / asset service lands, replace this with a
+    // branch that resolves and returns { type: ns.type, ... }.
     if (ns && !ns.live) {
       return error(res, 'This code type is not supported yet', 404);
+    }
+
+    // --- Stock batch shelf label (STK-000123) ---
+    // Resolves to the batch + item + current per-location quantities so the
+    // stock screens can pre-fill from a scan. Audited like every other scan.
+    if (ns && ns.type === 'stock') {
+      const batch = await StockBatch.findOne({
+        where: { labelCode: payload },
+        include: [
+          { model: StockItem, as: 'item', attributes: ['id', 'name', 'unit', 'category', 'requiresColdChain', 'isHighAlert'] },
+          {
+            model: StockLevel, as: 'levels',
+            where: { quantity: { [Op.gt]: 0 } },
+            required: false,
+            include: [{ model: StockLocation, as: 'location', attributes: ['id', 'name'] }],
+          },
+        ],
+      });
+      if (!batch) return error(res, 'Stock label not recognised', 404);
+
+      BarcodeScan.create({
+        PatientId:    null,
+        scannedBy:    req.user.id,
+        rawPayload:   payload,
+        resolvedType: 'stock',
+        action:       'scan',
+        source:       req.query.source === 'camera' ? 'camera' : 'usb',
+      }).catch((e) => console.error('Barcode.resolveScan audit error:', e));
+
+      return success(res, {
+        type: 'stock',
+        batch: {
+          id: batch.id,
+          labelCode: batch.labelCode,
+          batchNo: batch.batchNo,
+          expiryDate: batch.expiryDate,
+          status: batch.status,
+        },
+        item: batch.item,
+        levels: (batch.levels || []).map((l) => ({
+          locationId: l.location?.id,
+          locationName: l.location?.name,
+          quantity: l.quantity,
+        })),
+      });
     }
 
     const family = await resolvePatient(payload);

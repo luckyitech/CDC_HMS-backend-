@@ -11,6 +11,7 @@ const { buildReviewStatus } = require('../utils/glp1ReviewStatus');
 // One formatter, many consumers — /full and /api/glp1-reviews must not drift.
 const { formatReview, reviewIncludes } = require('./glp1ReviewController');
 const { formatAdministration, administrationIncludes } = require('./glp1AdministrationController');
+const { clinicToday } = require('../utils/clinicTime');
 const db = require('../models');
 
 const {
@@ -592,7 +593,9 @@ const switchMedication = async (req, res) => {
     }
     const schedule = check.schedule;
 
-    const switchDate = startDate || new Date().toISOString().slice(0, 10);
+    // Clinic date — a switch recorded before 03:00 was being dated to the
+    // previous day, shifting the whole dose ladder by one day.
+    const switchDate = startDate || clinicToday();
 
     // 1. Stop the old course
     therapy.status     = 'Stopped';

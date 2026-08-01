@@ -32,6 +32,8 @@ const formatUserResponse = (user, profile) => {
     role:      user.role,
     status:    user.isActive ? 'Active' : 'Inactive',
     createdAt: user.createdAt,
+    // Stock permission flag — drives the Manage Users toggle.
+    canManageStock: !!user.canManageStock,
   };
 
   if (user.role === 'doctor' && profile) {
@@ -371,7 +373,7 @@ const listUsers = async (req, res) => {
     const [users, unlinkedPatients] = await Promise.all([
       User.findAll({
         where,
-        attributes: ['id', 'firstName', 'lastName', 'email', 'phone', 'role', 'isActive', 'createdAt'],
+        attributes: ['id', 'firstName', 'lastName', 'email', 'phone', 'role', 'isActive', 'createdAt', 'canManageStock'],
         include: [
           { model: DoctorProfile,  required: false },
           { model: StaffProfile,   required: false },
@@ -468,6 +470,14 @@ const updateUser = async (req, res) => {
     userFields.forEach((field) => {
       if (updates[field] !== undefined) userUpdates[field] = updates[field];
     });
+
+    // Stock permission toggle (this route is already admin-only). Doctor and
+    // staff only — admins have stock access implicitly, other roles never do.
+    // Included in userFields so the change lands in the UserEditLog audit.
+    if (updates.canManageStock !== undefined && ['doctor', 'staff'].includes(user.role)) {
+      userFields.push('canManageStock');
+      userUpdates.canManageStock = !!updates.canManageStock;
+    }
 
     const userBefore = {};
     userFields.forEach((f) => { userBefore[f] = user[f]; });

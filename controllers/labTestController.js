@@ -1,6 +1,7 @@
 const { Op } = require('sequelize');
 const { success, error } = require('../utils/response');
 const { resolvePatient } = require('../utils/patientFamily');
+const { clinicToday, clinicClockTime } = require('../utils/clinicTime');
 const db = require('../models');
 const { generateLabTestNumber } = require('../utils/generateId');
 
@@ -118,14 +119,11 @@ const create = async (req, res) => {
   // Step 2: Generate unique test number
   const testNumber = await generateLabTestNumber(LabTest);
 
-  // Step 3: Get current date and time
+  // Step 3: Date and time as the clinic experiences them — the pair has to
+  // agree. This was a UTC date beside a server-local time.
   const now = new Date();
-  const orderedDate = now.toISOString().split('T')[0]; // YYYY-MM-DD
-  const orderedTime = now.toLocaleTimeString('en-US', {
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: true,
-  }); // "10:30 AM"
+  const orderedDate = clinicToday(now);            // YYYY-MM-DD
+  const orderedTime = clinicClockTime({}, now);    // "10:30 AM"
 
   // Step 4: Create the lab test
   // CRITICAL: PatientId must be PascalCase (auto-generated FK naming convention)

@@ -1,6 +1,7 @@
 const { Op, fn, col } = require('sequelize');
 const { success, error } = require('../utils/response');
 const { getDateRange, formatDoctorName, calculateAverage } = require('../utils/formatters');
+const { clinicToday } = require('../utils/clinicTime');
 const db = require('../models');
 
 const { Queue, User } = db;
@@ -111,7 +112,7 @@ const getTriageMetrics = async (req, res) => {
     // Group triage count by calendar date using all triaged records
     const volumeByDate = {};
     allTriaged.forEach(r => {
-      const date = new Date(r.createdAt).toISOString().split('T')[0];
+      const date = clinicToday(new Date(r.createdAt));
       volumeByDate[date] = (volumeByDate[date] || 0) + 1;
     });
     const dailyVolume = Object.entries(volumeByDate)
@@ -287,7 +288,7 @@ const computeWaitStats = (rows, startField, endField, dateField) => {
     else if (wait <= 60) buckets['31–60 min']++;
     else                 buckets['60+ min']++;
 
-    const date = new Date(r[dateField]).toISOString().split('T')[0];
+    const date = clinicToday(new Date(r[dateField]));
     if (!byDate[date]) byDate[date] = { date, durations: [] };
     byDate[date].durations.push(wait);
 

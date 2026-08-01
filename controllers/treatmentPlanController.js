@@ -1,6 +1,7 @@
 const { Op } = require('sequelize');
 const { success, error } = require('../utils/response');
 const { resolvePatient } = require('../utils/patientFamily');
+const { clinicToday, clinicClockTime } = require('../utils/clinicTime');
 const db = require('../models');
 
 const { TreatmentPlan, Patient, User } = db;
@@ -94,14 +95,12 @@ const create = async (req, res) => {
     { where: { PatientId: { [Op.in]: patientIds }, status: 'Active' } },
   );
 
-  // Step 3: Get current date and time
+  // Step 3: Date and time as the clinic experiences them — the pair has to
+  // agree. This was a UTC date beside a server-local time, so a plan written
+  // at 01:00 was filed under the previous day with a 01:00 AM timestamp.
   const now = new Date();
-  const date = now.toISOString().split('T')[0]; // YYYY-MM-DD
-  const time = now.toLocaleTimeString('en-US', {
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: true,
-  }); // "10:30 AM"
+  const date = clinicToday(now);              // YYYY-MM-DD
+  const time = clinicClockTime({}, now);      // "10:30 AM"
 
   // Step 4: Create the new treatment plan
   // CRITICAL: PatientId must be PascalCase (auto-generated FK naming convention)
@@ -276,8 +275,10 @@ const update = async (req, res) => {
   const treatmentPlan = await TreatmentPlan.findByPk(req.params.id);
   if (!treatmentPlan) return error(res, 'Treatment plan not found', 404);
 
-  // Medical records law: a treatment plan can only be edited on the day it was written.
-  const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+  // Medical records law: a treatment plan can only be edited on the day it was
+  // written — the clinic's day, so the window closes at local midnight rather
+  // than at 03:00 the next morning (which is what a UTC "today" gave).
+  const today = clinicToday();
   if (treatmentPlan.date !== today) {
     return error(res, 'Treatment plans can only be edited on the day they were written', 403);
   }

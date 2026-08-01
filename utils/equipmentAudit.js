@@ -9,6 +9,9 @@ const formatValue = (field, value) => {
   if (value === null || value === undefined) return null;
   if (SENSITIVE_FIELDS.has(field)) return '[hidden]';
   if (DATE_FIELDS.has(field)) {
+    // Reading a DATEONLY back out, not deriving "today": these values are
+    // midnight UTC of the calendar day they hold, so UTC extraction returns
+    // that same day. clinicToday() here would shift it. See utils/clinicTime.
     const d = new Date(value);
     return isNaN(d.getTime()) ? String(value) : d.toISOString().split('T')[0];
   }

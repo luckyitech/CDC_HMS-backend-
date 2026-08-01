@@ -1,6 +1,7 @@
 const { Op } = require('sequelize');
 const { success, error } = require('../utils/response');
 const { broadcast } = require('../utils/sseManager');
+const { clinicStartOfDay } = require('../utils/clinicTime');
 const db = require('../models');
 
 const { Queue, Patient, User } = db;
@@ -86,6 +87,7 @@ const formatItem = (item, position) => {
     doctorNotes:           q.doctorNotes           || null,
     finalCharges:          q.finalCharges          || [],
     finalProcedures:       q.finalProcedures       || [],
+    finalSupplies:         q.finalSupplies         || [],
     dischargeComment:      q.dischargeComment      || null,
     addedBy:               q.addedBy               || null,
     triagedBy:             q.triagedBy             || null,
@@ -126,8 +128,7 @@ const add = async (req, res) => {
 
     // Review visits: verify patient was actually discharged today before skipping triage
     if (isReview) {
-      const startOfToday = new Date();
-      startOfToday.setHours(0, 0, 0, 0);
+      const startOfToday = clinicStartOfDay();
       const dischargedToday = await Queue.findOne({
         where: { PatientId: patient.id, status: 'Completed', createdAt: { [Op.gte]: startOfToday } },
       });
@@ -181,8 +182,7 @@ const add = async (req, res) => {
 // ------------------------------------
 const list = async (req, res) => {
   try {
-    const startOfToday = new Date();
-    startOfToday.setHours(0, 0, 0, 0);
+    const startOfToday = clinicStartOfDay();
 
     const items = await Queue.findAll({
       where: {
@@ -298,8 +298,7 @@ const remove = async (req, res) => {
 // ------------------------------------
 const stats = async (req, res) => {
   try {
-    const startOfToday = new Date();
-    startOfToday.setHours(0, 0, 0, 0);
+    const startOfToday = clinicStartOfDay();
     const todayFilter = { createdAt: { [Op.gte]: startOfToday } };
 
     const [total, waiting, inTriage, withDoctor, pendingInjection, pendingBilling, completed, urgent] =

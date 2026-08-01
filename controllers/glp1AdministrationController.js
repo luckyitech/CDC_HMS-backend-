@@ -2,6 +2,7 @@ const { Op } = require('sequelize');
 const { success, error } = require('../utils/response');
 const { resolvePatient } = require('../utils/patientFamily');
 const { doseStepForReview } = require('../utils/glp1Schedule');
+const { clinicToday } = require('../utils/clinicTime');
 const db = require('../models');
 
 const { Glp1Administration, Glp1Therapy, Patient, User } = db;
@@ -156,8 +157,10 @@ const record = async (req, res) => {
       PatientId:        family.patient.id,
       weekNumber,
       status,
+      // Clinic date — an injection given before 03:00 was being recorded
+      // against the previous day, which then feeds the dose schedule.
       administeredDate: status === 'given'
-        ? (administeredDate || new Date().toISOString().slice(0, 10))
+        ? (administeredDate || clinicToday())
         : (administeredDate || null),
       dose:             resolvedDose,
       site:             site || null,

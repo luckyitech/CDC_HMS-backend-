@@ -29,6 +29,9 @@ const buildUserResponse = async (user) => {
     phone: user.phone,
     role: user.role,
     status: user.isActive ? 'Active' : 'Inactive',
+    // Stock module: admins always have access; staff/doctors only when granted.
+    // Drives the Stocks sidebar entry — the API is still guarded server-side.
+    canManageStock: user.role === 'admin' || !!user.canManageStock,
   };
 
   const ProfileModel = profileModelMap[user.role];

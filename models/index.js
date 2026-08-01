@@ -34,6 +34,13 @@ const Glp1Administration     = require('./Glp1Administration');
 const CatalogItem         = require('./CatalogItem');
 const Setting             = require('./Setting');
 const BarcodeScan         = require('./BarcodeScan');
+const StockItem           = require('./StockItem');
+const StockLocation       = require('./StockLocation');
+const StockBatch          = require('./StockBatch');
+const StockMovement       = require('./StockMovement');
+const StockLevel          = require('./StockLevel');
+const StockParLevel       = require('./StockParLevel');
+const Supplier            = require('./Supplier');
 
 // =============================================
 // ASSOCIATIONS
@@ -188,6 +195,54 @@ Glp1Administration.belongsTo(User, { as: 'administeredByUser', foreignKey: 'admi
 Glp1Therapy.belongsTo(Glp1Therapy, { as: 'switchedFrom', foreignKey: 'switchedFromTherapyId' });
 Glp1Therapy.hasOne  (Glp1Therapy, { as: 'switchedTo',   foreignKey: 'switchedFromTherapyId' });
 
+// --- Stock management ---
+// StockMovement is the append-only ledger (source of truth); StockLevel is a
+// materialized per-batch-per-location quantity rebuilt from it on demand.
+// All FKs explicitly aliased camelCase except PatientId (association-generated
+// PascalCase, per convention).
+StockItem.belongsTo(CatalogItem, { as: 'catalogItem', foreignKey: 'catalogItemId' });
+CatalogItem.hasMany(StockItem,   { foreignKey: 'catalogItemId' });
+StockItem.belongsTo(User, { as: 'addedByUser',   foreignKey: 'addedById' });
+StockItem.belongsTo(User, { as: 'updatedByUser', foreignKey: 'lastUpdatedById' });
+
+StockLocation.belongsTo(User, { as: 'addedByUser',   foreignKey: 'addedById' });
+StockLocation.belongsTo(User, { as: 'updatedByUser', foreignKey: 'lastUpdatedById' });
+
+Supplier.belongsTo(User, { as: 'addedByUser',   foreignKey: 'addedById' });
+Supplier.belongsTo(User, { as: 'updatedByUser', foreignKey: 'lastUpdatedById' });
+
+StockBatch.belongsTo(StockItem, { as: 'item',     foreignKey: 'stockItemId' });
+StockItem.hasMany(StockBatch,   { as: 'batches',  foreignKey: 'stockItemId' });
+StockBatch.belongsTo(Supplier,  { as: 'supplier', foreignKey: 'supplierId' });
+StockBatch.belongsTo(User,      { as: 'receivedByUser', foreignKey: 'receivedById' });
+
+StockMovement.belongsTo(StockItem,     { as: 'item',         foreignKey: 'stockItemId' });
+StockItem.hasMany(StockMovement,       { as: 'movements',    foreignKey: 'stockItemId' });
+StockMovement.belongsTo(StockBatch,    { as: 'batch',        foreignKey: 'stockBatchId' });
+StockBatch.hasMany(StockMovement,      { as: 'movements',    foreignKey: 'stockBatchId' });
+StockMovement.belongsTo(StockLocation, { as: 'fromLocation', foreignKey: 'fromLocationId' });
+StockMovement.belongsTo(StockLocation, { as: 'toLocation',   foreignKey: 'toLocationId' });
+StockMovement.belongsTo(User,          { as: 'performedByUser', foreignKey: 'performedById' });
+StockMovement.belongsTo(Prescription,  { as: 'prescription', foreignKey: 'prescriptionId' });
+StockMovement.belongsTo(StockMovement, { as: 'reverses',     foreignKey: 'reversesMovementId' });
+Patient.hasMany(StockMovement);        // generates PatientId — nullable until
+StockMovement.belongsTo(Patient);      //   the patient-linking phase activates
+
+// generates QueueId — the visit a checkout dispense belongs to. Null on every
+// other movement type. It exists so a repeated discharge cannot dispense the
+// same supplies twice; see checkoutDispense.
+Queue.hasMany(StockMovement);
+StockMovement.belongsTo(Queue);
+
+StockLevel.belongsTo(StockBatch,    { as: 'batch',    foreignKey: 'stockBatchId' });
+StockBatch.hasMany(StockLevel,      { as: 'levels',   foreignKey: 'stockBatchId' });
+StockLevel.belongsTo(StockLocation, { as: 'location', foreignKey: 'locationId' });
+StockLocation.hasMany(StockLevel,   { as: 'levels',   foreignKey: 'locationId' });
+
+StockParLevel.belongsTo(StockItem,     { as: 'item',     foreignKey: 'stockItemId' });
+StockParLevel.belongsTo(StockLocation, { as: 'location', foreignKey: 'locationId' });
+StockParLevel.belongsTo(User,          { as: 'updatedByUser', foreignKey: 'lastUpdatedById' });
+
 // --- Barcode scan audit (append-only) ---
 Patient.hasMany(BarcodeScan);
 BarcodeScan.belongsTo(Patient);
@@ -232,6 +287,13 @@ const db = {
   CatalogItem,
   Setting,
   BarcodeScan,
+  StockItem,
+  StockLocation,
+  StockBatch,
+  StockMovement,
+  StockLevel,
+  StockParLevel,
+  Supplier,
 };
 
 module.exports = db;

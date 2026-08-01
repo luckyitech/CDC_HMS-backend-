@@ -1,6 +1,7 @@
 const { Op } = require('sequelize');
 const { success, error } = require('../utils/response');
 const { resolvePatient } = require('../utils/patientFamily');
+const { clinicToday, clinicClockTime } = require('../utils/clinicTime');
 const db = require('../models');
 
 const { InitialAssessment, Patient, User } = db;
@@ -87,14 +88,11 @@ const create = async (req, res) => {
     return error(res, 'Initial assessment already exists for this patient. It can only be done once.', 409);
   }
 
-  // Get current date and time
+  // Date and time as the clinic experiences them — the pair has to agree.
+  // This was a UTC date beside a server-local time.
   const now = new Date();
-  const date = now.toISOString().split('T')[0];
-  const time = now.toLocaleTimeString('en-US', {
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: true,
-  });
+  const date = clinicToday(now);
+  const time = clinicClockTime({}, now);
 
   // Extract TEXT column values from the structured data object if not provided directly
   let derivedHpi = hpi;

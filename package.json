@@ -8,7 +8,7 @@
     "dev": "nodemon server.js",
     "migrate": "sequelize-cli db:migrate",
     "migrate:undo": "sequelize-cli db:migrate:undo",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "node --test \"tests/**/*.test.js\""
   },
   "keywords": [],
   "author": "",
