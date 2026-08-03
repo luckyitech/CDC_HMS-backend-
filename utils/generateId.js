@@ -15,15 +15,28 @@ const generateUHID = async (Patient) => {
 
 // Generic number generator: PREFIX-YYYY-NNN
 // Used for prescriptions (RX), lab tests (LAB), appointments (APT).
+//
+// The suffix is padded to 3 digits, so widths stay equal only up to 999. Past
+// that the column can no longer be ordered as a string: 'APT-2026-999' sorts
+// ABOVE 'APT-2026-1000' because '9' > '1'. Ordering by the raw column therefore
+// pinned the highest number at 999 forever and regenerated the same
+// 'APT-2026-1000' on every call, colliding with the unique index and failing
+// every booking after the 1000th of the year.
+//
+// So compare numerically instead — same approach generateUHID already uses.
 const generateNumber = async (Model, field, prefix) => {
   const year = new Date().getFullYear();
   const yearPrefix = `${prefix}-${year}-`;
-  const last = await Model.findOne({
+  const rows = await Model.findAll({
     where: { [field]: { [Op.like]: `${yearPrefix}%` } },
-    order: [[field, 'DESC']],
+    attributes: [field],
+    raw: true,
   });
-  const num = last ? parseInt(last[field].split('-').pop()) + 1 : 1;
-  return yearPrefix + String(num).padStart(3, '0');
+  const max = rows.reduce((highest, row) => {
+    const n = parseInt(String(row[field]).split('-').pop(), 10);
+    return !isNaN(n) && n > highest ? n : highest;
+  }, 0);
+  return yearPrefix + String(max + 1).padStart(3, '0');
 };
 
 // Prescription Number: RX-2025-001, RX-2025-002, ...
