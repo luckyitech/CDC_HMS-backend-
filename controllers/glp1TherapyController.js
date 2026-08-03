@@ -11,11 +11,12 @@ const { buildReviewStatus } = require('../utils/glp1ReviewStatus');
 // One formatter, many consumers — /full and /api/glp1-reviews must not drift.
 const { formatReview, reviewIncludes } = require('./glp1ReviewController');
 const { formatAdministration, administrationIncludes } = require('./glp1AdministrationController');
+const { formatNote, noteIncludes } = require('./glp1WeekNoteController');
 const { clinicToday } = require('../utils/clinicTime');
 const db = require('../models');
 
 const {
-  sequelize, Glp1Therapy, Glp1Review, Glp1Administration, Patient, User,
+  sequelize, Glp1Therapy, Glp1Review, Glp1Administration, Glp1WeekNote, Patient, User,
 } = db;
 
 // The standard monitoring schedule. Doctors add weeks per patient on top of this.
@@ -200,6 +201,12 @@ const getFull = async (req, res) => {
       order: [['weekNumber', 'ASC']],
     });
 
+    const weekNotes = await Glp1WeekNote.findAll({
+      where: { Glp1TherapyId: therapy.id, status: 'active' },
+      include: noteIncludes,
+      order: [['weekNumber', 'ASC'], ['id', 'ASC']],
+    });
+
     const formattedReviews = reviews.map(formatReview);
     const formattedTherapy = formatTherapy(therapy);
 
@@ -207,6 +214,7 @@ const getFull = async (req, res) => {
       therapy:         formattedTherapy,
       reviews:         formattedReviews,
       administrations: administrations.map(formatAdministration),
+      weekNotes:       weekNotes.map(formatNote),
       summary:         buildWeeklySummary(therapy, formattedReviews),
       // Whether a planned doctor review is outstanding. Sent from here so the
       // nurse's triage card and the doctor's tracker read one answer rather
