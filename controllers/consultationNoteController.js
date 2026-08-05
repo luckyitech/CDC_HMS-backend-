@@ -2,6 +2,7 @@ const { Op } = require('sequelize');
 const { success, error } = require('../utils/response');
 const { resolvePatient } = require('../utils/patientFamily');
 const { clinicToday, clinicClockTime } = require('../utils/clinicTime');
+const { PERMISSIONS, hasPermission } = require('../constants/permissions');
 const db = require('../models');
 
 const { ConsultationNote, Patient, User } = db;
@@ -304,7 +305,7 @@ const deleteNote = async (req, res) => {
     }
 
     // Only the doctor who created the note or an admin can delete it
-    if (req.user.role !== 'admin' && consultationNote.doctorId !== req.user.id) {
+    if (!hasPermission(req.user, PERMISSIONS.ADMIN_ACCESS) && consultationNote.doctorId !== req.user.id) {
       return error(res, 'You can only delete your own consultation notes', 403);
     }
 

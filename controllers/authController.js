@@ -4,6 +4,7 @@ const crypto = require('crypto');
 const { Op } = require('sequelize');
 const { success, error } = require('../utils/response');
 const { sendPasswordResetEmail } = require('../utils/emailService');
+const { PERMISSIONS, hasPermission, effectivePermissions } = require('../constants/permissions');
 const db = require('../models');
 
 const { User, DoctorProfile, StaffProfile, LabTechProfile, Patient } = db;
@@ -29,9 +30,15 @@ const buildUserResponse = async (user) => {
     phone: user.phone,
     role: user.role,
     status: user.isActive ? 'Active' : 'Inactive',
-    // Stock module: admins always have access; staff/doctors only when granted.
-    // Drives the Stocks sidebar entry — the API is still guarded server-side.
-    canManageStock: user.role === 'admin' || !!user.canManageStock,
+    // Everything this account can do, resolved: a real admin holds every
+    // permission implicitly, everyone else holds what was granted. Drives which
+    // portals and sidebar entries appear — the API is still guarded server-side,
+    // so this is UX, never the security boundary.
+    permissions: [...effectivePermissions(user)],
+    // Derived, and kept for the stock screens that already read it. The stored
+    // column is superseded by the 'stock.manage' permission; nothing should read
+    // user.canManageStock directly any more.
+    canManageStock: hasPermission(user, PERMISSIONS.STOCK_MANAGE),
   };
 
   const ProfileModel = profileModelMap[user.role];

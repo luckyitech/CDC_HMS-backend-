@@ -2,6 +2,7 @@ const { Op } = require('sequelize');
 const { success, error } = require('../utils/response');
 const { resolvePatient } = require('../utils/patientFamily');
 const { clinicToday } = require('../utils/clinicTime');
+const { PERMISSIONS, hasPermission } = require('../constants/permissions');
 const db = require('../models');
 const fs = require('fs');
 const path = require('path');
@@ -264,7 +265,7 @@ const list = async (req, res) => {
 
     // Admin-archived documents are hidden from every view.
     // Only an admin may list them, via ?archived=true.
-    if (req.user.role === 'admin' && archived === 'true') {
+    if (hasPermission(req.user, PERMISSIONS.ADMIN_ACCESS) && archived === 'true') {
       where.isArchived = true;
     } else {
       where.isArchived = false;
@@ -482,7 +483,7 @@ const serveFile = async (req, res) => {
 
     // Admin-archived documents are hidden from everyone except admins —
     // respond 404 so their existence is not revealed via direct links.
-    if (document.isArchived && req.user.role !== 'admin') {
+    if (document.isArchived && !hasPermission(req.user, PERMISSIONS.ADMIN_ACCESS)) {
       return error(res, `File '${filename}' not found.`, 404);
     }
 
