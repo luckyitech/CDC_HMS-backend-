@@ -108,6 +108,20 @@ const clinicMidnight = (clinicDate) => {
 // "today's" queue, "today's" registrations, "today's" movements.
 const clinicStartOfDay = (now = new Date()) => clinicMidnight(clinicToday(now));
 
+// The calendar day after a given clinic date, as 'YYYY-MM-DD'.
+//
+// For half-open date ranges: "everything on or before the 6th" is
+// `< clinicMidnight(nextClinicDate('2026-08-06'))`, which includes the whole of
+// the 6th. Writing it as `<= clinicMidnight('2026-08-06')` instead silently
+// drops every row after midnight — that is, the entire day.
+//
+// Pure calendar arithmetic in UTC, so it never touches a timezone: Date.UTC
+// normalises the 32nd of a month into the 1st of the next.
+const nextClinicDate = (clinicDate) => {
+  const [y, m, d] = String(clinicDate).split('-').map(Number);
+  return new Date(Date.UTC(y, m - 1, d + 1)).toISOString().slice(0, 10);
+};
+
 module.exports = {
   clinicToday,
   clinicDatePlusDays,
@@ -115,5 +129,6 @@ module.exports = {
   clinicClockTime,
   clinicMidnight,
   clinicStartOfDay,
+  nextClinicDate,
   CLINIC_TZ,
 };

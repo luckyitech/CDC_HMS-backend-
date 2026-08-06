@@ -25,9 +25,28 @@ const PERMISSIONS = {
   ADMIN_ACCESS: 'admin.access',
   // Manage the stock module. Replaces the canManageStock boolean.
   STOCK_MANAGE: 'stock.manage',
+  // Run the billing desk: raise and issue invoices, take payments, reverse
+  // them, and maintain the price list. Reception's capability.
+  BILLING_MANAGE: 'billing.manage',
+  // See prices OUTSIDE the billing screens — on the doctor's charge list, on a
+  // patient's profile. Split from BILLING_MANAGE because the clinic may want a
+  // doctor who can quote a patient a price without being able to bill anyone,
+  // and because clinical staff are money-blind by default.
+  BILLING_VIEW_PRICES: 'billing.viewPrices',
 };
 
 const ALL_PERMISSIONS = Object.values(PERMISSIONS);
+
+// Permissions that confer others.
+//
+// Whoever runs the billing desk obviously sees prices, and granting them
+// separately every time would be a footgun: the day someone forgets, reception
+// gets a checkout screen with no figures on it. Expanded in
+// effectivePermissions, so a single grant cannot drift out of step with what it
+// is supposed to include.
+const IMPLIED_PERMISSIONS = {
+  [PERMISSIONS.BILLING_MANAGE]: [PERMISSIONS.BILLING_VIEW_PRICES],
+};
 
 // Roles that may hold permissions at all. Patients are excluded outright: the
 // patient portal is a different trust boundary, and no capability here makes
@@ -44,7 +63,13 @@ const PERMISSIBLE_ROLES = ['doctor', 'staff', 'lab'];
 const effectivePermissions = (user) => {
   if (!user) return new Set();
   if (user.role === 'admin') return new Set(ALL_PERMISSIONS);
-  return new Set(Array.isArray(user.permissions) ? user.permissions : []);
+
+  const granted = Array.isArray(user.permissions) ? user.permissions : [];
+  const effective = new Set(granted);
+  granted.forEach((permission) => {
+    (IMPLIED_PERMISSIONS[permission] || []).forEach((implied) => effective.add(implied));
+  });
+  return effective;
 };
 
 const hasPermission = (user, permission) => effectivePermissions(user).has(permission);
@@ -66,6 +91,7 @@ const sanitizePermissions = (input) => {
 module.exports = {
   PERMISSIONS,
   ALL_PERMISSIONS,
+  IMPLIED_PERMISSIONS,
   PERMISSIBLE_ROLES,
   effectivePermissions,
   hasPermission,

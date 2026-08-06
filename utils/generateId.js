@@ -24,13 +24,20 @@ const generateUHID = async (Patient) => {
 // every booking after the 1000th of the year.
 //
 // So compare numerically instead — same approach generateUHID already uses.
-const generateNumber = async (Model, field, prefix) => {
+//
+// Pass `t` when calling from inside a transaction. Without it this runs on a
+// SECOND connection from the pool while the caller still holds the first, so
+// under load every pooled connection can end up held by a transaction waiting
+// for a connection that will never come — the same trap documented on
+// suggestFefoBatch in utils/stockLedger.js.
+const generateNumber = async (Model, field, prefix, t = null) => {
   const year = new Date().getFullYear();
   const yearPrefix = `${prefix}-${year}-`;
   const rows = await Model.findAll({
     where: { [field]: { [Op.like]: `${yearPrefix}%` } },
     attributes: [field],
     raw: true,
+    transaction: t,
   });
   const max = rows.reduce((highest, row) => {
     const n = parseInt(String(row[field]).split('-').pop(), 10);

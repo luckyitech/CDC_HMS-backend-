@@ -42,6 +42,10 @@ const StockMovement       = require('./StockMovement');
 const StockLevel          = require('./StockLevel');
 const StockParLevel       = require('./StockParLevel');
 const Supplier            = require('./Supplier');
+const ServiceItem         = require('./ServiceItem');
+const Invoice             = require('./Invoice');
+const InvoiceLine         = require('./InvoiceLine');
+const Payment             = require('./Payment');
 
 // =============================================
 // ASSOCIATIONS
@@ -260,6 +264,50 @@ BarcodeScan.belongsTo(Patient);
 User.hasMany(BarcodeScan, { foreignKey: 'scannedBy', as: 'barcodeScans' });
 BarcodeScan.belongsTo(User, { foreignKey: 'scannedBy', as: 'scannedByUser' });
 
+// --- Billing: price list ---
+// A billable supply points at the StockItem it is dispensed from, so a batch
+// scanned at the checkout desk resolves to a price. Many service items may map
+// to one stock item (a strip sold singly and by the box).
+ServiceItem.belongsTo(StockItem, { as: 'stockItem',   foreignKey: 'stockItemId' });
+StockItem.hasMany(ServiceItem,   { as: 'serviceItems', foreignKey: 'stockItemId' });
+ServiceItem.belongsTo(User,      { as: 'addedByUser',   foreignKey: 'addedById' });
+ServiceItem.belongsTo(User,      { as: 'updatedByUser', foreignKey: 'lastUpdatedById' });
+
+// --- Billing: invoices ---
+// generates PatientId — who was treated. Always set: an invoice with no patient
+// is a bill nobody can be asked to pay.
+Patient.hasMany(Invoice);
+Invoice.belongsTo(Patient);
+// generates QueueId — the visit being billed. Null for an invoice raised
+// outside a visit (a standalone lab bill, a correction re-issue).
+Queue.hasMany(Invoice);
+Invoice.belongsTo(Queue);
+Invoice.belongsTo(User, { as: 'issuedByUser', foreignKey: 'issuedById' });
+Invoice.belongsTo(User, { as: 'voidedByUser', foreignKey: 'voidedById' });
+
+// Lines cascade with the invoice: a DRAFT can be discarded wholesale, and once
+// issued neither the invoice nor its lines are ever deleted, so the cascade
+// only ever fires on a draft.
+Invoice.hasMany(InvoiceLine,  { as: 'lines', foreignKey: 'invoiceId', onDelete: 'CASCADE' });
+InvoiceLine.belongsTo(Invoice, { foreignKey: 'invoiceId' });
+// Nullable — an ad-hoc line typed at the desk has no price list row behind it.
+// The line snapshots everything it needs, so this link is for reporting only
+// and is never read to render the invoice.
+InvoiceLine.belongsTo(ServiceItem, { as: 'serviceItem', foreignKey: 'serviceItemId' });
+// Ties a supply line to the batch actually dispensed, so the bill and the stock
+// ledger can be reconciled against each other.
+InvoiceLine.belongsTo(StockBatch,  { as: 'batch',       foreignKey: 'stockBatchId' });
+
+// --- Billing: payments (append-only) ---
+Invoice.hasMany(Payment,  { as: 'payments', foreignKey: 'invoiceId' });
+Payment.belongsTo(Invoice, { foreignKey: 'invoiceId' });
+Payment.belongsTo(User,    { as: 'receivedByUser', foreignKey: 'receivedById' });
+// Self-referential, one-to-one both ways: a reversal points at what it undid,
+// and a payment exposes the reversal that undid it. hasOne rather than hasMany
+// because unique_reversal_per_payment makes a second one impossible.
+Payment.belongsTo(Payment, { as: 'reversesPayment', foreignKey: 'reversesPaymentId' });
+Payment.hasOne(Payment,    { as: 'reversal',        foreignKey: 'reversesPaymentId' });
+
 // =============================================
 // EXPORTS
 // =============================================
@@ -306,6 +354,10 @@ const db = {
   StockLevel,
   StockParLevel,
   Supplier,
+  ServiceItem,
+  Invoice,
+  InvoiceLine,
+  Payment,
 };
 
 module.exports = db;
