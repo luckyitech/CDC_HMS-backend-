@@ -47,6 +47,18 @@ router.post('/staff', authenticate, authorize('admin'), [
 ], userController.createStaff);
 
 // ------------------------------------
+// POST /api/users/nurses — create nurse (HMIS V3)
+// ------------------------------------
+router.post('/nurses', authenticate, authorize('admin'), [
+  body('firstName').notEmpty().withMessage('First name is required'),
+  body('lastName').notEmpty().withMessage('Last name is required'),
+  body('email').isEmail().withMessage('Valid email is required'),
+  body('phone').notEmpty().withMessage('Phone number is required'),
+  body('password').optional({ nullable: true }).isLength({ min: 6 }).withMessage('Password must be at least 6 characters'),
+  validate,
+], userController.createNurse);
+
+// ------------------------------------
 // POST /api/users/lab-techs — create lab tech
 // ------------------------------------
 router.post('/lab-techs', authenticate, authorize('admin'), [

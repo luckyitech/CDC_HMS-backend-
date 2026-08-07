@@ -101,6 +101,14 @@ const formatItem = (item, position) => {
     referredAt:             q.referredAt            || null,
     referredToDoctorName:   q.referredToDoctorName  || null,
     externalReferralTarget: q.externalReferralTarget|| null,
+    // HMIS V3 — admission request (advise -> convert)
+    admissionRequested:             q.admissionRequested             || false,
+    admissionReason:                q.admissionReason                || null,
+    admissionType:                  q.admissionType                  || null,
+    admissionWardPreference:        q.admissionWardPreference        || null,
+    admissionRequestedByDoctorName: q.admissionRequestedByDoctorName || null,
+    admissionRequestedAt:           q.admissionRequestedAt           || null,
+    admissionConvertedToId:         q.admissionConvertedToId         || null,
   };
 };
 
