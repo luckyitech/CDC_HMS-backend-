@@ -102,6 +102,17 @@ router.post('/:uhid/complete-registration', authenticate, authorize('staff', 'ad
 router.put('/:uhid', authenticate, authorize('staff', 'admin'), findPatient, patientController.update);
 
 // ------------------------------------
+// Patient diagnoses — tracked list (summary panel). Clinical record: retire, never delete.
+const patientDiagnosisController = require('../controllers/patientDiagnosisController');
+router.get('/:uhid/diagnoses', authenticate, authorize('doctor'), findPatient, patientDiagnosisController.list);
+router.post('/:uhid/diagnoses', authenticate, authorize('doctor'), findPatient, patientDiagnosisController.create);
+router.patch('/:uhid/diagnoses/:id/resolve', authenticate, authorize('doctor'), findPatient, patientDiagnosisController.resolve);
+router.patch('/:uhid/diagnoses/:id/reactivate', authenticate, authorize('doctor'), findPatient, patientDiagnosisController.reactivate);
+
+// GET/PATCH /api/patients/:uhid/chart-metrics — doctor's followed chart metrics (summary panel)
+router.get('/:uhid/chart-metrics', authenticate, authorize('doctor'), findPatient, patientController.getChartMetrics);
+router.patch('/:uhid/chart-metrics', authenticate, authorize('doctor'), findPatient, patientController.updateChartMetrics);
+
 // PATCH /api/patients/:uhid/summary — doctor writes/edits patient summary
 // ------------------------------------
 router.patch('/:uhid/summary', authenticate, authorize('doctor'), findPatient, patientController.updateSummary);

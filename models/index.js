@@ -35,6 +35,7 @@ const Glp1WeekNote           = require('./Glp1WeekNote');
 const CatalogItem         = require('./CatalogItem');
 const Setting             = require('./Setting');
 const BarcodeScan         = require('./BarcodeScan');
+const PatientDiagnosis    = require('./PatientDiagnosis');
 const StockItem           = require('./StockItem');
 const StockLocation       = require('./StockLocation');
 const StockBatch          = require('./StockBatch');
@@ -69,6 +70,12 @@ Patient.hasMany  (Patient, { as: 'mergedPatients', foreignKey: 'mergedIntoId' })
 // --- Patient children (one-to-many) ---
 Patient.hasMany(PatientVital);
 PatientVital.belongsTo(Patient);
+
+// Patient diagnoses — tracked list on the consultation summary panel
+Patient.hasMany(PatientDiagnosis);
+PatientDiagnosis.belongsTo(Patient);
+PatientDiagnosis.belongsTo(User, { as: 'addedBy',    foreignKey: 'addedById'    });
+PatientDiagnosis.belongsTo(User, { as: 'resolvedBy', foreignKey: 'resolvedById' });
 
 Patient.hasMany(BloodSugarReading);
 BloodSugarReading.belongsTo(Patient);
@@ -299,6 +306,7 @@ const db = {
   CatalogItem,
   Setting,
   BarcodeScan,
+  PatientDiagnosis,
   StockItem,
   StockLocation,
   StockBatch,
