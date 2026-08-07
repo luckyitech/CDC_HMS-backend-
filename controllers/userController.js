@@ -381,7 +381,18 @@ const listUsers = async (req, res) => {
     const [users, unlinkedPatients] = await Promise.all([
       User.findAll({
         where,
-        attributes: ['id', 'firstName', 'lastName', 'email', 'phone', 'role', 'isActive', 'createdAt', 'canManageStock'],
+        // `permissions` is REQUIRED here, not optional detail. Manage Users
+        // toggles a capability by sending the whole list back:
+        //   [...(user.permissions || []), 'billing.manage']
+        // Without the column the client reads undefined, falls back to [], and
+        // granting one capability silently WIPES every other one the user held
+        // — a user with admin access would lose it the moment someone granted
+        // them stock. The screen would look right, because it re-renders from
+        // what it just sent.
+        attributes: [
+          'id', 'firstName', 'lastName', 'email', 'phone', 'role', 'isActive',
+          'createdAt', 'canManageStock', 'permissions',
+        ],
         include: [
           { model: DoctorProfile,  required: false },
           { model: StaffProfile,   required: false },
