@@ -70,8 +70,14 @@ const InvoiceLine = defineModel('InvoiceLine', {
     defaultValue: 0,
   },
 
-  // invoiceId, serviceItemId, stockBatchId — aliased associations in
-  // models/index.js.
+  // invoiceId, serviceItemId, stockBatchId, pricedAtCheckoutById — aliased
+  // associations in models/index.js.
+  //
+  //   pricedAtCheckoutById is set when reception typed this line's price at the
+  //   desk, because the scanned supply matched no service on the price list.
+  //   NULL means the price came from the price list, where an admin set it.
+  //   The distinction is the whole audit: a price chosen by the person taking
+  //   the money is reviewable, and one chosen by an admin is policy.
   //   serviceItemId is NULL for an ad-hoc line typed at the desk.
   //   stockBatchId ties a supply line to the batch actually dispensed, so the
   //   bill and the stock ledger can be reconciled against each other.

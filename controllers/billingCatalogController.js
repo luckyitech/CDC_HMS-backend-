@@ -7,7 +7,7 @@ const {
 } = require('../constants/billing');
 const db = require('../models');
 
-const { ServiceItem, InvoiceLine, StockItem, User } = db;
+const { ServiceItem, ServicePriceChange, InvoiceLine, StockItem, User } = db;
 
 // =====================================================================
 // The price list — what the clinic sells and what it costs.
@@ -116,10 +116,63 @@ const list = action('Billing.services.list', async (req, res) => {
   return success(res, rows.map((row) => serviceItemFor(req.user, row)));
 });
 
+// ---------------------------------------------------------------------
+// Price history
+//
+// ServiceItem records who last edited it and when. It does not record WHAT
+// CHANGED, and that gap is what this closes:
+//
+//   Drop HbA1c from 3,500 to 500. Bill the patient 500 officially, take 3,500
+//   in cash, keep the difference. Restore the price five minutes later. The
+//   activity log shows two edits by that person, NEITHER carrying an amount,
+//   and every invoice raised in between is arithmetically perfect.
+//
+// A row per change makes the dip visible. Written for price, VAT class and
+// status — the three things that decide what a patient is charged and whether
+// they can be charged at all. Renames are not commercial and are not tracked.
+// ---------------------------------------------------------------------
+const TRACKED = [
+  ['unitPriceMinor', 'oldPriceMinor', 'newPriceMinor'],
+  ['vatClass', 'oldVatClass', 'newVatClass'],
+  ['status', 'oldStatus', 'newStatus'],
+];
+
+/**
+ * Write a history row if anything commercial actually changed.
+ *
+ * Called with the values read BEFORE the update. Returns the row, or null when
+ * the edit touched only the name or the code — recording a change that did not
+ * happen would bury the ones that did.
+ */
+const recordPriceChange = async (before, after, userId) => {
+  const changed = TRACKED.filter(([field]) => String(before[field]) !== String(after[field]));
+  if (!changed.length) return null;
+
+  const entry = { serviceItemId: after.id, changedById: userId || null };
+  // Both sides of EVERY tracked field, not only the ones that moved, so a row
+  // reads on its own without reconstructing the sequence before it.
+  TRACKED.forEach(([field, oldKey, newKey]) => {
+    entry[oldKey] = before[field];
+    entry[newKey] = after[field];
+  });
+
+  return ServicePriceChange.create(entry);
+};
+
 /** POST /api/billing/services */
 const create = action('Billing.services.create', async (req, res) => {
   const patch = patchFrom(req.body);
   if (!patch.name) throw new BillingError('Name is required');
+
+  // A service must arrive with a price. Nothing may be added to the price list
+  // that reception then cannot bill — an unpriced service silently blocks a
+  // whole visit's invoice at the desk, where nobody can fix it.
+  //
+  // 0 is a legitimate price and passes: it means the clinic gives this away.
+  // Only "nobody decided" is refused.
+  if (patch.unitPriceMinor === null || patch.unitPriceMinor === undefined) {
+    throw new BillingError('A price is required — use 0 if the service is free');
+  }
 
   const row = await ServiceItem.create({
     category: 'other',
@@ -156,12 +209,27 @@ const update = action('Billing.services.update', async (req, res) => {
   const patch = patchFrom(req.body);
   if ('name' in patch && !patch.name) throw new BillingError('Name is required');
 
+  // A price may be changed but not removed. Clearing one would make the service
+  // unbillable at the desk, where nobody has the rights to put it back.
+  if ('unitPriceMinor' in patch && patch.unitPriceMinor === null) {
+    throw new BillingError('A price is required — use 0 if the service is free');
+  }
+
+  // Read before the write: the history row needs both sides.
+  const before = {
+    unitPriceMinor: row.unitPriceMinor,
+    vatClass: row.vatClass,
+    status: row.status,
+  };
+
   await row.update({ ...patch, lastUpdatedById: req.user.id }).catch((err) => {
     if (err?.name === 'SequelizeUniqueConstraintError') {
       throw new BillingError('A service with that name or code already exists');
     }
     throw err;
   });
+
+  await recordPriceChange(before, row, req.user.id);
 
   const updated = await ServiceItem.findByPk(row.id, { include: ATTRIBUTION_INCLUDE });
   return success(res, serviceItemFor(req.user, updated));
@@ -179,7 +247,12 @@ const retire = action('Billing.services.retire', async (req, res) => {
   if (!row) throw new BillingError('Service not found', 404);
 
   const billed = await InvoiceLine.count({ where: { serviceItemId: row.id } });
+
+  const before = { unitPriceMinor: row.unitPriceMinor, vatClass: row.vatClass, status: row.status };
   await row.update({ status: 'retired', lastUpdatedById: req.user.id });
+  // Retiring is a commercial change — it stops the service being sellable — so
+  // it belongs in the same history as a price move.
+  await recordPriceChange(before, row, req.user.id);
 
   return success(res, {
     message: billed

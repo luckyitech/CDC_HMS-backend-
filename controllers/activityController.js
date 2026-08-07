@@ -1,8 +1,9 @@
 const { Op } = require('sequelize');
 const { success } = require('../utils/response');
+const { formatAmount } = require('../utils/money');
 const db = require('../models');
 
-const { Queue, Patient, MedicalDocument, MedicalEquipment, EquipmentHistory, User, Prescription, LabTest, TreatmentPlan, ConsultationNote, PhysicalExamination, InitialAssessment, UserLoginLog, Appointment, DoctorBlock, BarcodeScan } = db;
+const { Queue, Patient, MedicalDocument, MedicalEquipment, EquipmentHistory, User, Prescription, LabTest, TreatmentPlan, ConsultationNote, PhysicalExamination, InitialAssessment, UserLoginLog, Appointment, DoctorBlock, BarcodeScan, Invoice, InvoiceLine, Payment, ServiceItem, ServicePriceChange } = db;
 
 // ── Shared event shape ────────────────────────────────────────────────────────
 
@@ -43,6 +44,15 @@ const SUMMARY_KEYS = {
   slot_blocked:            'slotBlocked',
   barcode_scanned:         'barcodeScanned',
   barcode_generated:       'barcodeGenerated',
+  bill_issued:             'billIssued',
+  payment_taken:           'paymentTaken',
+  payment_reversed:        'paymentReversed',
+  payment_refunded:        'paymentRefunded',
+  bill_voided:             'billVoided',
+  bill_edited:             'billEdited',
+  price_changed:           'priceChanged',
+  service_added:           'serviceAdded',
+  adhoc_price_set:         'adhocPriceSet',
 };
 
 const buildSummary = (events) => {
@@ -425,6 +435,133 @@ const getBarcodeEvents = async (dateFilter, hasDateFilter) => {
   });
 };
 
+// ── Billing ──────────────────────────────────────────────────────────────────
+//
+// Who billed, who took the money, who changed a price, and who undid any of it.
+//
+// Every fact here was already stored on the billing tables; none of it was
+// visible anywhere. That is the difference between a system that records who
+// did what and one where anybody can check.
+//
+// Amounts go in `detail` because the event shape is deliberately fixed (see
+// makeEvent) — a money column for one source would change the contract for
+// every other one and the frontend with it.
+const getBillingEvents = async (dateFilter, hasDateFilter) => {
+  const dateWhere = hasDateFilter ? { createdAt: dateFilter } : {};
+  const userAttr = ['firstName', 'lastName'];
+  const patientInclude = { model: Patient, attributes: ['uhid', 'firstName', 'lastName'] };
+
+  const [invoices, payments, priceChanges, services, adhocLines] = await Promise.all([
+    Invoice.findAll({
+      where: dateWhere,
+      include: [
+        patientInclude,
+        { model: User, as: 'issuedByUser', attributes: userAttr },
+        { model: User, as: 'voidedByUser', attributes: userAttr },
+        { model: User, as: 'lastEditedByUser', attributes: userAttr },
+      ],
+    }),
+    Payment.findAll({
+      where: dateWhere,
+      include: [
+        { model: User, as: 'receivedByUser', attributes: userAttr },
+        { model: Invoice, include: [patientInclude] },
+      ],
+    }),
+    ServicePriceChange.findAll({
+      where: dateWhere,
+      include: [
+        { model: User, as: 'changedByUser', attributes: userAttr },
+        { model: ServiceItem, as: 'service', attributes: ['name'] },
+      ],
+    }),
+    ServiceItem.findAll({
+      where: { ...dateWhere, addedById: { [Op.ne]: null } },
+      include: [{ model: User, as: 'addedByUser', attributes: userAttr }],
+    }),
+    InvoiceLine.findAll({
+      where: { ...dateWhere, pricedAtCheckoutById: { [Op.ne]: null } },
+      include: [
+        { model: User, as: 'pricedAtCheckoutBy', attributes: userAttr },
+        { model: Invoice, include: [patientInclude] },
+      ],
+    }),
+  ]);
+
+  const events = [];
+  const name = (u) => (u ? `${u.firstName} ${u.lastName}` : 'Unknown');
+  // `staff` is a NAME here, not an id — the shape every other source uses.
+  const who = (u) => name(u);
+  const of = (p) => (p ? [`${p.firstName} ${p.lastName}`, p.uhid] : [null, null]);
+  const cash = (minor) => `KES ${formatAmount(minor)}`;
+
+  for (const inv of invoices) {
+    const [patient, uhid] = of(inv.Patient);
+
+    if (inv.issuedById && inv.issuedAt) {
+      events.push(makeEvent('bill_issued', 'Issued Bill', who(inv.issuedByUser), patient, uhid,
+        inv.issuedAt, `${inv.invoiceNumber} · ${cash(inv.totalMinor)}`, 'staff'));
+    }
+    if (inv.voidedById && inv.voidedAt) {
+      events.push(makeEvent('bill_voided', 'Voided Bill', who(inv.voidedByUser), patient, uhid,
+        inv.voidedAt, `${inv.invoiceNumber || 'draft'} · ${inv.voidReason || ''}`.trim(), 'staff'));
+    }
+    // Only worth reporting while it is still a draft; once issued, "who issued
+    // it" is the stronger fact and the lines can no longer change.
+    if (inv.lastEditedById && inv.lastEditedAt && inv.status === 'draft') {
+      events.push(makeEvent('bill_edited', 'Edited a Draft Bill', who(inv.lastEditedByUser), patient, uhid,
+        inv.lastEditedAt, cash(inv.totalMinor), 'staff'));
+    }
+  }
+
+  for (const p of payments) {
+    const [patient, uhid] = of(p.Invoice?.Patient);
+    const ref = p.reference ? ` · ${p.reference}` : '';
+    const number = p.Invoice?.invoiceNumber ? ` · ${p.Invoice.invoiceNumber}` : '';
+
+    if (p.type === 'payment') {
+      events.push(makeEvent('payment_taken', 'Took Payment', who(p.receivedByUser), patient, uhid,
+        p.receivedAt, `${p.method} · ${cash(p.amountMinor)}${ref}${number}`, 'staff'));
+    } else {
+      const type = p.type === 'refund' ? 'payment_refunded' : 'payment_reversed';
+      const label = p.type === 'refund' ? 'Refunded Payment' : 'Reversed Payment';
+      events.push(makeEvent(type, label, who(p.receivedByUser), patient, uhid,
+        p.receivedAt, `${cash(p.amountMinor)}${number}${p.reason ? ` · ${p.reason}` : ''}`, 'staff'));
+    }
+  }
+
+  // The one that makes a price dropped, billed against and restored visible.
+  for (const c of priceChanges) {
+    const service = c.service?.name || 'a service';
+    const from = c.oldPriceMinor === null ? 'not priced' : formatAmount(c.oldPriceMinor);
+    const to = c.newPriceMinor === null ? 'not priced' : formatAmount(c.newPriceMinor);
+    const parts = [];
+    if (String(c.oldPriceMinor) !== String(c.newPriceMinor)) parts.push(`${from} → ${to}`);
+    if (c.oldVatClass !== c.newVatClass) parts.push(`VAT ${c.oldVatClass} → ${c.newVatClass}`);
+    if (c.oldStatus !== c.newStatus) parts.push(`${c.oldStatus} → ${c.newStatus}`);
+
+    events.push(makeEvent('price_changed', 'Changed a Price', who(c.changedByUser), null, null,
+      c.createdAt, `${service} · ${parts.join(' · ')}`, 'staff'));
+  }
+
+  for (const s of services) {
+    events.push(makeEvent('service_added', 'Added a Service', who(s.addedByUser), null, null,
+      s.createdAt, `${s.name}${s.unitPriceMinor === null ? '' : ` · ${cash(s.unitPriceMinor)}`}`, 'staff'));
+  }
+
+  // A price typed at the desk by the person taking the money — the one kind of
+  // price the clinic's admin did not set, so it is surfaced by name.
+  for (const line of adhocLines) {
+    const [patient, uhid] = of(line.Invoice?.Patient);
+    events.push(makeEvent('adhoc_price_set', 'Priced an Item at Checkout', who(line.pricedAtCheckoutBy),
+      patient, uhid, line.createdAt,
+      `${line.description} · ${cash(line.unitPriceMinor)}${line.Invoice?.invoiceNumber ? ` · ${line.Invoice.invoiceNumber}` : ''}`,
+      'staff'));
+  }
+
+  return events;
+};
+
 // ── Controller ────────────────────────────────────────────────────────────────
 
 const getActivityLog = async (req, res) => {
@@ -453,6 +590,7 @@ const getActivityLog = async (req, res) => {
     getAppointmentCancellationEvents(dateFilter, hasDateFilter),
     getDoctorBlockEvents(dateFilter, hasDateFilter),
     getBarcodeEvents(dateFilter, hasDateFilter),
+    getBillingEvents(dateFilter, hasDateFilter),
   ])).flat();
 
   // Summary uses all events (unfiltered)

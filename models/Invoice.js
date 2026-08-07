@@ -101,6 +101,11 @@ const Invoice = defineModel('Invoice', {
   etimsSubmittedAt: { type: DataTypes.DATE, defaultValue: null },
 
   // --- Lifecycle ---
+  // Who last changed this bill while it was still a draft. An issued invoice is
+  // immutable and a void records its own author, so this covers the one window
+  // that was unattributed: reception adding, removing and re-pricing lines with
+  // the checkout open.
+  lastEditedAt: { type: DataTypes.DATE, defaultValue: null },
   issuedAt: { type: DataTypes.DATE, defaultValue: null },
   voidedAt: { type: DataTypes.DATE, defaultValue: null },
   voidReason: { type: DataTypes.TEXT, defaultValue: null },

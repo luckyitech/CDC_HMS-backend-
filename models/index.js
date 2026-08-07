@@ -46,6 +46,7 @@ const ServiceItem         = require('./ServiceItem');
 const Invoice             = require('./Invoice');
 const InvoiceLine         = require('./InvoiceLine');
 const Payment             = require('./Payment');
+const ServicePriceChange  = require('./ServicePriceChange');
 
 // =============================================
 // ASSOCIATIONS
@@ -271,6 +272,11 @@ BarcodeScan.belongsTo(User, { foreignKey: 'scannedBy', as: 'scannedByUser' });
 ServiceItem.belongsTo(StockItem, { as: 'stockItem',   foreignKey: 'stockItemId' });
 StockItem.hasMany(ServiceItem,   { as: 'serviceItems', foreignKey: 'stockItemId' });
 ServiceItem.belongsTo(User,      { as: 'addedByUser',   foreignKey: 'addedById' });
+// Append-only price history. RESTRICT on the FK: a service with a history is
+// retired, never destroyed, so the record of what it used to cost survives.
+ServiceItem.hasMany(ServicePriceChange,   { as: 'priceHistory', foreignKey: 'serviceItemId' });
+ServicePriceChange.belongsTo(ServiceItem, { as: 'service',      foreignKey: 'serviceItemId' });
+ServicePriceChange.belongsTo(User,        { as: 'changedByUser', foreignKey: 'changedById' });
 ServiceItem.belongsTo(User,      { as: 'updatedByUser', foreignKey: 'lastUpdatedById' });
 
 // --- Billing: invoices ---
@@ -284,6 +290,8 @@ Queue.hasMany(Invoice);
 Invoice.belongsTo(Queue);
 Invoice.belongsTo(User, { as: 'issuedByUser', foreignKey: 'issuedById' });
 Invoice.belongsTo(User, { as: 'voidedByUser', foreignKey: 'voidedById' });
+// Who last touched the bill while it was still a draft.
+Invoice.belongsTo(User, { as: 'lastEditedByUser', foreignKey: 'lastEditedById' });
 
 // Lines cascade with the invoice: a DRAFT can be discarded wholesale, and once
 // issued neither the invoice nor its lines are ever deleted, so the cascade
@@ -297,6 +305,8 @@ InvoiceLine.belongsTo(ServiceItem, { as: 'serviceItem', foreignKey: 'serviceItem
 // Ties a supply line to the batch actually dispensed, so the bill and the stock
 // ledger can be reconciled against each other.
 InvoiceLine.belongsTo(StockBatch,  { as: 'batch',       foreignKey: 'stockBatchId' });
+// Set only when reception typed this line's price at the checkout desk.
+InvoiceLine.belongsTo(User, { as: 'pricedAtCheckoutBy', foreignKey: 'pricedAtCheckoutById' });
 
 // --- Billing: payments (append-only) ---
 Invoice.hasMany(Payment,  { as: 'payments', foreignKey: 'invoiceId' });
@@ -358,6 +368,7 @@ const db = {
   Invoice,
   InvoiceLine,
   Payment,
+  ServicePriceChange,
 };
 
 module.exports = db;

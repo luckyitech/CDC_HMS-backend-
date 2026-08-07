@@ -155,6 +155,11 @@ const resolveLine = async (input, { config, sortOrder }, t) => {
     quantity,
     vatClass,
     sortOrder,
+    // Set only when the caller priced this line by hand at the checkout desk
+    // because no service was linked to the scanned item. Null means the price
+    // came off the price list, where an admin set it — the distinction is what
+    // makes an ad-hoc price reviewable afterwards.
+    pricedAtCheckoutById: input.pricedAtCheckoutById || null,
   };
 
   // Unpriced: carried so it is visible, contributing nothing to the total. A
@@ -348,7 +353,7 @@ const createDraft = async ({
 
 /** Edit a draft: its lines and who is being billed. Refused once issued. */
 const updateDraft = async (invoiceId, {
-  lines, payerType, customerName, customerPin, notes,
+  lines, payerType, customerName, customerPin, notes, userId,
 }, ctx) => withContext(ctx, async ({ config, t }) => {
   const invoice = await lockInvoice(invoiceId, t);
   assertDraft(invoice);
@@ -358,6 +363,15 @@ const updateDraft = async (invoiceId, {
   if (customerName !== undefined) patch.customerName = trimmed(customerName);
   if (customerPin !== undefined) patch.customerPin = trimmed(customerPin)?.toUpperCase() || null;
   if (notes !== undefined) patch.notes = trimmed(notes);
+
+  // Whose hands were last on this bill. The only window in an invoice's life
+  // that was otherwise unattributed: issuing and voiding both record their own
+  // author, and an issued invoice cannot be changed at all.
+  if (userId) {
+    patch.lastEditedById = userId;
+    patch.lastEditedAt = new Date();
+  }
+
   if (Object.keys(patch).length) await invoice.update(patch, { transaction: t });
 
   if (lines !== undefined) await replaceLines(invoice, lines, { config, t });

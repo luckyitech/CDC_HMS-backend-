@@ -1,6 +1,6 @@
 const { Op } = require('sequelize');
 const { success } = require('../utils/response');
-const { action } = require('../utils/billingHttp');
+const { action, readAmount } = require('../utils/billingHttp');
 const {
   createDraft, updateDraft, issueInvoice, voidInvoice, discardDraft,
   rebuildInvoiceTotals, findInvoice, INVOICE_INCLUDES, BillingError,
@@ -52,8 +52,11 @@ const asList = (value) => (Array.isArray(value) ? value : []);
  * to a service item itself. Two implementations of this mapping would be two
  * things to keep in step, and the day they diverge the patient is shown one
  * total and billed another.
+ *
+ * `pricedById` is the user whose ad-hoc prices these are — see the supply
+ * handling below. Null when nothing was priced by hand.
  */
-const buildLinesFromSelection = async ({ charges = [], procedures = [], supplies = [] }) => {
+const buildLinesFromSelection = async ({ charges = [], procedures = [], supplies = [] }, pricedById = null) => {
   const labels = [...asList(charges), ...asList(procedures)]
     .map((label) => String(label).trim())
     .filter(Boolean);
@@ -88,9 +91,36 @@ const buildLinesFromSelection = async ({ charges = [], procedures = [], supplies
     supplyLines.forEach((supply) => {
       const item = byStockItem.get(stockItemByBatch.get(supply.stockBatchId));
       const quantity = Number(supply.quantity) || 1;
-      lines.push(item
-        ? { serviceItemId: item.id, quantity, stockBatchId: supply.stockBatchId }
-        : { description: supply.name, quantity, unitPriceMinor: null, stockBatchId: supply.stockBatchId });
+
+      if (item) {
+        lines.push({ serviceItemId: item.id, quantity, stockBatchId: supply.stockBatchId });
+        return;
+      }
+
+      // No service is linked to this stock item, so there is no price to look
+      // up. Reception may type one at the desk rather than send the patient
+      // away with something unbilled.
+      //
+      // It applies to THIS LINE ONLY — it never creates or updates a price list
+      // entry, so the person taking the money prices one item on one bill and
+      // never sets what the clinic charges. Recording who typed it is what
+      // makes that safe: an ad-hoc price is reviewable, an admin's price is
+      // policy.
+      //
+      // The price travels in the SELECTION rather than being written onto the
+      // line, because every re-sync of a draft replaces its lines wholesale —
+      // a price stored on the line would vanish at the next keystroke.
+      const adhoc = readAmount(supply, 'adhocPrice', {
+        required: false,
+        label: `Price for ${supply.name}`,
+      });
+      lines.push({
+        description: supply.name,
+        quantity,
+        stockBatchId: supply.stockBatchId,
+        unitPriceMinor: adhoc,
+        pricedAtCheckoutById: adhoc === null ? null : pricedById,
+      });
     });
   }
 
@@ -103,11 +133,11 @@ const buildLinesFromSelection = async ({ charges = [], procedures = [], supplies
  * finalCharges wins when reception has been through the modal once; otherwise
  * the doctor's original selection is the starting point.
  */
-const buildLinesFromQueue = (queue) => buildLinesFromSelection({
+const buildLinesFromQueue = (queue, pricedById = null) => buildLinesFromSelection({
   charges: queue.finalCharges ?? queue.selectedCharges,
   procedures: queue.finalProcedures ?? queue.selectedProcedures,
   supplies: queue.finalSupplies,
-});
+}, pricedById);
 
 // ---------------------------------------------------------------------
 // Reads
@@ -198,7 +228,7 @@ const createFromQueue = action('Billing.invoices.fromQueue', async (req, res) =>
   if (!queue) throw new BillingError('Visit not found', 404);
   if (!queue.PatientId) throw new BillingError('This visit has no patient attached');
 
-  const lines = await buildLinesFromQueue(queue);
+  const lines = await buildLinesFromQueue(queue, req.user.id);
   const invoice = await createDraft({ PatientId: queue.PatientId, QueueId: queueId, lines });
 
   return success(res, await findInvoice(invoice.id), 201);
@@ -208,7 +238,7 @@ const createFromQueue = action('Billing.invoices.fromQueue', async (req, res) =>
 const update = action('Billing.invoices.update', async (req, res) => {
   const { lines, payerType, customerName, customerPin, notes } = req.body;
   const invoice = await updateDraft(req.params.id, {
-    lines, payerType, customerName, customerPin, notes,
+    lines, payerType, customerName, customerPin, notes, userId: req.user.id,
   });
   return success(res, await findInvoice(invoice.id));
 });
@@ -225,8 +255,8 @@ const update = action('Billing.invoices.update', async (req, res) => {
  */
 const updateSelection = action('Billing.invoices.selection', async (req, res) => {
   const { charges, procedures, supplies } = req.body;
-  const lines = await buildLinesFromSelection({ charges, procedures, supplies });
-  const invoice = await updateDraft(req.params.id, { lines });
+  const lines = await buildLinesFromSelection({ charges, procedures, supplies }, req.user.id);
+  const invoice = await updateDraft(req.params.id, { lines, userId: req.user.id });
   return success(res, await findInvoice(invoice.id));
 });
 

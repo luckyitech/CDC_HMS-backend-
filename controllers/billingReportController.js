@@ -7,10 +7,16 @@ const {
 } = require('../constants/billing');
 const db = require('../models');
 
-const { Payment, Invoice, Patient, User } = db;
+const { Payment, Invoice, InvoiceLine, Patient, User, Queue } = db;
 
 // =====================================================================
-// The two reports the desk actually runs.
+// The reports.
+//
+// Two the desk runs daily (cash-up, outstanding) and three that exist to be
+// checked rather than used: unbilled visits, removed items and ad-hoc prices.
+// Those three are the audit half of this module — each one makes visible a way
+// money could leave the clinic without a record, and each should normally be
+// empty or boring. A report nobody ever needs is the point.
 //
 //   Cash-up    — what came in today, split by method and by who took it. The
 //                sheet that gets tied out against the drawer, the M-Pesa
@@ -130,4 +136,171 @@ const outstanding = action('Billing.reports.outstanding', async (req, res) => {
   return success(res, { totalMinor, count: rows.length, invoices: rows });
 });
 
-module.exports = { cashUp, outstanding };
+/**
+ * GET /api/billing/reports/unbilled
+ *
+ * Visits that were discharged without an issued bill.
+ *
+ * This should be EMPTY. Billing now follows discharge rights, so every checkout
+ * raises a bill — a row here means either a service was left unpriced and the
+ * draft could not be issued, or something failed. Either way it is money the
+ * clinic has not asked for, and the point of the report is that it is no longer
+ * invisible: before, an unbilled discharge left no trace anywhere at all.
+ */
+const unbilled = action('Billing.reports.unbilled', async (req, res) => {
+  // Defaults to TODAY, deliberately.
+  //
+  // Every visit discharged before this module existed is unbilled, and there
+  // are hundreds of them. Without a default the report opens on years of
+  // history that nobody can act on, and a control that is permanently full is
+  // a control nobody reads. The question worth asking is "did anything slip
+  // through today", so that is what it answers unless a range is given.
+  const from = req.query.from || (req.query.to ? null : clinicToday());
+  const where = { status: 'Completed', dischargedAt: { [Op.ne]: null } };
+
+  if (from || req.query.to) {
+    where.dischargedAt = {};
+    if (from) where.dischargedAt[Op.gte] = clinicMidnight(from);
+    if (req.query.to) where.dischargedAt[Op.lt] = clinicMidnight(nextClinicDate(req.query.to));
+  }
+
+  const visits = await Queue.findAll({
+    where,
+    include: [{ model: Patient, attributes: ['id', 'uhid', 'firstName', 'lastName', 'phone'] }],
+    order: [['dischargedAt', 'DESC']],
+    limit: Math.min(Number(req.query.limit) || 200, 1000),
+  });
+
+  // A visit counts as billed once it has an invoice that was actually ISSUED.
+  // A draft is not a bill: nobody was ever asked to pay it.
+  const issued = await Invoice.findAll({
+    where: {
+      QueueId: { [Op.in]: visits.map((v) => v.id).length ? visits.map((v) => v.id) : [0] },
+      status: { [Op.ne]: 'draft' },
+    },
+    attributes: ['QueueId'],
+    raw: true,
+  });
+  const billedQueueIds = new Set(issued.map((i) => i.QueueId));
+
+  const rows = visits
+    .filter((v) => !billedQueueIds.has(v.id))
+    .map((v) => ({
+      queueId: v.id,
+      patient: v.Patient,
+      dischargedAt: v.dischargedAt,
+      dischargedBy: v.dischargedBy,
+      charges: v.finalCharges ?? v.selectedCharges ?? [],
+      procedures: v.finalProcedures ?? v.selectedProcedures ?? [],
+    }));
+
+  return success(res, { count: rows.length, visits: rows });
+});
+
+/**
+ * GET /api/billing/reports/removed-items
+ *
+ * What the doctor ordered versus what was actually billed.
+ *
+ * The vector every other control here misses: the doctor ticks HbA1c, reception
+ * unticks it, the official bill is 3,500 lower, and the patient settles the
+ * difference in cash. The bill exists, was issued, and was paid in full —
+ * nothing about it looks wrong.
+ *
+ * The data has always been there: selectedCharges is the doctor's list,
+ * finalCharges is reception's, and a reason is already required to remove
+ * anything. What was missing is anybody ever comparing the two. One person
+ * removing items far more often than everyone else is the pattern worth seeing.
+ */
+const removedItems = action('Billing.reports.removedItems', async (req, res) => {
+  const where = {
+    status: 'Completed',
+    dischargedAt: { [Op.ne]: null },
+    finalCharges: { [Op.ne]: null },
+  };
+
+  if (req.query.from || req.query.to) {
+    where.dischargedAt = { [Op.ne]: null };
+    if (req.query.from) where.dischargedAt[Op.gte] = clinicMidnight(req.query.from);
+    if (req.query.to) where.dischargedAt[Op.lt] = clinicMidnight(nextClinicDate(req.query.to));
+  }
+
+  const visits = await Queue.findAll({
+    where,
+    include: [{ model: Patient, attributes: ['id', 'uhid', 'firstName', 'lastName'] }],
+    order: [['dischargedAt', 'DESC']],
+    limit: Math.min(Number(req.query.limit) || 500, 2000),
+  });
+
+  const asList = (v) => (Array.isArray(v) ? v : []);
+  const rows = [];
+  const byStaff = new Map();
+
+  for (const v of visits) {
+    const ordered = [...asList(v.selectedCharges), ...asList(v.selectedProcedures)];
+    const billed = new Set([...asList(v.finalCharges), ...asList(v.finalProcedures)]);
+    const removed = ordered.filter((item) => !billed.has(item));
+    if (!removed.length) continue;
+
+    const staff = v.dischargedBy || 'Unknown';
+    rows.push({
+      queueId: v.id,
+      patient: v.Patient,
+      dischargedAt: v.dischargedAt,
+      dischargedBy: staff,
+      removed,
+      reason: v.dischargeComment || null,
+    });
+
+    const entry = byStaff.get(staff) || { staff, visits: 0, itemsRemoved: 0 };
+    entry.visits += 1;
+    entry.itemsRemoved += removed.length;
+    byStaff.set(staff, entry);
+  }
+
+  return success(res, {
+    count: rows.length,
+    visits: rows,
+    byStaff: [...byStaff.values()].sort((a, b) => b.itemsRemoved - a.itemsRemoved),
+  });
+});
+
+/**
+ * GET /api/billing/reports/adhoc-priced
+ *
+ * Lines whose price was typed at the checkout desk, because the scanned item
+ * matched nothing on the price list.
+ *
+ * Reception may do this so nothing leaves unbilled — but it is the one price in
+ * the system the clinic's admin did not set, chosen by the person taking the
+ * money. Every one carries a name and appears here. It doubles as the queue of
+ * items that ought to be added to the price list properly.
+ */
+const adhocPriced = action('Billing.reports.adhocPriced', async (req, res) => {
+  const where = { pricedAtCheckoutById: { [Op.ne]: null } };
+
+  if (req.query.from || req.query.to) {
+    where.createdAt = {};
+    if (req.query.from) where.createdAt[Op.gte] = clinicMidnight(req.query.from);
+    if (req.query.to) where.createdAt[Op.lt] = clinicMidnight(nextClinicDate(req.query.to));
+  }
+
+  const rows = await InvoiceLine.findAll({
+    where,
+    include: [
+      { model: User, as: 'pricedAtCheckoutBy', attributes: ['id', 'firstName', 'lastName'] },
+      {
+        model: Invoice,
+        attributes: ['id', 'invoiceNumber', 'status', 'issuedAt'],
+        include: [{ model: Patient, attributes: ['id', 'uhid', 'firstName', 'lastName'] }],
+      },
+    ],
+    order: [['createdAt', 'DESC']],
+    limit: Math.min(Number(req.query.limit) || 300, 1000),
+  });
+
+  const totalMinor = rows.reduce((total, line) => total + Number(line.grossMinor), 0);
+  return success(res, { count: rows.length, totalMinor, lines: rows });
+});
+
+module.exports = { cashUp, outstanding, unbilled, removedItems, adhocPriced };
