@@ -5,6 +5,7 @@ const { Op } = require('sequelize');
 const { success, error } = require('../utils/response');
 const { sendPasswordResetEmail } = require('../utils/emailService');
 const { PERMISSIONS, hasPermission, effectivePermissions } = require('../constants/permissions');
+const { getRotationStatus } = require('../utils/passwordRotation');
 const db = require('../models');
 
 const { User, DoctorProfile, StaffProfile, LabTechProfile, Patient } = db;
@@ -40,6 +41,16 @@ const buildUserResponse = async (user) => {
     // user.canManageStock directly any more.
     canManageStock: hasPermission(user, PERMISSIONS.STOCK_MANAGE),
   };
+
+  // Scheduled password rotation. mustChangePassword sends the frontend straight
+  // to the change-password screen and keeps it there; passwordExpiresOn is the
+  // Monday the current password lapses and passwordPolicyLabel describes the
+  // cadence ("every Monday", "every second Monday", …) so staff-facing copy can
+  // name the real schedule. All hints — the middleware is what blocks the API.
+  const rotation = await getRotationStatus(user);
+  userData.mustChangePassword   = rotation.mustChangePassword;
+  userData.passwordExpiresOn    = rotation.expiresOn;
+  userData.passwordPolicyLabel  = rotation.policyLabel;
 
   const ProfileModel = profileModelMap[user.role];
 
@@ -140,6 +151,8 @@ const resetPassword = async (req, res) => {
     password: hashedPassword,
     resetToken: null,
     resetTokenExpires: null,
+    // The user chose this one themselves, so it restarts their rotation week.
+    passwordChangedAt: new Date(),
   });
 
   return success(res, { message: 'Password reset successfully' });
@@ -175,11 +188,18 @@ const changePassword = async (req, res) => {
     const isSamePassword = await bcrypt.compare(newPassword, user.password);
     if (isSamePassword) return error(res, 'New password must be different from current password', 400);
 
-    // Hash and save new password
+    // Hash and save new password. passwordChangedAt is what clears an expired
+    // account: the rotation gate re-reads it on the next request, so the user
+    // is unblocked immediately without logging out and back in.
     const hashedPassword = await bcrypt.hash(newPassword, 10);
-    await user.update({ password: hashedPassword });
+    await user.update({ password: hashedPassword, passwordChangedAt: new Date() });
 
-    return success(res, { message: 'Password changed successfully' });
+    const rotation = await getRotationStatus(user);
+    return success(res, {
+      message: 'Password changed successfully',
+      passwordExpiresOn: rotation.expiresOn,
+      passwordPolicyLabel: rotation.policyLabel,
+    });
   } catch (err) {
     console.error('Change password error:', err.message);
     return error(res, 'Failed to change password. Please try again.', 500);

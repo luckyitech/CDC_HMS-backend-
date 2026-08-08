@@ -67,7 +67,12 @@ const parseArgs = (argv) => {
     }
 
     const hash = await bcrypt.hash(password, 10);   // 10 rounds, as every other path uses
-    await user.update({ password: hash });
+    // Clearing passwordChangedAt marks this as a password the user did not
+    // choose — whoever ran this script knows it. With weekly rotation on, a
+    // doctor/staff/lab account is then forced to set their own at next login,
+    // which turns the "have them change it" note below into something enforced.
+    // Admins are exempt from rotation, so the break-glass case is unaffected.
+    await user.update({ password: hash, passwordChangedAt: null });
 
     // Read it back and prove the stored hash accepts the password, rather than
     // trusting that the UPDATE did what we think. This is the same comparison

@@ -43,6 +43,16 @@ const User = defineModel('User', {
     defaultValue: null,
   },
 
+  // --- Weekly password rotation ---
+  // When the user last chose their own password. NULL means they never have —
+  // an admin-created account still on its emailed temp password — which counts
+  // as expired. Only read while the rotation setting is on; see
+  // utils/passwordRotation.js.
+  passwordChangedAt: {
+    type: DataTypes.DATE,
+    defaultValue: null,
+  },
+
   // --- Stock module permission ---
   // Admin-granted per-user flag: staff/doctors with this see the Stocks pages.
   // authorizeStock reads it from the DB (not the JWT) so a grant takes effect

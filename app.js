@@ -78,6 +78,7 @@ app.use('/api/activity',           require('./routes/activity'));
 app.use('/api/notifications',      require('./routes/notifications'));
 app.use('/api/catalog',            require('./routes/catalog'));
 app.use('/api/stock',              require('./routes/stock'));
+app.use('/api/settings',           require('./routes/settings'));
 
 // Global error handler — must be last
 app.use(errorHandler);

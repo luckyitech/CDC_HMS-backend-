@@ -1,19 +1,32 @@
 const jwt = require('jsonwebtoken');
 const { error } = require('../utils/response');
 const { isTokenBlacklisted } = require('../controllers/authController');
+const { getRotationStatus } = require('../utils/passwordRotation');
 const db = require('../models');
 const { PERMISSIONS, hasPermission, isTrueAdmin } = require('../constants/permissions');
 const { User } = db;
 
+// Endpoints a staff member with an expired password may still reach. Enough to
+// see who they are, set a new password, and leave — nothing else. Matched
+// against the full path so a route file cannot accidentally widen it.
+const ROTATION_EXEMPT_PATHS = [
+  '/api/auth/change-password',
+  '/api/auth/me',
+  '/api/auth/logout',
+];
+
 // Verifies the JWT token and attaches the decoded payload to req.user.
-// Also checks isActive on every request so deactivation takes effect immediately.
+// Also checks isActive on every request so deactivation takes effect immediately,
+// and — when scheduled rotation is on — blocks users whose password has expired
+// from doing anything except changing it.
 //
-// role and permissions come from the DATABASE, not from the token. The token is
-// signed at login, so a permission granted or revoked afterwards would not reach
-// a signed-in user until they logged out and back in — a revoked admin would
-// keep admin access for the life of their session, which is exactly when you
-// least want it. This costs nothing: the isActive lookup below already happens
-// on every request, so it is the same query returning two more columns.
+// role, permissions and passwordChangedAt come from the DATABASE, not from the
+// token. The token is signed at login, so anything changed afterwards would not
+// reach a signed-in user until they logged out and back in — a revoked admin
+// would keep admin access for the life of their session, and a user who had just
+// set a new password would stay locked out. This costs nothing: the isActive
+// lookup below already happens on every request, so it is the same query
+// returning three more columns.
 const authenticate = async (req, res, next) => {
   const token = req.headers.authorization?.split(' ')[1]; // expects "Bearer <token>"
   if (!token) return error(res, 'No token provided', 401);
@@ -34,13 +47,32 @@ const authenticate = async (req, res, next) => {
   let user;
   try {
     user = await User.findByPk(decoded.id, {
-      attributes: ['id', 'isActive', 'role', 'permissions'],
+      attributes: ['id', 'isActive', 'role', 'permissions', 'passwordChangedAt'],
     });
   } catch {
     return error(res, 'Authentication service unavailable. Please try again.', 503);
   }
   if (!user || !user.isActive) {
     return error(res, 'Your account has been deactivated. Please contact the administrator.', 401);
+  }
+
+  // Scheduled rotation gate. Read from the DB rather than the JWT so that
+  // setting a new password unlocks the account on the very next request — no
+  // re-login, and no window where an old token still carries "not expired".
+  // Query string dropped, and a trailing slash normalised away — Express routes
+  // '/api/auth/me/' to the same handler, so the allowlist has to match it too
+  // or the user is locked out of the very screen they are being sent to.
+  const path = req.originalUrl.split('?')[0].replace(/\/+$/, '') || '/';
+  if (!ROTATION_EXEMPT_PATHS.includes(path)) {
+    const rotation = await getRotationStatus(user);
+    if (rotation.mustChangePassword) {
+      return error(
+        res,
+        'Your password has expired. Please set a new password to continue.',
+        403,
+        { code: 'PASSWORD_ROTATION_REQUIRED' }
+      );
+    }
   }
 
   req.user = {
