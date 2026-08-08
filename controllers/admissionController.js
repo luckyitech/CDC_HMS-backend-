@@ -46,7 +46,14 @@ exports.requestAdmission = async (req, res) => {
     });
 
     broadcast('queue_updated');
-    return success(res, { queueId: queueItem.id, admissionRequested: true });
+    // Report what was actually stored, not what we asked for. This used to
+    // return a hardcoded `true`, which meant the one bug that mattered — the
+    // flag being silently dropped before it reached the database — looked like
+    // a success all the way back to the doctor's toast.
+    return success(res, {
+      queueId: queueItem.id,
+      admissionRequested: queueItem.admissionRequested,
+    });
   } catch (err) {
     console.error('Admission.requestAdmission error:', err);
     return error(res, 'Failed to request admission', 500);

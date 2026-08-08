@@ -83,7 +83,10 @@ router.patch('/:uhid/reactivate', authenticate, authorize('admin'), patientContr
 // ------------------------------------
 // GET /api/patients — list with filters
 // ------------------------------------
-router.get('/', authenticate, authorize('doctor', 'staff', 'admin'), patientController.list);
+// 'nurse' added alongside 'staff' on the triage-facing endpoints below: the
+// nurse portal reuses the front desk's Triage screen, which searches patients,
+// reads vitals history, and writes vitals + allergies.
+router.get('/', authenticate, authorize('doctor', 'staff', 'admin', 'nurse'), patientController.list);
 
 // ------------------------------------
 // GET /api/patients/:uhid — single patient (all authenticated roles)
@@ -99,7 +102,11 @@ router.post('/:uhid/complete-registration', authenticate, authorize('staff', 'ad
 // ------------------------------------
 // PUT /api/patients/:uhid — update patient
 // ------------------------------------
-router.put('/:uhid', authenticate, authorize('staff', 'admin'), findPatient, patientController.update);
+// NOTE: 'nurse' is here because Triage saves allergies through this general
+// patient-update route, so without it the whole triage submit 403s. That grants
+// nurses the full patient-record edit, which is wider than triage needs — worth
+// narrowing to a dedicated allergies endpoint when the RBAC work lands.
+router.put('/:uhid', authenticate, authorize('staff', 'admin', 'nurse'), findPatient, patientController.update);
 
 // ------------------------------------
 // Patient diagnoses — tracked list (summary panel). Clinical record: retire, never delete.
@@ -125,7 +132,7 @@ router.delete('/:uhid', authenticate, authorize('admin'), findPatient, patientCo
 // ------------------------------------
 // POST /api/patients/:uhid/vitals — record triage vitals
 // ------------------------------------
-router.post('/:uhid/vitals', authenticate, authorize('staff'), findPatient, [
+router.post('/:uhid/vitals', authenticate, authorize('staff', 'nurse'), findPatient, [
   body('bp').notEmpty().withMessage('Blood pressure is required'),
   body('heartRate').isInt().withMessage('Heart rate must be an integer'),
   body('weight').optional({ nullable: true }).isFloat().withMessage('Weight must be a number'),
@@ -141,12 +148,12 @@ router.post('/:uhid/vitals/doctor', authenticate, authorize('doctor'), findPatie
 // ------------------------------------
 // GET /api/patients/:uhid/vitals/history — all vitals records (MUST be before /:uhid/vitals)
 // ------------------------------------
-router.get('/:uhid/vitals/history', authenticate, authorize('doctor', 'staff'), findPatient, patientController.getVitalsHistory);
+router.get('/:uhid/vitals/history', authenticate, authorize('doctor', 'staff', 'nurse'), findPatient, patientController.getVitalsHistory);
 
 // ------------------------------------
 // GET /api/patients/:uhid/vitals — latest vitals
 // ------------------------------------
-router.get('/:uhid/vitals', authenticate, authorize('doctor', 'staff'), findPatient, patientController.getVitals);
+router.get('/:uhid/vitals', authenticate, authorize('doctor', 'staff', 'nurse'), findPatient, patientController.getVitals);
 
 // ------------------------------------
 // POST /api/patients/:uhid/blood-sugar — single or bulk reading (upsert)

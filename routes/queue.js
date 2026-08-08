@@ -8,7 +8,11 @@ const queueController = require('../controllers/queueController');
 // ------------------------------------
 // GET /api/queue/stats — MUST be before /:id
 // ------------------------------------
-router.get('/stats', authenticate, authorize('staff', 'doctor'), queueController.stats);
+// 'nurse' reads and works the OPD queue: the nurse portal's Queue Management
+// and Triage pages are the same screens the front desk uses. V3 added the role
+// to every route it authored but not to these pre-existing ones, so both pages
+// rendered and then 403'd.
+router.get('/stats', authenticate, authorize('staff', 'doctor', 'nurse'), queueController.stats);
 
 // ------------------------------------
 // POST /api/queue/call-next — MUST be before /:id
@@ -18,7 +22,7 @@ router.post('/call-next', authenticate, authorize('doctor'), queueController.cal
 // ------------------------------------
 // GET /api/queue — list all queue items
 // ------------------------------------
-router.get('/', authenticate, authorize('staff', 'doctor'), queueController.list);
+router.get('/', authenticate, authorize('staff', 'doctor', 'nurse'), queueController.list);
 
 // ------------------------------------
 // POST /api/queue — add patient to queue
@@ -31,7 +35,7 @@ router.post('/', authenticate, authorize('staff'), [
 // ------------------------------------
 // PUT /api/queue/:id — update status or assign doctor
 // ------------------------------------
-router.put('/:id', authenticate, authorize('staff', 'doctor'), queueController.update);
+router.put('/:id', authenticate, authorize('staff', 'doctor', 'nurse'), queueController.update);
 
 // ------------------------------------
 // POST /api/queue/:id/refer — doctor refers a patient (internal or external)
