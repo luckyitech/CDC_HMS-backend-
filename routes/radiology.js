@@ -3,7 +3,7 @@ const router = express.Router();
 const { authenticate, authorize } = require('../middleware/auth');
 const rad = require('../controllers/radiologyController');
 
-const READ = ['doctor', 'nurse', 'admin', 'lab'];
+const READ = ['doctor', 'nurse', 'admin', 'lab', 'inpatient.access'];
 
 router.post('/', authenticate, authorize('doctor'), rad.create);
 router.get('/', authenticate, authorize(...READ), rad.list);

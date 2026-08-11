@@ -3,7 +3,7 @@ const router = express.Router();
 const { authenticate, authorize } = require('../middleware/auth');
 const ward = require('../controllers/wardController');
 
-const BOARD = ['doctor', 'nurse', 'staff', 'admin'];
+const BOARD = ['doctor', 'nurse', 'staff', 'admin', 'inpatient.access'];
 
 router.get('/board', authenticate, authorize(...BOARD), ward.board);
 router.post('/', authenticate, authorize('admin'), ward.createBed);

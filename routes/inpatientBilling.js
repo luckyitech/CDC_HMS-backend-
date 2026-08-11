@@ -3,7 +3,7 @@ const router = express.Router();
 const { authenticate, authorize } = require('../middleware/auth');
 const billing = require('../controllers/inpatientBillingController');
 
-const READ = ['staff', 'admin', 'doctor'];
+const READ = ['staff', 'admin', 'doctor', 'inpatient.access'];
 
 router.get('/', authenticate, authorize(...READ), billing.getAccount);
 router.post('/', authenticate, authorize('staff', 'admin'), billing.addCharge);

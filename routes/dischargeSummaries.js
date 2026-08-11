@@ -3,7 +3,7 @@ const router = express.Router();
 const { authenticate, authorize } = require('../middleware/auth');
 const ds = require('../controllers/dischargeSummaryController');
 
-const READ = ['doctor', 'nurse', 'staff', 'admin'];
+const READ = ['doctor', 'nurse', 'staff', 'admin', 'inpatient.access'];
 
 router.post('/generate', authenticate, authorize('doctor'), ds.generate);
 router.post('/', authenticate, authorize('doctor'), ds.create);
