@@ -24,7 +24,10 @@ const admissionIncludes = [
 // ====================================
 exports.requestAdmission = async (req, res) => {
   try {
-    const { queueId, admissionReason, admissionType, admissionWardPreference } = req.body;
+    const {
+      queueId, admissionReason, admissionType, admissionWardPreference,
+      selectedCharges = [], selectedProcedures = [],
+    } = req.body;
     const queueItem = await Queue.findByPk(queueId, { include: [Patient] });
     if (!queueItem) return error(res, 'Queue item not found', 404);
     if (!queueItem.Patient) return error(res, 'Queue item has no patient', 400);
@@ -32,6 +35,15 @@ exports.requestAdmission = async (req, res) => {
     const family = await resolvePatient(queueItem.Patient.uhid);
     if (!family) return error(res, 'Patient not found', 404);
     if (family.isDeactivated) return error(res, 'Patient record is deactivated (merged)', 400);
+
+    // Merge the doctor's billing selections with anything already on the queue
+    // entry — same accumulation the referral flow uses for multi-doctor visits.
+    const mergedCharges = [
+      ...new Set([...(queueItem.selectedCharges || []), ...selectedCharges]),
+    ];
+    const mergedProcedures = [
+      ...new Set([...(queueItem.selectedProcedures || []), ...selectedProcedures]),
+    ];
 
     await queueItem.update({
       admissionRequested: true,
@@ -42,6 +54,8 @@ exports.requestAdmission = async (req, res) => {
       admissionRequestedAt: new Date(),
       admissionCancelledAt: null,
       admissionCancelReason: null,
+      selectedCharges: mergedCharges,
+      selectedProcedures: mergedProcedures,
       status: 'Pending Billing',
     });
 
