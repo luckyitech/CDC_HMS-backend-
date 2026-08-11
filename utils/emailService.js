@@ -108,6 +108,7 @@ const ROLE_LABELS = {
   doctor: 'Doctor',
   staff:  'Staff Member',
   lab:    'Lab Technician',
+  nurse:  'Nurse',
   admin:  'Administrator',
 };
 

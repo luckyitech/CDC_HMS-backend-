@@ -8,7 +8,7 @@
 // to log in, and expiries spread themselves across the calendar instead of
 // landing on the whole clinic at once.
 //
-// Scope: doctor, staff and lab only. Patients are not clinic employees, and
+// Scope: doctor, staff, lab and nurse only. Patients are not clinic employees, and
 // admins are exempt on purpose — the admin holds the on/off switch, and an
 // admin locked out by the feature they control has no way back in without a
 // DB edit. Note this is the ROLE 'admin', not the ADMIN_ACCESS permission: a
@@ -38,7 +38,7 @@ const ENABLED_KEY  = 'passwordRotationEnabled';
 const INTERVAL_KEY = 'passwordRotationInterval';
 
 // Roles subject to rotation. Anything not in here is never asked to rotate.
-const ROTATING_ROLES = ['doctor', 'staff', 'lab'];
+const ROTATING_ROLES = ['doctor', 'staff', 'lab', 'nurse'];
 
 // A self-chosen password younger than this is never expired, whatever the
 // interval says. See rule 2 above.
