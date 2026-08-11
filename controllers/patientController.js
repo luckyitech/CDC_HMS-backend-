@@ -932,4 +932,37 @@ const checkIdNumber = async (req, res) => {
   });
 };
 
-module.exports = { create, quickCreate, completeRegistration, list, getOne, update, destroy, stats, recordVitals, recordVitalsDoctor, getVitals, getVitalsHistory, updateSummary, checkIdNumber, getDuplicates, mergePatients, reactivatePatient };
+// ---------------------------------------------------------------------------
+// Chart metrics preference (consultation summary panel)
+// ---------------------------------------------------------------------------
+const CHART_METRIC_KEYS = ['bloodSugar', 'hba1c', 'bp', 'weight'];
+
+// GET /api/patients/:uhid/chart-metrics
+const getChartMetrics = async (req, res) => {
+  try {
+    return success(res, { chartMetrics: req.patient.chartMetrics ?? null });
+  } catch (err) {
+    console.error('Patient.getChartMetrics error:', err);
+    return error(res, 'Failed to fetch chart metrics', 500);
+  }
+};
+
+// PATCH /api/patients/:uhid/chart-metrics   body: { chartMetrics: ["bloodSugar","hba1c"] }
+const updateChartMetrics = async (req, res) => {
+  try {
+    if (req.isDeactivated) {
+      return res.status(403).json({ success: false, message: 'This patient profile is inactive. No changes are allowed.' });
+    }
+    const { chartMetrics } = req.body;
+    if (!Array.isArray(chartMetrics) || chartMetrics.some((k) => !CHART_METRIC_KEYS.includes(k))) {
+      return error(res, `chartMetrics must be an array of: ${CHART_METRIC_KEYS.join(', ')}`, 400);
+    }
+    await req.patient.update({ chartMetrics });
+    return success(res, { chartMetrics });
+  } catch (err) {
+    console.error('Patient.updateChartMetrics error:', err);
+    return error(res, 'Failed to update chart metrics', 500);
+  }
+};
+
+module.exports = { create, quickCreate, completeRegistration, list, getOne, update, destroy, stats, recordVitals, recordVitalsDoctor, getVitals, getVitalsHistory, updateSummary, checkIdNumber, getDuplicates, mergePatients, reactivatePatient, getChartMetrics, updateChartMetrics };

@@ -141,6 +141,54 @@ const Queue = defineModel('Queue', {
     type: DataTypes.STRING,
     defaultValue: null,
   },
+
+  // --- Admission request (HMIS V3) — mirrors the referral* block above ---
+  // These columns are added by 20260807000007. They MUST be declared here:
+  // Sequelize silently drops any attribute a model does not know about, so
+  // without them requestAdmission's update wrote 'Pending Billing' but threw
+  // away admissionRequested, and the front desk's "Admissions awaiting bed"
+  // list — which filters on that flag — was always empty.
+
+  admissionRequested: {
+    type: DataTypes.BOOLEAN,
+    allowNull: false,
+    defaultValue: false,
+  },
+  admissionReason: {
+    type: DataTypes.TEXT,
+    defaultValue: null,
+  },
+  admissionType: {
+    type: DataTypes.ENUM('Emergency', 'Elective', 'Transfer', 'Observation'),
+    defaultValue: null,
+  },
+  admissionWardPreference: {
+    type: DataTypes.STRING,
+    defaultValue: null,
+  },
+  // Stored as a name string (not FK), same reasoning as referredByDoctorName
+  admissionRequestedByDoctorName: {
+    type: DataTypes.STRING,
+    defaultValue: null,
+  },
+  admissionRequestedAt: {
+    type: DataTypes.DATE,
+    defaultValue: null,
+  },
+  // Set once the front desk converts this visit — the Admission it became.
+  // Also what stops a visit being converted twice.
+  admissionConvertedToId: {
+    type: DataTypes.INTEGER,
+    defaultValue: null,
+  },
+  admissionCancelledAt: {
+    type: DataTypes.DATE,
+    defaultValue: null,
+  },
+  admissionCancelReason: {
+    type: DataTypes.TEXT,
+    defaultValue: null,
+  },
 });
 
 module.exports = Queue;

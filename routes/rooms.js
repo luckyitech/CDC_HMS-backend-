@@ -1,0 +1,9 @@
+const express = require('express');
+const router = express.Router();
+const { authenticate, authorize } = require('../middleware/auth');
+const ward = require('../controllers/wardController');
+
+router.post('/', authenticate, authorize('admin'), ward.createRoom);
+router.put('/:id', authenticate, authorize('admin'), ward.updateRoom);
+
+module.exports = router;

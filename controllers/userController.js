@@ -280,6 +280,65 @@ const createStaff = async (req, res) => {
 };
 
 /**
+ * POST /api/users/nurses  (HMIS V3)
+ * Creates a nurse user (+ a StaffProfile row for position/shift). Nurses are the
+ * primary inpatient users and also do OPD triage/vitals/injections.
+ *
+ * Authorization: Admin only
+ */
+const createNurse = async (req, res) => {
+  const {
+    firstName, lastName, email, phone,
+    department, shift, startDate,
+    position = 'Nurse',
+    password: providedPassword,
+  } = req.body;
+
+  let transaction;
+  try {
+    const existingUser = await User.findOne({ where: { email } });
+    if (existingUser) return error(res, 'Email already in use', 400);
+
+    const tempPassword = providedPassword || generateTempPassword();
+    const hashedPassword = await bcrypt.hash(tempPassword, 10);
+
+    transaction = await sequelize.transaction();
+
+    const user = await User.create({
+      email,
+      password: hashedPassword,
+      role: 'nurse',
+      firstName,
+      lastName,
+      phone,
+      isActive: true,
+      createdBy: req.user.name || 'Unknown',
+    }, { transaction });
+
+    const staffProfile = await StaffProfile.create({
+      UserId: user.id,
+      position,
+      department,
+      shift: shift || 'Morning',
+      startDate,
+    }, { transaction });
+
+    await transaction.commit();
+
+    sendStaffWelcomeEmail({ to: email, name: `${firstName} ${lastName}`, role: 'nurse', tempPassword }).catch(() => {});
+
+    return success(res, {
+      user: formatUserResponse(user, staffProfile),
+      message: 'Nurse account created. Login credentials have been sent to the provided email.',
+    }, 201);
+  } catch (err) {
+    if (transaction) await transaction.rollback();
+    console.error('Create nurse error:', err.message);
+    return error(res, 'Failed to create nurse account. Please try again.', 500);
+  }
+};
+
+/**
  * POST /api/users/lab-techs
  * Creates a new lab tech user with profile
  *
@@ -750,6 +809,7 @@ const listDoctors = async (_req, res) => {
 module.exports = {
   createDoctor,
   createStaff,
+  createNurse,
   createLabTech,
   listDoctors,
   listUsers,

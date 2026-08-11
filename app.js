@@ -80,6 +80,19 @@ app.use('/api/catalog',            require('./routes/catalog'));
 app.use('/api/stock',              require('./routes/stock'));
 app.use('/api/settings',           require('./routes/settings'));
 
+// --- HMIS V3 inpatient ---
+app.use('/api/wards',                    require('./routes/wards'));
+app.use('/api/rooms',                    require('./routes/rooms'));
+app.use('/api/beds',                     require('./routes/beds'));
+app.use('/api/admissions',               require('./routes/admissions'));
+app.use('/api/inpatient/observations',   require('./routes/inpatientObservations'));
+app.use('/api/inpatient/mar',            require('./routes/mar'));
+app.use('/api/ward-round-notes',         require('./routes/wardRoundNotes'));
+app.use('/api/discharge-summaries',      require('./routes/dischargeSummaries'));
+app.use('/api/radiology',                require('./routes/radiology'));
+app.use('/api/inpatient/fluid-balance',  require('./routes/fluidBalance'));
+app.use('/api/inpatient/billing',        require('./routes/inpatientBilling'));
+
 // Global error handler — must be last
 app.use(errorHandler);
 

@@ -32,7 +32,7 @@ const ALL_PERMISSIONS = Object.values(PERMISSIONS);
 // Roles that may hold permissions at all. Patients are excluded outright: the
 // patient portal is a different trust boundary, and no capability here makes
 // sense for someone who is a subject of the records rather than a user of them.
-const PERMISSIBLE_ROLES = ['doctor', 'staff', 'lab'];
+const PERMISSIBLE_ROLES = ['doctor', 'staff', 'lab', 'nurse'];
 
 /**
  * Everything a user can do, as a Set.

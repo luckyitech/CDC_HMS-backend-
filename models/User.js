@@ -10,7 +10,10 @@ const User = defineModel('User', {
     allowNull: false,
   },
   role: {
-    type: DataTypes.ENUM('doctor', 'staff', 'lab', 'patient', 'admin'),
+    // 'nurse' added for HMIS V3 inpatient. Granular non-clinical cadres
+    // (billing, records, radiographer, porter) are deferred to the future RBAC
+    // system; for now 'staff' is the front-desk / admission clerk.
+    type: DataTypes.ENUM('doctor', 'staff', 'lab', 'patient', 'admin', 'nurse'),
     allowNull: false,
   },
   firstName: {

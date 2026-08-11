@@ -35,6 +35,7 @@ const Glp1WeekNote           = require('./Glp1WeekNote');
 const CatalogItem         = require('./CatalogItem');
 const Setting             = require('./Setting');
 const BarcodeScan         = require('./BarcodeScan');
+const PatientDiagnosis    = require('./PatientDiagnosis');
 const StockItem           = require('./StockItem');
 const StockLocation       = require('./StockLocation');
 const StockBatch          = require('./StockBatch');
@@ -42,6 +43,21 @@ const StockMovement       = require('./StockMovement');
 const StockLevel          = require('./StockLevel');
 const StockParLevel       = require('./StockParLevel');
 const Supplier            = require('./Supplier');
+
+// --- HMIS V3 inpatient ---
+const Ward                     = require('./Ward');
+const Room                     = require('./Room');
+const Bed                      = require('./Bed');
+const Admission                = require('./Admission');
+const BedAssignment            = require('./BedAssignment');
+const InpatientObservation     = require('./InpatientObservation');
+const InpatientMedicationOrder = require('./InpatientMedicationOrder');
+const MedicationAdministration = require('./MedicationAdministration');
+const WardRoundNote            = require('./WardRoundNote');
+const DischargeSummary         = require('./DischargeSummary');
+const InpatientCharge          = require('./InpatientCharge');
+const RadiologyOrder           = require('./RadiologyOrder');
+const FluidBalanceEntry        = require('./FluidBalanceEntry');
 
 // =============================================
 // ASSOCIATIONS
@@ -69,6 +85,12 @@ Patient.hasMany  (Patient, { as: 'mergedPatients', foreignKey: 'mergedIntoId' })
 // --- Patient children (one-to-many) ---
 Patient.hasMany(PatientVital);
 PatientVital.belongsTo(Patient);
+
+// Patient diagnoses — tracked list on the consultation summary panel
+Patient.hasMany(PatientDiagnosis);
+PatientDiagnosis.belongsTo(Patient);
+PatientDiagnosis.belongsTo(User, { as: 'addedBy',    foreignKey: 'addedById'    });
+PatientDiagnosis.belongsTo(User, { as: 'resolvedBy', foreignKey: 'resolvedById' });
 
 Patient.hasMany(BloodSugarReading);
 BloodSugarReading.belongsTo(Patient);
@@ -263,6 +285,65 @@ BarcodeScan.belongsTo(User, { foreignKey: 'scannedBy', as: 'scannedByUser' });
 // =============================================
 // EXPORTS
 // =============================================
+// =============================================
+// HMIS V3 — INPATIENT ASSOCIATIONS
+// =============================================
+Ward.hasMany(Room);   Room.belongsTo(Ward);
+Room.hasMany(Bed);    Bed.belongsTo(Room);
+Ward.hasMany(Bed);    Bed.belongsTo(Ward);
+
+Patient.hasMany(Admission);   Admission.belongsTo(Patient);
+Admission.belongsTo(User, { as: 'admittingDoctor', foreignKey: 'admittingDoctorId' });
+Admission.belongsTo(User, { as: 'attendingDoctor', foreignKey: 'attendingDoctorId' });
+Admission.belongsTo(User, { as: 'admittedByUser',  foreignKey: 'admittedById' });
+Admission.belongsTo(User, { as: 'dischargedByUser', foreignKey: 'dischargedById' });
+Admission.belongsTo(Ward);
+Admission.belongsTo(Room);
+Admission.belongsTo(Bed);
+
+Admission.hasMany(BedAssignment);   BedAssignment.belongsTo(Admission);
+BedAssignment.belongsTo(Bed);
+BedAssignment.belongsTo(Ward);
+BedAssignment.belongsTo(User, { as: 'movedByUser', foreignKey: 'movedById' });
+
+Queue.belongsTo(Admission, { as: 'convertedAdmission', foreignKey: 'admissionConvertedToId' });
+
+Admission.hasMany(InpatientObservation);   InpatientObservation.belongsTo(Admission);
+Patient.hasMany(InpatientObservation);     InpatientObservation.belongsTo(Patient);
+InpatientObservation.belongsTo(User, { as: 'recordedByUser', foreignKey: 'recordedById' });
+
+Admission.hasMany(InpatientMedicationOrder);   InpatientMedicationOrder.belongsTo(Admission);
+Patient.hasMany(InpatientMedicationOrder);     InpatientMedicationOrder.belongsTo(Patient);
+InpatientMedicationOrder.belongsTo(CatalogItem, { foreignKey: 'catalogItemId' });
+InpatientMedicationOrder.belongsTo(User, { as: 'prescribedByUser', foreignKey: 'prescribedById' });
+InpatientMedicationOrder.hasMany(MedicationAdministration);
+MedicationAdministration.belongsTo(InpatientMedicationOrder);
+Admission.hasMany(MedicationAdministration);   MedicationAdministration.belongsTo(Admission);
+Patient.hasMany(MedicationAdministration);     MedicationAdministration.belongsTo(Patient);
+MedicationAdministration.belongsTo(User, { as: 'administeredByUser', foreignKey: 'administeredById' });
+MedicationAdministration.belongsTo(User, { as: 'witnessedByUser',    foreignKey: 'witnessedById' });
+
+Admission.hasMany(WardRoundNote);   WardRoundNote.belongsTo(Admission);
+Patient.hasMany(WardRoundNote);     WardRoundNote.belongsTo(Patient);
+WardRoundNote.belongsTo(User, { as: 'doctor', foreignKey: 'doctorId' });
+
+Admission.hasOne(DischargeSummary);   DischargeSummary.belongsTo(Admission);
+Patient.hasMany(DischargeSummary);    DischargeSummary.belongsTo(Patient);
+DischargeSummary.belongsTo(User, { as: 'signedByUser', foreignKey: 'signedById' });
+
+Admission.hasMany(InpatientCharge);   InpatientCharge.belongsTo(Admission);
+Patient.hasMany(InpatientCharge);     InpatientCharge.belongsTo(Patient);
+InpatientCharge.belongsTo(User, { as: 'addedByUser', foreignKey: 'addedById' });
+
+Admission.hasMany(RadiologyOrder);   RadiologyOrder.belongsTo(Admission);
+Patient.hasMany(RadiologyOrder);     RadiologyOrder.belongsTo(Patient);
+RadiologyOrder.belongsTo(User, { as: 'orderedByUser', foreignKey: 'orderedById' });
+RadiologyOrder.belongsTo(User, { as: 'reportedByUser', foreignKey: 'reportedById' });
+
+Admission.hasMany(FluidBalanceEntry);   FluidBalanceEntry.belongsTo(Admission);
+Patient.hasMany(FluidBalanceEntry);     FluidBalanceEntry.belongsTo(Patient);
+FluidBalanceEntry.belongsTo(User, { as: 'recordedByUser', foreignKey: 'recordedById' });
+
 const db = {
   sequelize,
   Sequelize,
@@ -299,6 +380,7 @@ const db = {
   CatalogItem,
   Setting,
   BarcodeScan,
+  PatientDiagnosis,
   StockItem,
   StockLocation,
   StockBatch,
@@ -306,6 +388,20 @@ const db = {
   StockLevel,
   StockParLevel,
   Supplier,
+  // --- HMIS V3 inpatient ---
+  Ward,
+  Room,
+  Bed,
+  Admission,
+  BedAssignment,
+  InpatientObservation,
+  InpatientMedicationOrder,
+  MedicationAdministration,
+  WardRoundNote,
+  DischargeSummary,
+  InpatientCharge,
+  RadiologyOrder,
+  FluidBalanceEntry,
 };
 
 module.exports = db;

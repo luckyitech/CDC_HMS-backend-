@@ -86,6 +86,13 @@ const Patient = defineModel('Patient', {
     allowNull: true,
     defaultValue: null,
   },
+  // Chart metrics the doctor follows on the consultation summary panel,
+  // e.g. ["bloodSugar","hba1c"]. Display preference only — not clinical data.
+  chartMetrics: {
+    type: DataTypes.JSON,
+    allowNull: true,
+    defaultValue: null,
+  },
   summaryUpdatedBy: {
     type: DataTypes.STRING,
     allowNull: true,
