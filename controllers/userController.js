@@ -78,6 +78,8 @@ const formatUserResponse = (user, profile) => {
       emergencyContact: profile.emergencyContact,
 
       licenseNumber:   profile.licenseNumber,
+      licenseBody:     profile.licenseBody,
+      licenseExpiry:   profile.licenseExpiry,
       specialty:       profile.specialty,
       qualification:   profile.qualification,
       institution:     profile.institution,
