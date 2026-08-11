@@ -25,6 +25,10 @@ const PERMISSIONS = {
   ADMIN_ACCESS: 'admin.access',
   // Manage the stock module. Replaces the canManageStock boolean.
   STOCK_MANAGE: 'stock.manage',
+  // Reach the inpatient module (ward board + inpatient records) regardless of
+  // role. Doctors and nurses reach it by role; this opens it to a granted user
+  // (e.g. staff). Grantable from User Management.
+  INPATIENT_ACCESS: 'inpatient.access',
 };
 
 const ALL_PERMISSIONS = Object.values(PERMISSIONS);

@@ -93,9 +93,16 @@ const authenticate = async (req, res, next) => {
 //
 // Where something must be restricted to a REAL admin — granting permissions,
 // anything that could make a grant irrevocable — use requireTrueAdmin below.
-const authorize = (...roles) => (req, res, next) => {
+// Accepts roles and/or capabilities in one list. An argument containing a dot
+// (e.g. 'inpatient.access') is treated as a permission, so a route can allow
+// "these roles, OR anyone granted this capability" — e.g. authorize(...READ)
+// where READ carries 'inpatient.access'. Role-only calls are unaffected.
+const authorize = (...allow) => (req, res, next) => {
+  const roles = allow.filter((a) => !a.includes('.'));
+  const perms = allow.filter((a) => a.includes('.'));
   if (roles.includes(req.user.role)) return next();
   if (roles.includes('admin') && hasPermission(req.user, PERMISSIONS.ADMIN_ACCESS)) return next();
+  if (perms.some((p) => hasPermission(req.user, p))) return next();
   return error(res, 'Access denied', 403);
 };
 

@@ -3,7 +3,7 @@ const router = express.Router();
 const { authenticate, authorize } = require('../middleware/auth');
 const admission = require('../controllers/admissionController');
 
-const READ = ['doctor', 'nurse', 'staff', 'admin'];
+const READ = ['doctor', 'nurse', 'staff', 'admin', 'inpatient.access'];
 
 // Step 1 — doctor advises (from OPD consultation)
 router.post('/request', authenticate, authorize('doctor'), admission.requestAdmission);
