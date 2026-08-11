@@ -15,6 +15,8 @@ router.post('/direct', authenticate, authorize('staff', 'admin'), admission.dire
 
 // Reads
 router.get('/', authenticate, authorize(...READ), admission.list);
+// /advised must come before /:id so it isn't captured as an id.
+router.get('/advised', authenticate, authorize(...READ), admission.listAdvised);
 router.get('/:id', authenticate, authorize(...READ), admission.getById);
 
 // Mutations

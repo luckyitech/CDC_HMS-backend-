@@ -209,6 +209,43 @@ exports.directAdmit = async (req, res) => {
 // ====================================
 // READS
 // ====================================
+// Advised admissions for one patient — the admission NOTES a doctor wrote from
+// the OPD consultation (stored on the queue row), merge-aware. Feeds the Visit
+// History "Actions" tab. Read-only.
+exports.listAdvised = async (req, res) => {
+  try {
+    const { uhid } = req.query;
+    if (!uhid) return error(res, 'uhid is required', 400);
+    const family = await resolvePatient(uhid);
+    if (!family) return error(res, 'Patient not found', 404);
+
+    const rows = await Queue.findAll({
+      where: { PatientId: { [Op.in]: family.patientIds }, admissionRequested: true },
+      attributes: [
+        'id', 'admissionType', 'admissionReason', 'admissionWardPreference',
+        'admissionRequestedByDoctorName', 'admissionRequestedAt',
+        'admissionCancelledAt', 'admissionConvertedToId',
+      ],
+      order: [['admissionRequestedAt', 'DESC']],
+    });
+
+    const admissions = rows.map((q) => ({
+      id: q.id,
+      admissionType: q.admissionType,
+      note: q.admissionReason,
+      doctorName: q.admissionRequestedByDoctorName,
+      requestedAt: q.admissionRequestedAt,
+      cancelledAt: q.admissionCancelledAt,
+      converted: !!q.admissionConvertedToId,
+    }));
+
+    return success(res, { admissions });
+  } catch (err) {
+    console.error('Admission.listAdvised error:', err);
+    return error(res, 'Failed to load advised admissions', 500);
+  }
+};
+
 exports.list = async (req, res) => {
   try {
     const where = {};
