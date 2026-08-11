@@ -141,6 +141,18 @@ const Queue = defineModel('Queue', {
     type: DataTypes.STRING,
     defaultValue: null,
   },
+  // The full referral NOTE documented during the consultation ("Save & Print"),
+  // independent of referralReason (the short reason captured at final submit).
+  // Added by 20260811000002. Feeds the Visit History Actions tab and letterhead
+  // print, mirroring admissionReason.
+  referralNote: {
+    type: DataTypes.TEXT,
+    defaultValue: null,
+  },
+  referralNoteSavedAt: {
+    type: DataTypes.DATE,
+    defaultValue: null,
+  },
 
   // --- Admission request (HMIS V3) — mirrors the referral* block above ---
   // These columns are added by 20260807000007. They MUST be declared here:

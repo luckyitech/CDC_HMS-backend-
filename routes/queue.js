@@ -25,6 +25,12 @@ router.post('/call-next', authenticate, authorize('doctor'), queueController.cal
 router.get('/', authenticate, authorize('staff', 'doctor', 'nurse'), queueController.list);
 
 // ------------------------------------
+// GET /api/queue/advised-referrals — referral notes for one patient (Visit
+// History Actions). MUST be before /:id so "advised-referrals" isn't read as an id.
+// ------------------------------------
+router.get('/advised-referrals', authenticate, authorize('staff', 'doctor', 'nurse'), queueController.listAdvisedReferrals);
+
+// ------------------------------------
 // POST /api/queue — add patient to queue
 // ------------------------------------
 router.post('/', authenticate, authorize('staff'), [
@@ -42,6 +48,12 @@ router.put('/:id', authenticate, authorize('staff', 'doctor', 'nurse'), queueCon
 // Must be defined before /:id to prevent Express matching "refer" as an ID
 // ------------------------------------
 router.post('/:id/refer', authenticate, authorize('doctor'), queueController.refer);
+
+// ------------------------------------
+// POST /api/queue/:id/refer-note — Save & Print the referral note (no handoff)
+// Must be before /:id (DELETE) is unaffected; kept beside refer for clarity.
+// ------------------------------------
+router.post('/:id/refer-note', authenticate, authorize('doctor'), queueController.saveReferralNote);
 
 // ------------------------------------
 // DELETE /api/queue/:id — remove from queue

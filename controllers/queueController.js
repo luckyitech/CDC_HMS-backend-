@@ -369,6 +369,7 @@ const refer = async (req, res) => {
       referredToDoctorId,     // required for Internal
       referredToDoctorName,   // required for Internal — stored as string for permanent record
       externalReferralTarget, // required for External
+      referralNote,           // full letter body — persisted for Visit History / letterhead
       selectedCharges    = [],
       selectedProcedures = [],
     } = req.body;
@@ -412,6 +413,12 @@ const refer = async (req, res) => {
       referredAt:           new Date(),
       selectedCharges:      mergedCharges,
       selectedProcedures:   mergedProcedures,
+      // Persist the note so it lands in Visit History Actions even when the
+      // doctor sent the referral without clicking Save & Print first. Keep any
+      // previously-saved note if this submit didn't carry one.
+      ...(referralNote && referralNote.trim()
+        ? { referralNote, referralNoteSavedAt: item.referralNoteSavedAt || new Date() }
+        : {}),
     };
 
     // --- Build the type-specific status transition fields ---
@@ -446,4 +453,82 @@ const refer = async (req, res) => {
   }
 };
 
-module.exports = { add, list, update, remove, stats, callNext, refer };
+// ------------------------------------
+// POST /api/queue/:id/refer-note — Save & Print the referral NOTE (no handoff)
+// ------------------------------------
+// Documents the referral note per protocol WITHOUT finalising the referral or
+// moving the visit to billing. The doctor can then send the referral (refer) or
+// keep working. Mirrors the admission saveNote pattern. Merge-aware read guard.
+// Idempotent: writes the latest note onto the open queue row.
+const saveReferralNote = async (req, res) => {
+  try {
+    const { referralNote, referralType } = req.body;
+    if (!referralNote || !referralNote.trim()) return error(res, 'The referral note is empty.', 400);
+
+    const item = await Queue.findByPk(req.params.id, { include: [Patient] });
+    if (!item) return error(res, 'Queue item not found', 404);
+    if (!item.Patient) return error(res, 'Queue item has no patient', 400);
+
+    const { resolvePatient } = require('../utils/patientFamily');
+    const family = await resolvePatient(item.Patient.uhid);
+    if (!family) return error(res, 'Patient not found', 404);
+    if (family.isDeactivated) return error(res, 'Patient record is deactivated (merged)', 400);
+
+    await item.update({
+      referralNote,
+      referralType:         referralType || item.referralType || null,
+      referredByDoctorName: req.user.name,
+      referralNoteSavedAt:  new Date(),
+    });
+
+    return success(res, { queueId: item.id, saved: true });
+  } catch (err) {
+    console.error('Queue.saveReferralNote error:', err);
+    return error(res, 'Failed to save referral note', 500);
+  }
+};
+
+// ------------------------------------
+// GET /api/queue/advised-referrals?uhid= — referral NOTES for one patient
+// ------------------------------------
+// The referral notes a doctor documented from the OPD consultation (stored on
+// the queue row), merge-aware. Feeds the Visit History "Actions" tab alongside
+// admission notes and prescriptions. Read-only.
+const listAdvisedReferrals = async (req, res) => {
+  try {
+    const { uhid } = req.query;
+    if (!uhid) return error(res, 'uhid is required', 400);
+
+    const { resolvePatient } = require('../utils/patientFamily');
+    const family = await resolvePatient(uhid);
+    if (!family) return error(res, 'Patient not found', 404);
+
+    const rows = await Queue.findAll({
+      where: { PatientId: { [Op.in]: family.patientIds }, referralNote: { [Op.ne]: null } },
+      attributes: [
+        'id', 'referralType', 'referralNote', 'referredToDoctorName',
+        'externalReferralTarget', 'referredByDoctorName', 'referralNoteSavedAt',
+        'referredAt',
+      ],
+      order: [['referralNoteSavedAt', 'DESC']],
+    });
+
+    const referrals = rows.map((q) => ({
+      id: q.id,
+      referralType: q.referralType,
+      destination: q.referredToDoctorName || q.externalReferralTarget || null,
+      note: q.referralNote,
+      doctorName: q.referredByDoctorName,
+      savedAt: q.referralNoteSavedAt,
+      // referredAt is only set once the referral is finalised; null while advised.
+      sent: !!q.referredAt,
+    }));
+
+    return success(res, { referrals });
+  } catch (err) {
+    console.error('Queue.listAdvisedReferrals error:', err);
+    return error(res, 'Failed to load referral notes', 500);
+  }
+};
+
+module.exports = { add, list, update, remove, stats, callNext, refer, saveReferralNote, listAdvisedReferrals };
