@@ -18,7 +18,11 @@ const findStaff = async (req, res, next) => {
   try {
     const profile = await StaffProfile.findOne({
       where: { employeeId },
-      include: [{ model: User }],
+      // The password hash and reset token have no business on a read path.
+      include: [{
+        model: User,
+        attributes: { exclude: ['password', 'resetToken', 'resetTokenExpires'] },
+      }],
     });
 
     if (!profile || !profile.User) return error(res, 'Staff member not found', 404);

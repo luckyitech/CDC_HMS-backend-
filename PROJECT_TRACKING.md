@@ -10,7 +10,7 @@ Running record of features, fixes and significant changes. A task is only marked
 ### Staff Profiles (doctor / nurse / lab tech / staff)
 
 - **Branch:** `feature/staff-profiles`
-- **Status:** Phase 1 implemented — **awaiting testing against a real database**
+- **Status:** Phases 1–3 implemented — **awaiting testing against a real database**
 - **Started:** 2026-08-11
 - **Design doc:** [STAFF_PROFILE_DESIGN.md](STAFF_PROFILE_DESIGN.md)
 - **Description:** An admin profile page for a single member of staff, built on the same page
@@ -47,22 +47,54 @@ Frontend:
 - `ManageUsers.jsx` — names link to the profile, archive wording replaces delete wording
 - `CreateStaff.jsx` — now sends the fields it already collected; real shift dropdown
 
-**Verification done so far:** all changed files parse; the Express app boots; the eight
-`/api/staff` routes are mounted and reject unauthenticated requests; ESLint clean; 13 unit
-assertions pass covering employee-ID generation, the audit diff and licence-expiry derivation.
-**Not yet done:** running the migrations against a real MySQL database, and manual testing of
-the page. The sandbox has no MySQL and the installed `node_modules` are Windows binaries, so
-neither could be verified here.
+**Verification done so far:** all changed files parse; the Express app boots; all nineteen
+`/api/staff` routes are mounted and reject unauthenticated requests; ESLint clean; 32 unit
+assertions pass covering employee-ID generation, the audit diff, licence-expiry derivation,
+inclusive leave-day counting (including a DST boundary and a leap day), date-range overlap,
+and leave-type agreement across controller, model and migration.
 
-#### Phase 2 — access *(not started)*
+**Not yet done:** running the migrations against a real MySQL database, and manual testing.
+The sandbox has no MySQL and the installed `node_modules` are Windows binaries, so neither
+could be verified here.
 
-Permission list, editable role bundles, Access tab, `requirePermission` on selected endpoints.
+#### Phase 1b — inline editing *(implemented, not yet tested)*
 
-#### Phase 3 — leave and documents *(not started)*
+Each profile section edits in place via `EditableSection`, sending only changed fields,
+instead of one modal covering the whole record. `EditUserModal` remains for Manage Users and
+was extended with the identity, contact, employment and licence fields plus a nurse entry —
+without it the page displayed fields nobody could fill in.
 
-`StaffLeaves`, `LeaveBalances`, `StaffDocuments`, `DoctorBlock` wiring, staff self-service.
+#### Phase 2 — access *(partially implemented, not yet tested)*
 
-- **Next step:** run the three migrations on a copy of production data, confirm the backfill
+- `staffController` now returns `permissions`, `canManageStock`, `hasAdminAccess`,
+  `canHoldPermissions`, `isTrueAdmin` and `passwordChangedAt`
+- `PATCH /api/staff/:employeeId/permissions`, restricted to a real admin account via
+  `requireTrueAdmin` so the capability cannot propagate and become unrevocable
+- `GET /api/staff/permissions/catalog` so the UI keeps no copy of the permission list
+- Access tab: account state, permission toggles, and the archive/restore block
+- Read paths now exclude `password`, `resetToken` and `resetTokenExpires`
+
+**Still to do:** editable role bundles (`Roles` / `UserRoles`), `requirePermission` on
+selected endpoints, and the permission-aware sidebar. The vocabulary is still just
+`admin.access` and `stock.manage` — the module-level permissions are not added yet.
+
+#### Phase 3 — leave and documents *(implemented, not yet tested)*
+
+- `StaffLeave`, `LeaveBalance`, `StaffDocument` models; migrations `20260811000004/5`
+- `utils/leaveDays.js` — inclusive day counting in UTC, optional weekend exclusion
+- `leaveController` — request, approve, reject, cancel, and yearly entitlement.
+  **Approving a doctor's leave writes one all-day `DoctorBlock` per date** so reception
+  cannot book them while away; cancelling removes exactly those blocks by stored ID
+- `staffDocumentController` + `middleware/uploadStaffDocument.js` — separate table and
+  separate `uploads/staff-documents` directory from patient documents, `.doc`/`.docx`
+  accepted alongside PDF and images, extension and MIME both validated, files streamed
+  through an authenticated route with a path-traversal guard
+- Leave and Documents tabs, with staff self-service (own leave request, own uploads)
+
+**Still to do:** attendance is deliberately out of scope; performance and payroll remain
+parked.
+
+- **Next step:** run the five migrations on a copy of production data, confirm the backfill
   produced one `StaffProfile` per staff user with sensible employee IDs, then test the page.
 - **Explicitly out of scope:** performance metrics, payroll, attendance/clock-in, occupational
   health records, ward-scoped access. See §9 of the design doc.

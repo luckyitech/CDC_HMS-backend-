@@ -3,9 +3,16 @@ const Sequelize = require('sequelize');
 
 // --- All model imports ---
 const User                = require('./User');
+// DoctorProfile and LabTechProfile are deprecated — StaffProfile is now the
+// single profile table for every cadre. They are kept readable for one release
+// as a rollback path and dropped by a later migration.
+// See STAFF_PROFILE_DESIGN.md.
 const DoctorProfile       = require('./DoctorProfile');
 const StaffProfile        = require('./StaffProfile');
 const LabTechProfile      = require('./LabTechProfile');
+const StaffLeave          = require('./StaffLeave');
+const LeaveBalance        = require('./LeaveBalance');
+const StaffDocument       = require('./StaffDocument');
 const Patient             = require('./Patient');
 const PatientVital        = require('./PatientVital');
 const BloodSugarReading   = require('./BloodSugarReading');
@@ -72,6 +79,20 @@ StaffProfile.belongsTo(User);
 
 User.hasOne(LabTechProfile);
 LabTechProfile.belongsTo(User);
+
+// --- Staff leave, entitlement and HR documents ---
+// onDelete is left at the Sequelize default: staff accounts are archived rather
+// than destroyed, so cascade behaviour should never come into play.
+User.hasMany(StaffLeave);
+StaffLeave.belongsTo(User);
+StaffLeave.belongsTo(User, { as: 'approvedBy', foreignKey: 'approvedById' });
+
+User.hasMany(LeaveBalance);
+LeaveBalance.belongsTo(User);
+
+User.hasMany(StaffDocument);
+StaffDocument.belongsTo(User);
+StaffDocument.belongsTo(User, { as: 'uploader', foreignKey: 'uploadedById' });
 
 // --- Patient ↔ User (two links, aliases required) ---
 User.hasOne(Patient);                                                          // patient's own login
@@ -351,6 +372,9 @@ const db = {
   DoctorProfile,
   StaffProfile,
   LabTechProfile,
+  StaffLeave,
+  LeaveBalance,
+  StaffDocument,
   Patient,
   PatientVital,
   BloodSugarReading,

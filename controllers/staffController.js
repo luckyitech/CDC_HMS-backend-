@@ -14,8 +14,15 @@ const { buildChanges } = require('../utils/auditChanges');
 const db = require('../models');
 const sequelize = require('../config/database');
 const { STAFF_ROLES } = require('../constants/staffRoles');
+const {
+  PERMISSIONS, ALL_PERMISSIONS, PERMISSIBLE_ROLES,
+  hasPermission, isTrueAdmin, sanitizePermissions,
+} = require('../constants/permissions');
 
 const { User, StaffProfile, UserEditLog, UserLoginLog } = db;
+
+// Never load these into memory on a read path, let alone risk serialising them.
+const SECRET_USER_COLUMNS = ['password', 'resetToken', 'resetTokenExpires'];
 
 // Fields the admin may edit, split by which table they live on.
 const USER_FIELDS = ['firstName', 'lastName', 'email', 'phone'];
@@ -99,6 +106,17 @@ const formatStaff = (profile, user) => {
     licenceExpiringSoon:  expiresInDays !== null && expiresInDays <= LICENCE_WARNING_DAYS,
     licenceExpired:       expiresInDays !== null && expiresInDays < 0,
 
+    // --- Access ---
+    // Read from the live user row rather than a JWT, so a revoke shows here
+    // immediately. A real admin holds every permission implicitly and stores
+    // none, which is why the list can be empty while the flags are true.
+    permissions:     Array.isArray(user.permissions) ? user.permissions : [],
+    canManageStock:  hasPermission(user, PERMISSIONS.STOCK_MANAGE),
+    hasAdminAccess:  hasPermission(user, PERMISSIONS.ADMIN_ACCESS),
+    canHoldPermissions: PERMISSIBLE_ROLES.includes(user.role),
+    isTrueAdmin:     isTrueAdmin(user),
+    passwordChangedAt: user.passwordChangedAt,
+
     isActive:   user.isActive,
     isArchived: !!profile.deletedAt,
     archivedAt: profile.deletedAt,
@@ -144,7 +162,12 @@ const list = async (req, res) => {
 
     const profiles = await StaffProfile.findAll({
       where: profileWhere,
-      include: [{ model: User, where: userWhere, required: true }],
+      include: [{
+        model: User,
+        where: userWhere,
+        required: true,
+        attributes: { exclude: SECRET_USER_COLUMNS },
+      }],
       order: [['employeeId', 'ASC']],
     });
 
@@ -391,6 +414,60 @@ const restore = async (req, res) => {
 };
 
 /**
+ * PATCH /api/staff/:employeeId/permissions
+ * Replaces the granted permission list.
+ *
+ * Authorization: a REAL admin account, not merely someone holding admin.access.
+ * If a granted user could grant, the capability would propagate on its own and
+ * could never be reliably revoked — the same reasoning as requireTrueAdmin in
+ * middleware/auth.js.
+ */
+const updatePermissions = async (req, res) => {
+  const user = req.staffUser;
+  const { permissions } = req.body;
+
+  if (!PERMISSIBLE_ROLES.includes(user.role)) {
+    return error(res, `Permissions cannot be granted to a ${user.role} account`, 400);
+  }
+
+  try {
+    // Unknown names are dropped rather than stored, so a typo grants nothing
+    // instead of persisting a string that is never checked.
+    const next = sanitizePermissions(permissions);
+    const before = { permissions: user.permissions || [] };
+
+    await user.update({ permissions: next });
+
+    await UserEditLog.create({
+      targetUserId: user.id,
+      editedBy:     req.user.id,
+      editedByName: `${req.user.firstName} ${req.user.lastName}`,
+      changes:      buildChanges(before, { permissions: next }),
+      editedAt:     new Date(),
+    });
+
+    await user.reload();
+    return success(res, formatStaff(req.staffProfile, user));
+  } catch (err) {
+    console.error('Update staff permissions error:', err.message);
+    return error(res, 'Failed to update permissions', 500);
+  }
+};
+
+/**
+ * GET /api/staff/permissions/catalog
+ * The permission vocabulary, so the Access tab renders one toggle per
+ * capability without the frontend keeping its own copy of the list.
+ *
+ * Authorization: Admin only
+ */
+const permissionCatalog = async (_req, res) =>
+  success(res, {
+    permissions: ALL_PERMISSIONS,
+    permissibleRoles: PERMISSIBLE_ROLES,
+  });
+
+/**
  * GET /api/staff/expiring-licences
  * Licences already expired or expiring within LICENCE_WARNING_DAYS.
  * A clinician practising on a lapsed licence is a real liability, so this is
@@ -408,7 +485,7 @@ const expiringLicences = async (req, res) => {
         deletedAt:     null,
         licenseExpiry: { [Op.ne]: null, [Op.lte]: cutoff },
       },
-      include: [{ model: User, required: true }],
+      include: [{ model: User, required: true, attributes: { exclude: SECRET_USER_COLUMNS } }],
       order: [['licenseExpiry', 'ASC']],
     });
 
@@ -461,6 +538,8 @@ module.exports = {
   getOne,
   update,
   updateStatus,
+  updatePermissions,
+  permissionCatalog,
   archive,
   restore,
   expiringLicences,
