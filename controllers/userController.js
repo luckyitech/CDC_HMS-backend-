@@ -57,11 +57,12 @@ const formatUserResponse = (user, profile) => {
       address:        profile.address,
       city:           profile.city,
     });
-  } else if (user.role === 'staff' && profile) {
+  } else if ((user.role === 'staff' || user.role === 'nurse') && profile) {
     Object.assign(baseData, {
       position:   profile.position,
       department: profile.department,
       shift:      profile.shift,
+      startDate:  profile.startDate,
     });
   } else if (user.role === 'lab' && profile) {
     Object.assign(baseData, {
@@ -702,7 +703,7 @@ const getById = async (req, res) => {
     let profile = null;
     if (user.role === 'doctor') {
       profile = await DoctorProfile.findOne({ where: { UserId: user.id } });
-    } else if (user.role === 'staff') {
+    } else if (user.role === 'staff' || user.role === 'nurse') {
       profile = await StaffProfile.findOne({ where: { UserId: user.id } });
     } else if (user.role === 'lab') {
       profile = await LabTechProfile.findOne({ where: { UserId: user.id } });

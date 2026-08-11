@@ -17,6 +17,7 @@ const PhysicalExamination = require('./PhysicalExamination');
 const InitialAssessment   = require('./InitialAssessment');
 const ConsultationNote    = require('./ConsultationNote');
 const MedicalDocument     = require('./MedicalDocument');
+const StaffDocument       = require('./StaffDocument');
 const Appointment         = require('./Appointment');
 const MedicalEquipment    = require('./MedicalEquipment');
 const EquipmentHistory    = require('./EquipmentHistory');
@@ -126,6 +127,12 @@ ConsultationNote.belongsTo(User, { as: 'doctor', foreignKey: 'doctorId' });
 Patient.hasMany(MedicalDocument);
 MedicalDocument.belongsTo(Patient);
 MedicalDocument.belongsTo(User, { as: 'uploader', foreignKey: 'uploadedById' });
+
+// Staff documents — two explicit links to User: the staff member the file
+// belongs to (staffUserId) and the admin who uploaded it (uploadedById).
+User.hasMany(StaffDocument, { as: 'staffDocuments', foreignKey: 'staffUserId' });
+StaffDocument.belongsTo(User, { as: 'staff', foreignKey: 'staffUserId' });
+StaffDocument.belongsTo(User, { as: 'uploader', foreignKey: 'uploadedById' });
 
 Patient.hasMany(Appointment);
 Appointment.belongsTo(Patient);
@@ -362,6 +369,7 @@ const db = {
   InitialAssessment,
   ConsultationNote,
   MedicalDocument,
+  StaffDocument,
   Appointment,
   MedicalEquipment,
   EquipmentHistory,

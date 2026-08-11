@@ -71,6 +71,7 @@ app.use('/api/public/booking',     require('./routes/publicBooking'));
 app.use('/api/doctor-blocks',      require('./routes/doctorBlocks'));
 app.use('/api/users',              require('./routes/users'));
 app.use('/api/documents',          require('./routes/documents'));
+app.use('/api/staff-documents',    require('./routes/staffDocuments'));
 app.use('/api/reports',            require('./routes/reports'));
 app.use('/api/analytics',          require('./routes/analytics'));
 app.use('/api/dashboard',          require('./routes/dashboard'));
