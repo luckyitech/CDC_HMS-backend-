@@ -33,16 +33,16 @@ const LeaveBalance = defineModel('LeaveBalance', {
   // --- Accountability ---
   createdBy: { type: DataTypes.INTEGER, defaultValue: null },
   updatedBy: { type: DataTypes.INTEGER, defaultValue: null },
-}, {
-  indexes: [
-    // One entitlement row per person per type per year. Without this a second
-    // row would silently double someone's allowance.
-    {
-      unique: true,
-      fields: ['UserId', 'year', 'leaveType'],
-      name: 'unique_leave_balance_user_year_type',
-    },
-  ],
 });
+
+// The unique (UserId, year, leaveType) index is created by the migration, NOT
+// declared here — one entitlement row per person per type per year, or a
+// duplicate would silently double someone's allowance.
+//
+// It cannot live in an `indexes` option because UserId is injected by
+// User.hasMany(LeaveBalance) in index.js rather than declared above, and
+// sequelize.sync() would try to index a column it does not yet know about.
+// MySQL rejects that with "Key column 'UserId' doesn't exist in table", which
+// crashes the app on boot.
 
 module.exports = LeaveBalance;

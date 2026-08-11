@@ -21,9 +21,34 @@ const tableExists = async (qi) => {
     .includes(TABLE.toLowerCase());
 };
 
+// sequelize.sync() runs on every boot and may create this table first, without
+// the association-injected UserId column. Repair rather than skip, or a
+// half-built table survives while the migration reports success.
+const ensureColumn = async (qi, name, spec) => {
+  const existing = await qi.describeTable(TABLE);
+  if (!existing[name]) await qi.addColumn(TABLE, name, spec);
+};
+
 module.exports = {
   async up(queryInterface, Sequelize) {
-    if (await tableExists(queryInterface)) return;
+    if (await tableExists(queryInterface)) {
+      await ensureColumn(queryInterface, 'UserId', {
+        type: Sequelize.INTEGER, allowNull: true,
+        references: { model: 'Users', key: 'id' }, onUpdate: 'CASCADE', onDelete: 'CASCADE',
+      });
+      await ensureColumn(queryInterface, 'uploadedById', {
+        type: Sequelize.INTEGER, allowNull: true,
+        references: { model: 'Users', key: 'id' }, onUpdate: 'CASCADE', onDelete: 'SET NULL',
+      });
+
+      const indexes = await queryInterface.showIndex(TABLE);
+      if (!indexes.some((i) => i.name === 'unique_staff_document_id')) {
+        await queryInterface.addIndex(TABLE, {
+          fields: ['documentId'], unique: true, name: 'unique_staff_document_id',
+        });
+      }
+      return;
+    }
 
     await queryInterface.createTable(TABLE, {
       id:         { type: Sequelize.INTEGER, autoIncrement: true, primaryKey: true, allowNull: false },

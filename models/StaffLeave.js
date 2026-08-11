@@ -58,10 +58,17 @@ const StaffLeave = defineModel('StaffLeave', {
   // --- Accountability ---
   createdBy: { type: DataTypes.INTEGER, defaultValue: null },
   updatedBy: { type: DataTypes.INTEGER, defaultValue: null },
-}, {
-  indexes: [
-    { fields: ['UserId', 'startDate'], name: 'staff_leave_user_start' },
-  ],
 });
+
+// The (UserId, startDate) index is created by the migration, NOT declared here.
+//
+// UserId is not an attribute of this model — it is injected by
+// User.hasMany(StaffLeave) in index.js. Naming it in an `indexes` option makes
+// sequelize.sync() try to build an index over a column it does not yet know
+// about, which MySQL rejects with "Key column 'UserId' doesn't exist in table"
+// and takes the whole app down on boot.
+//
+// Same applies to any future index over an association-injected column: put it
+// in the migration, where the column definitely exists.
 
 module.exports = StaffLeave;
