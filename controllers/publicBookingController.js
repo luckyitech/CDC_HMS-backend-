@@ -10,7 +10,7 @@ const {
 const SOURCES = require('../config/bookingSources');
 const db = require('../models');
 
-const { Appointment, Patient, User, DoctorProfile, DoctorBlock } = db;
+const { Appointment, Patient, User, StaffProfile, DoctorBlock } = db;
 
 // ====================================================================
 // PUBLIC WEBSITE BOOKING
@@ -45,14 +45,14 @@ const resolveDoctors = async (cfg) => {
   if (cfg.strategy === 'fixed') {
     const doc = await User.findOne({
       where: { email: cfg.doctorEmail, role: 'doctor', isActive: true },
-      include: [{ model: DoctorProfile, attributes: ['specialty'] }],
+      include: [{ model: StaffProfile, attributes: ['specialty'] }],
     });
     return doc ? [doc] : [];
   }
   // least-loaded
   const where = { role: 'doctor', isActive: true };
   if (Array.isArray(cfg.pool) && cfg.pool.length) where.email = { [Op.in]: cfg.pool };
-  return User.findAll({ where, include: [{ model: DoctorProfile, attributes: ['specialty'] }] });
+  return User.findAll({ where, include: [{ model: StaffProfile, attributes: ['specialty'] }] });
 };
 
 // For a set of doctors on a date: booked count per (doctorId,label) and blocks.
@@ -237,7 +237,7 @@ const book = async (req, res) => {
       bookedById: null,
     });
 
-    const specialty = assigned.DoctorProfile?.specialty || cfg.defaults.specialty || 'General';
+    const specialty = assigned.StaffProfile?.specialty || cfg.defaults.specialty || 'General';
     const patientFullName = `${patient.firstName} ${patient.lastName}`.trim();
 
     // Confirmation to patient — barcode is embedded automatically via uhid.

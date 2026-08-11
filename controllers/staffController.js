@@ -1,0 +1,470 @@
+// Staff profiles — the admin-side record for every member of staff (doctor,
+// nurse, lab tech and the 'staff' front-desk role).
+//
+// Kept separate from userController, which already carries the four account
+// creation paths and the Manage Users list. This file owns the profile itself:
+// reading it, editing it, changing employment status and archiving it.
+//
+// Routes resolve on employeeId (EMP014), not the database PK — the same choice
+// the patient routes make with uhid. See STAFF_PROFILE_DESIGN.md.
+
+const { Op } = require('sequelize');
+const { success, error } = require('../utils/response');
+const { buildChanges } = require('../utils/auditChanges');
+const db = require('../models');
+const sequelize = require('../config/database');
+const { STAFF_ROLES } = require('../constants/staffRoles');
+
+const { User, StaffProfile, UserEditLog, UserLoginLog } = db;
+
+// Fields the admin may edit, split by which table they live on.
+const USER_FIELDS = ['firstName', 'lastName', 'email', 'phone'];
+
+const PROFILE_FIELDS = [
+  'dateOfBirth', 'gender', 'idNumber', 'photoUrl',
+  'address', 'city', 'emergencyContact',
+  'position', 'department', 'ward', 'employmentType', 'shift',
+  'startDate', 'endDate', 'reportsToId',
+  'licenseNumber', 'licenseBody', 'licenseExpiry', 'specialty',
+  'qualification', 'institution', 'yearsExperience',
+  'roleDetails',
+];
+
+// An empty string on a DATE column makes MySQL raise "Incorrect datetime
+// value", so cleared date inputs have to become null. Same guard userController
+// applies for the same reason.
+const DATE_FIELDS = new Set(['dateOfBirth', 'startDate', 'endDate', 'licenseExpiry']);
+
+// Days of notice before a licence expiry is worth surfacing.
+const LICENCE_WARNING_DAYS = 60;
+
+// =====================================
+// HELPERS
+// =====================================
+
+const daysUntil = (date) => {
+  if (!date) return null;
+  const ms = new Date(date).getTime() - Date.now();
+  return Math.ceil(ms / (1000 * 60 * 60 * 24));
+};
+
+// One response shape for the list and the detail view, so the frontend never
+// has to branch on which endpoint the data came from.
+const formatStaff = (profile, user) => {
+  const expiresInDays = daysUntil(profile.licenseExpiry);
+
+  return {
+    employeeId: profile.employeeId,
+    userId:     user.id,
+
+    firstName: user.firstName,
+    lastName:  user.lastName,
+    name:      `${user.firstName} ${user.lastName}`,
+    email:     user.email,
+    phone:     user.phone,
+    role:      user.role,
+
+    dateOfBirth: profile.dateOfBirth,
+    gender:      profile.gender,
+    idNumber:    profile.idNumber,
+    photoUrl:    profile.photoUrl,
+
+    address:          profile.address,
+    city:             profile.city,
+    emergencyContact: profile.emergencyContact,
+
+    position:         profile.position,
+    department:       profile.department,
+    ward:             profile.ward,
+    employmentType:   profile.employmentType,
+    shift:            profile.shift,
+    startDate:        profile.startDate,
+    endDate:          profile.endDate,
+    employmentStatus: profile.employmentStatus,
+    reportsToId:      profile.reportsToId,
+
+    licenseNumber:   profile.licenseNumber,
+    licenseBody:     profile.licenseBody,
+    licenseExpiry:   profile.licenseExpiry,
+    specialty:       profile.specialty,
+    qualification:   profile.qualification,
+    institution:     profile.institution,
+    yearsExperience: profile.yearsExperience,
+
+    roleDetails: profile.roleDetails || {},
+
+    // Derived for the header pills, so every caller shows the same warning at
+    // the same threshold instead of each screen inventing its own.
+    licenceExpiresInDays: expiresInDays,
+    licenceExpiringSoon:  expiresInDays !== null && expiresInDays <= LICENCE_WARNING_DAYS,
+    licenceExpired:       expiresInDays !== null && expiresInDays < 0,
+
+    isActive:   user.isActive,
+    isArchived: !!profile.deletedAt,
+    archivedAt: profile.deletedAt,
+
+    createdAt: profile.createdAt,
+    updatedAt: profile.updatedAt,
+  };
+};
+
+// employmentStatus is the HR-facing detail; isActive stays the single source of
+// truth for whether login is permitted. Only these two states allow a login —
+// notably 'On Leave' does, because someone on annual leave should not be locked
+// out of the system. Suspension is what blocks access.
+const LOGIN_ALLOWED_STATUSES = new Set(['Active', 'On Leave']);
+
+// =====================================
+// CONTROLLER ACTIONS
+// =====================================
+
+/**
+ * GET /api/staff
+ * Lists staff with optional filters. Archived records are excluded unless
+ * explicitly asked for.
+ *
+ * Authorization: Admin only
+ */
+const list = async (req, res) => {
+  const { role, department, ward, status, search, includeArchived } = req.query;
+
+  try {
+    const profileWhere = {};
+    if (department) profileWhere.department = department;
+    if (ward)       profileWhere.ward = ward;
+    if (status)     profileWhere.employmentStatus = status;
+    if (includeArchived !== 'true') profileWhere.deletedAt = null;
+
+    const userWhere = { role: role ? role : { [Op.in]: STAFF_ROLES } };
+
+    if (search) {
+      const like = { [Op.like]: `%${search}%` };
+      userWhere[Op.or] = [{ firstName: like }, { lastName: like }, { email: like }];
+    }
+
+    const profiles = await StaffProfile.findAll({
+      where: profileWhere,
+      include: [{ model: User, where: userWhere, required: true }],
+      order: [['employeeId', 'ASC']],
+    });
+
+    return success(res, profiles.map((p) => formatStaff(p, p.User)));
+  } catch (err) {
+    console.error('List staff error:', err.message);
+    return error(res, 'Failed to load staff', 500);
+  }
+};
+
+/**
+ * GET /api/staff/:employeeId
+ * Full profile. findStaff has already resolved and attached the record.
+ *
+ * Authorization: Admin, or the staff member themselves
+ */
+const getOne = async (req, res) => {
+  try {
+    return success(res, formatStaff(req.staffProfile, req.staffUser));
+  } catch (err) {
+    console.error('Get staff error:', err.message);
+    return error(res, 'Failed to load staff member', 500);
+  }
+};
+
+/**
+ * PUT /api/staff/:employeeId
+ * Updates the profile and/or the underlying user record, recording what
+ * changed in UserEditLog.
+ *
+ * Authorization: Admin only
+ */
+const update = async (req, res) => {
+  const profile = req.staffProfile;
+  const user    = req.staffUser;
+  const updates = req.body;
+
+  if (profile.deletedAt) {
+    return error(res, 'This staff member is archived. Restore them before editing.', 409);
+  }
+
+  let transaction;
+  try {
+    // A duplicate email would otherwise surface as a raw unique-constraint
+    // error from the driver.
+    if (updates.email && updates.email !== user.email) {
+      const taken = await User.findOne({ where: { email: updates.email, id: { [Op.ne]: user.id } } });
+      if (taken) return error(res, 'Email already in use', 400);
+    }
+
+    const userUpdates = {};
+    USER_FIELDS.forEach((field) => {
+      if (updates[field] !== undefined) userUpdates[field] = updates[field];
+    });
+
+    const profileUpdates = {};
+    PROFILE_FIELDS.forEach((field) => {
+      if (updates[field] === undefined) return;
+      profileUpdates[field] = DATE_FIELDS.has(field) && updates[field] === ''
+        ? null
+        : updates[field];
+    });
+
+    if (!Object.keys(userUpdates).length && !Object.keys(profileUpdates).length) {
+      return error(res, 'No changes supplied', 400);
+    }
+
+    const userBefore = {};
+    USER_FIELDS.forEach((f) => { userBefore[f] = user[f]; });
+    const profileBefore = {};
+    PROFILE_FIELDS.forEach((f) => { profileBefore[f] = profile[f]; });
+
+    transaction = await sequelize.transaction();
+
+    if (Object.keys(userUpdates).length) {
+      await user.update(userUpdates, { transaction });
+    }
+    if (Object.keys(profileUpdates).length) {
+      await profile.update({ ...profileUpdates, updatedBy: req.user.id }, { transaction });
+    }
+
+    const changes = {
+      ...buildChanges(userBefore, userUpdates),
+      ...buildChanges(profileBefore, profileUpdates),
+    };
+
+    if (Object.keys(changes).length) {
+      await UserEditLog.create({
+        targetUserId: user.id,
+        editedBy:     req.user.id,
+        editedByName: `${req.user.firstName} ${req.user.lastName}`,
+        changes,
+        editedAt:     new Date(),
+      }, { transaction });
+    }
+
+    await transaction.commit();
+
+    await profile.reload();
+    await user.reload();
+
+    return success(res, formatStaff(profile, user));
+  } catch (err) {
+    if (transaction) await transaction.rollback();
+    console.error('Update staff error:', err.message);
+    return error(res, 'Failed to update staff member', 500);
+  }
+};
+
+/**
+ * PATCH /api/staff/:employeeId/status
+ * Changes employmentStatus, keeping User.isActive in step.
+ *
+ * Authorization: Admin only
+ */
+const updateStatus = async (req, res) => {
+  const { employmentStatus } = req.body;
+  const profile = req.staffProfile;
+  const user    = req.staffUser;
+
+  let transaction;
+  try {
+    const before = {
+      employmentStatus: profile.employmentStatus,
+      isActive:         user.isActive,
+    };
+
+    const isActive = LOGIN_ALLOWED_STATUSES.has(employmentStatus);
+
+    transaction = await sequelize.transaction();
+
+    // Both writes share a transaction: if one succeeded and the other did not,
+    // the account state and the HR state would disagree and nothing would
+    // reconcile them.
+    await profile.update({ employmentStatus, updatedBy: req.user.id }, { transaction });
+    await user.update({ isActive }, { transaction });
+
+    await UserEditLog.create({
+      targetUserId: user.id,
+      editedBy:     req.user.id,
+      editedByName: `${req.user.firstName} ${req.user.lastName}`,
+      changes:      buildChanges(before, { employmentStatus, isActive }),
+      editedAt:     new Date(),
+    }, { transaction });
+
+    await transaction.commit();
+
+    await profile.reload();
+    await user.reload();
+
+    return success(res, formatStaff(profile, user));
+  } catch (err) {
+    if (transaction) await transaction.rollback();
+    console.error('Update staff status error:', err.message);
+    return error(res, 'Failed to update employment status', 500);
+  }
+};
+
+/**
+ * DELETE /api/staff/:employeeId
+ * Archives — does not destroy. A departed doctor's name is still attached to
+ * prescriptions, consultation notes and lab results, so the row has to survive.
+ * Login is disabled and they drop out of every list.
+ *
+ * Authorization: Admin only
+ */
+const archive = async (req, res) => {
+  const profile = req.staffProfile;
+  const user    = req.staffUser;
+
+  if (profile.deletedAt) return error(res, 'This staff member is already archived', 400);
+
+  // Without this an admin could archive themselves and immediately lose the
+  // access needed to undo it.
+  if (user.id === req.user.id) {
+    return error(res, 'You cannot archive your own account', 400);
+  }
+
+  let transaction;
+  try {
+    transaction = await sequelize.transaction();
+
+    await profile.update({
+      deletedAt:        new Date(),
+      deletedBy:        req.user.id,
+      employmentStatus: profile.employmentStatus === 'Active' ? 'Resigned' : profile.employmentStatus,
+    }, { transaction });
+
+    await user.update({ isActive: false }, { transaction });
+
+    await UserEditLog.create({
+      targetUserId: user.id,
+      editedBy:     req.user.id,
+      editedByName: `${req.user.firstName} ${req.user.lastName}`,
+      changes:      { archived: { from: false, to: true } },
+      editedAt:     new Date(),
+    }, { transaction });
+
+    await transaction.commit();
+
+    return success(res, { employeeId: profile.employeeId, archived: true });
+  } catch (err) {
+    if (transaction) await transaction.rollback();
+    console.error('Archive staff error:', err.message);
+    return error(res, 'Failed to archive staff member', 500);
+  }
+};
+
+/**
+ * PATCH /api/staff/:employeeId/restore
+ * Undoes an archive. Login stays disabled until an admin reactivates the
+ * account deliberately — restoring the record and restoring access are two
+ * decisions, and conflating them would silently let someone back in.
+ *
+ * Authorization: Admin only
+ */
+const restore = async (req, res) => {
+  const profile = req.staffProfile;
+  const user    = req.staffUser;
+
+  if (!profile.deletedAt) return error(res, 'This staff member is not archived', 400);
+
+  try {
+    await profile.update({
+      deletedAt: null,
+      deletedBy: null,
+      updatedBy: req.user.id,
+    });
+
+    await UserEditLog.create({
+      targetUserId: user.id,
+      editedBy:     req.user.id,
+      editedByName: `${req.user.firstName} ${req.user.lastName}`,
+      changes:      { archived: { from: true, to: false } },
+      editedAt:     new Date(),
+    });
+
+    await profile.reload();
+    return success(res, formatStaff(profile, user));
+  } catch (err) {
+    console.error('Restore staff error:', err.message);
+    return error(res, 'Failed to restore staff member', 500);
+  }
+};
+
+/**
+ * GET /api/staff/expiring-licences
+ * Licences already expired or expiring within LICENCE_WARNING_DAYS.
+ * A clinician practising on a lapsed licence is a real liability, so this is
+ * surfaced rather than left for someone to notice.
+ *
+ * Authorization: Admin only
+ */
+const expiringLicences = async (req, res) => {
+  try {
+    const cutoff = new Date();
+    cutoff.setDate(cutoff.getDate() + LICENCE_WARNING_DAYS);
+
+    const profiles = await StaffProfile.findAll({
+      where: {
+        deletedAt:     null,
+        licenseExpiry: { [Op.ne]: null, [Op.lte]: cutoff },
+      },
+      include: [{ model: User, required: true }],
+      order: [['licenseExpiry', 'ASC']],
+    });
+
+    return success(res, profiles.map((p) => formatStaff(p, p.User)));
+  } catch (err) {
+    console.error('Expiring licences error:', err.message);
+    return error(res, 'Failed to load expiring licences', 500);
+  }
+};
+
+/**
+ * GET /api/staff/:employeeId/activity
+ * Login history and edit history for the Activity tab.
+ *
+ * Authorization: Admin only
+ */
+const activity = async (req, res) => {
+  const limit = Math.min(parseInt(req.query.limit, 10) || 25, 100);
+
+  try {
+    const [logins, edits] = await Promise.all([
+      UserLoginLog.findAll({
+        where: { userId: req.staffUser.id },
+        order: [['loginAt', 'DESC']],
+        limit,
+      }),
+      UserEditLog.findAll({
+        where: { targetUserId: req.staffUser.id },
+        order: [['editedAt', 'DESC']],
+        limit,
+      }),
+    ]);
+
+    return success(res, {
+      logins: logins.map((l) => ({
+        id: l.id, loginAt: l.loginAt, ipAddress: l.ipAddress, role: l.role,
+      })),
+      edits: edits.map((e) => ({
+        id: e.id, editedAt: e.editedAt, editedByName: e.editedByName, changes: e.changes,
+      })),
+    });
+  } catch (err) {
+    console.error('Staff activity error:', err.message);
+    return error(res, 'Failed to load activity', 500);
+  }
+};
+
+module.exports = {
+  list,
+  getOne,
+  update,
+  updateStatus,
+  archive,
+  restore,
+  expiringLicences,
+  activity,
+  // Exported for reuse by userController so both files format staff identically.
+  formatStaff,
+};

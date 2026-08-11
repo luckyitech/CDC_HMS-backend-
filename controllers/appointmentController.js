@@ -12,7 +12,7 @@ const {
 
 const { SLOT_LABELS, SEATS_PER_SLOT, FULL_DAY } = require('../utils/appointmentSlots');
 
-const { Appointment, Patient, User, DoctorProfile, DoctorBlock } = db;
+const { Appointment, Patient, User, StaffProfile, DoctorBlock } = db;
 
 // ====================================
 // HELPER FUNCTIONS
@@ -33,7 +33,7 @@ const formatAppointment = (appointment) => {
     doctorName: a.doctor
       ? `Dr. ${a.doctor.firstName} ${a.doctor.lastName}`
       : null,
-    specialty: a.doctor?.DoctorProfile?.specialty || null,
+    specialty: a.doctor?.StaffProfile?.specialty || null,
     date: a.date,
     timeSlot: a.timeSlot,
     duration: a.duration,
@@ -59,7 +59,7 @@ const appointmentIncludes = [
     attributes: ['firstName', 'lastName', 'email'],
     include: [
       {
-        model: DoctorProfile,
+        model: StaffProfile,
         attributes: ['specialty'],
       },
     ],
@@ -289,7 +289,7 @@ const list = async (req, res) => {
       attributes: ['firstName', 'lastName'],
       include: [
         {
-          model: DoctorProfile,
+          model: StaffProfile,
           attributes: ['specialty'],
         },
       ],

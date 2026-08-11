@@ -7,8 +7,16 @@ const sequelize = require('../config/database');
 const bcrypt = require('bcryptjs');
 const crypto = require('crypto');
 const { sendStaffWelcomeEmail } = require('../utils/emailService');
+const { generateEmployeeId } = require('../utils/generateId');
+const { buildChanges } = require('../utils/auditChanges');
+const { STAFF_ROLES, DEFAULT_POSITION } = require('../constants/staffRoles');
 
-const { User, DoctorProfile, StaffProfile, LabTechProfile, Patient, UserEditLog } = db;
+// StaffProfile is now the single profile table for every cadre — doctor, nurse,
+// lab tech and front-desk staff. DoctorProfile and LabTechProfile are no longer
+// written to or read from; they remain in the codebase for one release as a
+// rollback path and are dropped by a later migration.
+// See STAFF_PROFILE_DESIGN.md.
+const { User, StaffProfile, Patient, UserEditLog } = db;
 
 // ====================================
 // HELPER FUNCTIONS
@@ -44,33 +52,44 @@ const formatUserResponse = (user, profile) => {
     hasAdminAccess: hasPermission(user, PERMISSIONS.ADMIN_ACCESS),
   };
 
-  if (user.role === 'doctor' && profile) {
+  // All staff cadres now share one profile table, so one branch covers them.
+  //
+  // The role-specific aliases below (subSpecialty, medicalSchool,
+  // specialization, certificationNumber) are kept in the RESPONSE even though
+  // the columns behind them are gone. Manage Users, the create forms and the
+  // prescription header all read those key names; renaming them here would
+  // break those screens for no benefit. The mapping lives in this one function
+  // instead of being scattered across the frontend.
+  if (profile && STAFF_ROLES.includes(user.role)) {
     Object.assign(baseData, {
-      specialty:      profile.specialty,
-      subSpecialty:   profile.subSpecialty,
-      department:     profile.department,
-      licenseNumber:  profile.licenseNumber,
-      qualification:  profile.qualification,
-      medicalSchool:  profile.medicalSchool,
-      yearsExperience:profile.yearsExperience,
-      employmentType: profile.employmentType,
-      address:        profile.address,
-      city:           profile.city,
-    });
-  } else if (user.role === 'staff' && profile) {
-    Object.assign(baseData, {
-      position:   profile.position,
-      department: profile.department,
-      shift:      profile.shift,
-    });
-  } else if (user.role === 'lab' && profile) {
-    Object.assign(baseData, {
-      specialization:      profile.specialization,
-      certificationNumber: profile.certificationNumber,
-      qualification:       profile.qualification,
-      institution:         profile.institution,
-      yearsExperience:     profile.yearsExperience,
-      shift:               profile.shift,
+      employeeId:       profile.employeeId,
+      position:         profile.position,
+      department:       profile.department,
+      ward:             profile.ward,
+      shift:            profile.shift,
+      employmentType:   profile.employmentType,
+      employmentStatus: profile.employmentStatus,
+      startDate:        profile.startDate,
+      address:          profile.address,
+      city:             profile.city,
+      dateOfBirth:      profile.dateOfBirth,
+      gender:           profile.gender,
+      idNumber:         profile.idNumber,
+      emergencyContact: profile.emergencyContact,
+
+      licenseNumber:   profile.licenseNumber,
+      specialty:       profile.specialty,
+      qualification:   profile.qualification,
+      institution:     profile.institution,
+      yearsExperience: profile.yearsExperience,
+
+      // Legacy aliases — see comment above
+      subSpecialty:        profile.roleDetails?.subSpecialty ?? null,
+      medicalSchool:       profile.institution,
+      specialization:      profile.specialty,
+      certificationNumber: profile.licenseNumber,
+
+      isArchived: !!profile.deletedAt,
     });
   } else if (user.role === 'patient' && profile) {
     Object.assign(baseData, {
@@ -112,6 +131,84 @@ const formatPatientOnly = (p) => ({
 // ====================================
 
 /**
+ * Shared account-creation path.
+ *
+ * All four cadres are created the same way — a User row plus a StaffProfile row
+ * inside one transaction, then a welcome email. Only the field mapping differs,
+ * so that is the only thing each caller supplies. Previously this logic was
+ * copy-pasted four times, which is how createNurse ended up unable to record a
+ * nursing licence: the fields were only ever added to one copy.
+ *
+ * The transaction matters: a User without a profile cannot be edited through
+ * the profile page and cannot be given an employee ID, so a half-created
+ * account is worse than no account.
+ */
+const createStaffAccount = async (req, res, { role, profileFields = {}, roleDetails = {}, label }) => {
+  const { firstName, lastName, email, phone, password: providedPassword } = req.body;
+
+  let transaction;
+  try {
+    const existingUser = await User.findOne({ where: { email } });
+    if (existingUser) return error(res, 'Email already in use', 400);
+
+    const tempPassword   = providedPassword || generateTempPassword();
+    const hashedPassword = await bcrypt.hash(tempPassword, 10);
+
+    transaction = await sequelize.transaction();
+
+    const user = await User.create({
+      email,
+      password: hashedPassword,
+      role,
+      firstName,
+      lastName,
+      phone,
+      isActive: true,
+      createdBy: req.user.name || 'Unknown',
+    }, { transaction });
+
+    // Generated inside the transaction so a failed create does not consume an
+    // employee number and leave a gap in the sequence.
+    const employeeId = await generateEmployeeId(StaffProfile);
+
+    const profile = await StaffProfile.create({
+      UserId:           user.id,
+      employeeId,
+      position:         profileFields.position || DEFAULT_POSITION[role],
+      employmentStatus: 'Active',
+      roleDetails,
+      createdBy:        req.user.id,
+      ...profileFields,
+    }, { transaction });
+
+    await transaction.commit();
+
+    // Deliberately after the commit and deliberately not awaited: a mail
+    // server outage must not roll back an account that was created correctly.
+    sendStaffWelcomeEmail({
+      to: email,
+      name: `${firstName} ${lastName}`,
+      role,
+      tempPassword,
+    }).catch(() => {});
+
+    return success(res, {
+      user: formatUserResponse(user, profile),
+      message: 'Account created. Login credentials have been sent to the provided email.',
+    }, 201);
+  } catch (err) {
+    if (transaction) await transaction.rollback();
+    console.error(`Create ${label} error:`, err.message);
+    return error(res, `Failed to create ${label} account. Please try again.`, 500);
+  }
+};
+
+// Strips undefined keys so a field the form did not send does not overwrite a
+// column with undefined (which Sequelize would write as NULL).
+const defined = (obj) =>
+  Object.fromEntries(Object.entries(obj).filter(([, v]) => v !== undefined));
+
+/**
  * POST /api/users/doctors
  * Creates a new doctor user with profile
  *
@@ -119,223 +216,79 @@ const formatPatientOnly = (p) => ({
  */
 const createDoctor = async (req, res) => {
   const {
-    firstName,
-    lastName,
-    email,
-    phone,
-    licenseNumber,
-    specialty,
-    subSpecialty,
-    department,
-    qualification,
-    medicalSchool,
-    yearsExperience,
-    employmentType,
-    startDate,
-    address,
-    city,
-    password: providedPassword,
+    licenseNumber, licenseBody, licenseExpiry, specialty, subSpecialty,
+    department, qualification, medicalSchool, institution, yearsExperience,
+    employmentType, startDate, address, city,
+    dateOfBirth, gender, idNumber, emergencyContact,
   } = req.body;
 
-  let transaction;
-  try {
-    // Check if email already exists
-    const existingUser = await User.findOne({ where: { email } });
-    if (existingUser) {
-      return error(res, 'Email already in use', 400);
-    }
-
-    // Use admin-provided password or auto-generate
-    const tempPassword = providedPassword || generateTempPassword();
-    const hashedPassword = await bcrypt.hash(tempPassword, 10);
-
-    // Start database transaction - ensures User and Profile are created together
-    transaction = await sequelize.transaction();
-
-    // Create user
-    const user = await User.create({
-      email,
-      password: hashedPassword,
-      role: 'doctor',
-      firstName,
-      lastName,
-      phone,
-      isActive: true,
-      createdBy: req.user.name || 'Unknown',
-    }, { transaction });
-
-    // Create doctor profile
-    const doctorProfile = await DoctorProfile.create({
-      UserId: user.id,
-      licenseNumber,
-      specialty,
-      subSpecialty,
-      department,
-      qualification,
-      medicalSchool,
-      yearsExperience,
-      employmentType,
-      startDate,
-      address,
-      city,
-    }, { transaction });
-
-    // Commit transaction
-    await transaction.commit();
-
-    // Send welcome email with login credentials
-    sendStaffWelcomeEmail({ to: email, name: `${firstName} ${lastName}`, role: 'doctor', tempPassword }).catch(() => {});
-
-    return success(
-      res,
-      {
-        user: formatUserResponse(user, doctorProfile),
-        message: 'Account created. Login credentials have been sent to the provided email.',
-      },
-      201
-    );
-  } catch (err) {
-    // Rollback transaction on error
-    if (transaction) await transaction.rollback();
-    console.error('Create doctor error:', err.message);
-    return error(res, 'Failed to create doctor account. Please try again.', 500);
-  }
+  return createStaffAccount(req, res, {
+    role:  'doctor',
+    label: 'doctor',
+    profileFields: defined({
+      licenseNumber, licenseBody, licenseExpiry, specialty,
+      department, qualification,
+      // The form still calls it medicalSchool; the column is `institution`
+      // because lab techs and nurses train somewhere that is not a medical
+      // school. Accept either so an older client keeps working.
+      institution: institution ?? medicalSchool,
+      yearsExperience, employmentType, startDate, address, city,
+      dateOfBirth, gender, idNumber, emergencyContact,
+    }),
+    roleDetails: defined({ subSpecialty }),
+  });
 };
 
 /**
  * POST /api/users/staff
- * Creates a new staff user with profile
+ * Creates a new staff user (front desk / admission clerk) with profile
  *
  * Authorization: Admin only
  */
 const createStaff = async (req, res) => {
   const {
-    firstName,
-    lastName,
-    email,
-    phone,
-    position,
-    department,
-    shift,
-    startDate,
-    password: providedPassword,
+    position, department, shift, startDate, employmentType,
+    dateOfBirth, gender, idNumber, address, city, emergencyContact,
   } = req.body;
 
-  let transaction;
-  try {
-    // Check if email already exists
-    const existingUser = await User.findOne({ where: { email } });
-    if (existingUser) {
-      return error(res, 'Email already in use', 400);
-    }
-
-    // Use admin-provided password or auto-generate
-    const tempPassword = providedPassword || generateTempPassword();
-    const hashedPassword = await bcrypt.hash(tempPassword, 10);
-
-    // Start database transaction - ensures User and Profile are created together
-    transaction = await sequelize.transaction();
-
-    // Create user
-    const user = await User.create({
-      email,
-      password: hashedPassword,
-      role: 'staff',
-      firstName,
-      lastName,
-      phone,
-      isActive: true,
-      createdBy: req.user.name || 'Unknown',
-    }, { transaction });
-
-    // Create staff profile
-    const staffProfile = await StaffProfile.create({
-      UserId: user.id,
-      position,
-      department,
-      shift,
-      startDate,
-    }, { transaction });
-
-    // Commit transaction
-    await transaction.commit();
-
-    // Send welcome email with login credentials
-    sendStaffWelcomeEmail({ to: email, name: `${firstName} ${lastName}`, role: 'staff', tempPassword }).catch(() => {});
-
-    return success(
-      res,
-      {
-        user: formatUserResponse(user, staffProfile),
-        message: 'Account created. Login credentials have been sent to the provided email.',
-      },
-      201
-    );
-  } catch (err) {
-    // Rollback transaction on error
-    if (transaction) await transaction.rollback();
-    console.error('Create staff error:', err.message);
-    return error(res, 'Failed to create staff account. Please try again.', 500);
-  }
+  return createStaffAccount(req, res, {
+    role:  'staff',
+    label: 'staff',
+    profileFields: defined({
+      position, department, shift, startDate, employmentType,
+      dateOfBirth, gender, idNumber, address, city, emergencyContact,
+    }),
+  });
 };
 
 /**
  * POST /api/users/nurses  (HMIS V3)
- * Creates a nurse user (+ a StaffProfile row for position/shift). Nurses are the
- * primary inpatient users and also do OPD triage/vitals/injections.
+ * Creates a nurse user. Nurses are the primary inpatient users and also do OPD
+ * triage, vitals and injections.
  *
  * Authorization: Admin only
  */
 const createNurse = async (req, res) => {
   const {
-    firstName, lastName, email, phone,
-    department, shift, startDate,
-    position = 'Nurse',
-    password: providedPassword,
+    position, department, ward, shift, startDate, employmentType,
+    licenseNumber, licenseBody, licenseExpiry, qualification, institution,
+    yearsExperience, nursingCadre, certifications,
+    dateOfBirth, gender, idNumber, address, city, emergencyContact,
   } = req.body;
 
-  let transaction;
-  try {
-    const existingUser = await User.findOne({ where: { email } });
-    if (existingUser) return error(res, 'Email already in use', 400);
-
-    const tempPassword = providedPassword || generateTempPassword();
-    const hashedPassword = await bcrypt.hash(tempPassword, 10);
-
-    transaction = await sequelize.transaction();
-
-    const user = await User.create({
-      email,
-      password: hashedPassword,
-      role: 'nurse',
-      firstName,
-      lastName,
-      phone,
-      isActive: true,
-      createdBy: req.user.name || 'Unknown',
-    }, { transaction });
-
-    const staffProfile = await StaffProfile.create({
-      UserId: user.id,
-      position,
-      department,
+  return createStaffAccount(req, res, {
+    role:  'nurse',
+    label: 'nurse',
+    profileFields: defined({
+      position, department, ward,
       shift: shift || 'Morning',
-      startDate,
-    }, { transaction });
-
-    await transaction.commit();
-
-    sendStaffWelcomeEmail({ to: email, name: `${firstName} ${lastName}`, role: 'nurse', tempPassword }).catch(() => {});
-
-    return success(res, {
-      user: formatUserResponse(user, staffProfile),
-      message: 'Nurse account created. Login credentials have been sent to the provided email.',
-    }, 201);
-  } catch (err) {
-    if (transaction) await transaction.rollback();
-    console.error('Create nurse error:', err.message);
-    return error(res, 'Failed to create nurse account. Please try again.', 500);
-  }
+      startDate, employmentType,
+      licenseNumber, licenseBody, licenseExpiry, qualification, institution,
+      yearsExperience,
+      dateOfBirth, gender, idNumber, address, city, emergencyContact,
+    }),
+    roleDetails: defined({ nursingCadre, certifications }),
+  });
 };
 
 /**
@@ -346,79 +299,28 @@ const createNurse = async (req, res) => {
  */
 const createLabTech = async (req, res) => {
   const {
-    firstName,
-    lastName,
-    email,
-    phone,
-    specialization,
-    certificationNumber,
-    qualification,
-    institution,
-    yearsExperience,
-    shift,
-    startDate,
-    password: providedPassword,
+    specialization, specialty, certificationNumber, licenseNumber,
+    licenseBody, licenseExpiry, qualification, institution, yearsExperience,
+    shift, startDate, department, employmentType, labSection,
+    dateOfBirth, gender, idNumber, address, city, emergencyContact,
   } = req.body;
 
-  let transaction;
-  try {
-    // Check if email already exists
-    const existingUser = await User.findOne({ where: { email } });
-    if (existingUser) {
-      return error(res, 'Email already in use', 400);
-    }
-
-    // Use admin-provided password or auto-generate
-    const tempPassword = providedPassword || generateTempPassword();
-    const hashedPassword = await bcrypt.hash(tempPassword, 10);
-
-    // Start database transaction - ensures User and Profile are created together
-    transaction = await sequelize.transaction();
-
-    // Create user
-    const user = await User.create({
-      email,
-      password: hashedPassword,
-      role: 'lab',
-      firstName,
-      lastName,
-      phone,
-      isActive: true,
-      createdBy: req.user.name || 'Unknown',
-    }, { transaction });
-
-    // Create lab tech profile
-    const labTechProfile = await LabTechProfile.create({
-      UserId: user.id,
-      specialization,
-      certificationNumber,
-      qualification,
-      institution,
-      yearsExperience,
-      shift,
-      startDate,
-    }, { transaction });
-
-    // Commit transaction
-    await transaction.commit();
-
-    // Send welcome email with login credentials
-    sendStaffWelcomeEmail({ to: email, name: `${firstName} ${lastName}`, role: 'lab', tempPassword }).catch(() => {});
-
-    return success(
-      res,
-      {
-        user: formatUserResponse(user, labTechProfile),
-        message: 'Account created. Login credentials have been sent to the provided email.',
-      },
-      201
-    );
-  } catch (err) {
-    // Rollback transaction on error
-    if (transaction) await transaction.rollback();
-    console.error('Create lab tech error:', err.message);
-    return error(res, 'Failed to create lab tech account. Please try again.', 500);
-  }
+  return createStaffAccount(req, res, {
+    role:  'lab',
+    label: 'lab tech',
+    profileFields: defined({
+      // The lab form uses `specialization` / `certificationNumber`; the shared
+      // columns are `specialty` / `licenseNumber`. Both spellings accepted.
+      specialty:     specialty ?? specialization,
+      licenseNumber: licenseNumber ?? certificationNumber,
+      licenseBody, licenseExpiry, qualification, institution, yearsExperience,
+      shift, startDate,
+      department: department || 'Laboratory',
+      employmentType,
+      dateOfBirth, gender, idNumber, address, city, emergencyContact,
+    }),
+    roleDetails: defined({ labSection }),
+  });
 };
 
 /**
@@ -441,11 +343,10 @@ const listUsers = async (req, res) => {
       User.findAll({
         where,
         attributes: ['id', 'firstName', 'lastName', 'email', 'phone', 'role', 'isActive', 'createdAt', 'canManageStock'],
+        // Two joins instead of four — every staff cadre shares StaffProfile now.
         include: [
-          { model: DoctorProfile,  required: false },
-          { model: StaffProfile,   required: false },
-          { model: LabTechProfile, required: false },
-          { model: Patient,        required: false },
+          { model: StaffProfile, required: false },
+          { model: Patient,      required: false },
         ],
         order: [['createdAt', 'DESC']],
       }),
@@ -456,11 +357,7 @@ const listUsers = async (req, res) => {
 
     const formattedUsers = users.map((user) => {
       // Profile is already eager-loaded — no extra queries needed
-      const profile =
-        user.role === 'doctor'  ? user.DoctorProfile  :
-        user.role === 'staff'   ? user.StaffProfile   :
-        user.role === 'lab'     ? user.LabTechProfile  :
-        user.role === 'patient' ? user.Patient         : null;
+      const profile = user.role === 'patient' ? user.Patient : user.StaffProfile;
 
       const formatted = formatUserResponse(user, profile);
 
@@ -493,35 +390,48 @@ const listUsers = async (req, res) => {
  *
  * Authorization: Admin only
  */
-// Fields allowed per role for updateUser
+// Fields accepted per role by updateUser.
+//
+// Every staff cadre shares one list now, because they share one table. The
+// role-specific names the Manage Users modal still sends (medicalSchool,
+// specialization, certificationNumber, subSpecialty) remain accepted and are
+// translated below — the frontend was not changed just because the columns were.
+const STAFF_PROFILE_FIELDS = [
+  'position', 'department', 'ward', 'shift', 'employmentType', 'startDate',
+  'licenseNumber', 'licenseBody', 'licenseExpiry', 'specialty',
+  'qualification', 'institution', 'yearsExperience',
+  'address', 'city', 'dateOfBirth', 'gender', 'idNumber', 'emergencyContact',
+  // Legacy request-field names
+  'medicalSchool', 'specialization', 'certificationNumber', 'subSpecialty',
+];
+
 const ROLE_PROFILE_FIELDS = {
-  doctor:  ['licenseNumber', 'specialty', 'subSpecialty', 'department', 'qualification', 'medicalSchool', 'yearsExperience', 'employmentType', 'address', 'city'],
-  staff:   ['position', 'department', 'shift'],
-  lab:     ['specialization', 'certificationNumber', 'qualification', 'institution', 'yearsExperience', 'shift'],
   patient: ['firstName', 'lastName', 'email', 'phone', 'dateOfBirth', 'gender', 'address', 'diagnosis', 'diagnosisDate', 'hba1c', 'emergencyContact', 'insurance'],
 };
 
+// Request-field name -> StaffProfile column.
+const STAFF_FIELD_ALIASES = {
+  medicalSchool:       'institution',
+  specialization:      'specialty',
+  certificationNumber: 'licenseNumber',
+};
+
+// Fields that live inside the roleDetails JSON rather than in a column.
+const ROLE_DETAIL_FIELDS = new Set(['subSpecialty']);
+
 // Date fields that must be null — not empty string — when cleared, otherwise MySQL rejects them
-const DATE_FIELDS = new Set(['dateOfBirth', 'diagnosisDate']);
+const DATE_FIELDS = new Set(['dateOfBirth', 'diagnosisDate', 'startDate', 'endDate', 'licenseExpiry']);
 
+// Every staff cadre now resolves to the same table; only patients differ.
 const ROLE_PROFILE_MODEL = {
-  doctor:  (userId) => DoctorProfile.findOne({ where: { UserId: userId } }),
-  staff:   (userId) => StaffProfile.findOne({ where: { UserId: userId } }),
-  lab:     (userId) => LabTechProfile.findOne({ where: { UserId: userId } }),
   patient: (userId) => Patient.findOne({ where: { UserId: userId } }),
+  staff:   (userId) => StaffProfile.findOne({ where: { UserId: userId } }),
 };
 
-// Build a changes object: { field: { from, to } } — only fields that actually changed
-const buildChanges = (before, after) => {
-  const changes = {};
-  const serialize = (v) => (v !== null && typeof v === 'object' ? JSON.stringify(v) : String(v ?? ''));
-  Object.keys(after).forEach((field) => {
-    if (serialize(before[field]) !== serialize(after[field])) {
-      changes[field] = { from: before[field] ?? null, to: after[field] };
-    }
-  });
-  return changes;
-};
+const findProfileForRole = (role, userId) =>
+  role === 'patient'
+    ? ROLE_PROFILE_MODEL.patient(userId)
+    : ROLE_PROFILE_MODEL.staff(userId);
 
 const updateUser = async (req, res) => {
   const { id } = req.params;
@@ -577,26 +487,49 @@ const updateUser = async (req, res) => {
 
     if (Object.keys(userUpdates).length > 0) await user.update(userUpdates);
 
-    // ── Role-specific profile fields ─────────────────────────────────────────
+    // ── Profile fields ───────────────────────────────────────────────────────
     let profile = null;
     let profileChanges = {};
-    const profileFields = ROLE_PROFILE_FIELDS[user.role] || [];
+    const isPatient    = user.role === 'patient';
+    const profileFields = isPatient ? ROLE_PROFILE_FIELDS.patient : STAFF_PROFILE_FIELDS;
 
-    if (profileFields.length > 0 && ROLE_PROFILE_MODEL[user.role]) {
-      profile = await ROLE_PROFILE_MODEL[user.role](user.id);
+    if (isPatient || STAFF_ROLES.includes(user.role)) {
+      profile = await findProfileForRole(user.role, user.id);
       if (profile) {
         const profileUpdates = {};
+        const roleDetailUpdates = {};
+
         profileFields.forEach((field) => {
           if (updates[field] === undefined) return;
+
           // Empty string on a date column would cause MySQL "Incorrect datetime value" — coerce to null
-          profileUpdates[field] = DATE_FIELDS.has(field) && updates[field] === '' ? null : updates[field];
+          const value = DATE_FIELDS.has(field) && updates[field] === '' ? null : updates[field];
+
+          if (!isPatient && ROLE_DETAIL_FIELDS.has(field)) {
+            roleDetailUpdates[field] = value;
+            return;
+          }
+
+          const column = (!isPatient && STAFF_FIELD_ALIASES[field]) || field;
+          profileUpdates[column] = value;
         });
 
+        // roleDetails is merged, not replaced — editing a doctor's sub-specialty
+        // must not wipe the other keys stored alongside it.
+        if (Object.keys(roleDetailUpdates).length > 0) {
+          profileUpdates.roleDetails = { ...(profile.roleDetails || {}), ...roleDetailUpdates };
+        }
+
         if (Object.keys(profileUpdates).length > 0) {
+          if (!isPatient) profileUpdates.updatedBy = req.user.id;
+
           const profileBefore = {};
-          profileFields.forEach((f) => { profileBefore[f] = profile[f]; });
+          Object.keys(profileUpdates).forEach((f) => { profileBefore[f] = profile[f]; });
           await profile.update(profileUpdates);
+
           profileChanges = buildChanges(profileBefore, profileUpdates);
+          // updatedBy is bookkeeping, not an edit worth logging.
+          delete profileChanges.updatedBy;
         }
       }
     }
@@ -698,17 +631,7 @@ const getById = async (req, res) => {
       return error(res, 'User not found', 404);
     }
 
-    // Get role-specific profile
-    let profile = null;
-    if (user.role === 'doctor') {
-      profile = await DoctorProfile.findOne({ where: { UserId: user.id } });
-    } else if (user.role === 'staff') {
-      profile = await StaffProfile.findOne({ where: { UserId: user.id } });
-    } else if (user.role === 'lab') {
-      profile = await LabTechProfile.findOne({ where: { UserId: user.id } });
-    } else if (user.role === 'patient') {
-      profile = await Patient.findOne({ where: { UserId: user.id } });
-    }
+    const profile = await findProfileForRole(user.role, user.id);
 
     return success(res, { user: formatUserResponse(user, profile) });
   } catch (err) {
@@ -719,18 +642,23 @@ const getById = async (req, res) => {
 
 /**
  * DELETE /api/users/:id
- * Deletes a user and their associated profile
+ * Archives a staff account. Patients are still hard-deleted here.
  *
  * Authorization: Admin only
  *
- * Note: This is a hard delete. Consider using soft delete (isActive=false) instead.
+ * This used to destroy the User row and its profile. It no longer does for
+ * staff: a departed doctor's name is still attached to prescriptions,
+ * consultation notes, lab results and audit logs, and deleting the row orphans
+ * all of it — the history then shows work done by nobody. Archiving disables
+ * login and hides them from every list while the record survives.
+ *
+ * Restore is available at PATCH /api/staff/:employeeId/restore.
  */
 const deleteUser = async (req, res) => {
   const { id } = req.params;
 
   let transaction;
   try {
-    // Find user
     const user = await User.findByPk(id);
     if (!user) {
       return error(res, 'User not found', 404);
@@ -746,24 +674,51 @@ const deleteUser = async (req, res) => {
       return error(res, 'Cannot delete your own account', 403);
     }
 
-    // Start transaction
     transaction = await sequelize.transaction();
 
-    // Delete role-specific profile first (due to FK constraints)
-    if (user.role === 'doctor') {
-      await DoctorProfile.destroy({ where: { UserId: user.id }, transaction });
-    } else if (user.role === 'staff') {
-      await StaffProfile.destroy({ where: { UserId: user.id }, transaction });
-    } else if (user.role === 'lab') {
-      await LabTechProfile.destroy({ where: { UserId: user.id }, transaction });
-    } else if (user.role === 'patient') {
-      await Patient.destroy({ where: { UserId: user.id }, transaction });
+    if (STAFF_ROLES.includes(user.role)) {
+      const profile = await StaffProfile.findOne({ where: { UserId: user.id }, transaction });
+
+      if (profile) {
+        if (profile.deletedAt) {
+          await transaction.rollback();
+          return error(res, 'This account is already archived', 400);
+        }
+
+        await profile.update({
+          deletedAt:        new Date(),
+          deletedBy:        req.user.id,
+          employmentStatus: profile.employmentStatus === 'Active' ? 'Resigned' : profile.employmentStatus,
+        }, { transaction });
+      }
+
+      await user.update({ isActive: false }, { transaction });
+
+      await UserEditLog.create({
+        targetUserId: user.id,
+        editedBy:     req.user.id,
+        editedByName: `${req.user.firstName} ${req.user.lastName}`,
+        changes:      { archived: { from: false, to: true } },
+        editedAt:     new Date(),
+      }, { transaction });
+
+      await transaction.commit();
+
+      return success(res, {
+        message: 'Account archived. Their name remains on past records.',
+        archivedUser: {
+          id: user.id,
+          name: `${user.firstName} ${user.lastName}`,
+          role: user.role,
+        },
+      });
     }
 
-    // Delete user
+    // Patients keep the previous behaviour — a patient record created in error
+    // has no downstream clinical history to protect.
+    await Patient.destroy({ where: { UserId: user.id }, transaction });
     await user.destroy({ transaction });
 
-    // Commit transaction
     await transaction.commit();
 
     return success(res, {
@@ -775,7 +730,6 @@ const deleteUser = async (req, res) => {
       },
     });
   } catch (err) {
-    // Rollback on error
     if (transaction) await transaction.rollback();
     console.error('Delete user error:', err.message);
     return error(res, 'Failed to delete user. Please try again.', 500);
@@ -791,14 +745,14 @@ const listDoctors = async (_req, res) => {
   const doctors = await User.findAll({
     where: { role: 'doctor', isActive: true },
     attributes: ['id', 'firstName', 'lastName'],
-    include: [{ model: DoctorProfile, attributes: ['specialty'] }],
+    include: [{ model: StaffProfile, attributes: ['specialty'] }],
     order: [['firstName', 'ASC']],
   });
 
   const formatted = doctors.map(d => ({
     id: d.id,
     name: `Dr. ${d.firstName} ${d.lastName}`,
-    specialty: d.DoctorProfile?.specialty || 'General Physician',
+    specialty: d.StaffProfile?.specialty || 'General Physician',
   }));
 
   return success(res, formatted);

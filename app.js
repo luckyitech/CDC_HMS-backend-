@@ -70,6 +70,7 @@ app.use('/api/appointments',       require('./routes/appointments'));
 app.use('/api/public/booking',     require('./routes/publicBooking'));
 app.use('/api/doctor-blocks',      require('./routes/doctorBlocks'));
 app.use('/api/users',              require('./routes/users'));
+app.use('/api/staff',              require('./routes/staff'));
 app.use('/api/documents',          require('./routes/documents'));
 app.use('/api/reports',            require('./routes/reports'));
 app.use('/api/analytics',          require('./routes/analytics'));

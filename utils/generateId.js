@@ -13,6 +13,27 @@ const generateUHID = async (Patient) => {
   return 'CDC' + String(max + 1).padStart(3, '0');
 };
 
+// Employee ID: EMP001, EMP002, ...
+// The staff equivalent of a UHID, and generated the same way — compare the
+// numbers numerically rather than sorting the strings, because 'EMP999' sorts
+// above 'EMP1000'. See the note on generateNumber below for what that bug
+// looked like in production.
+const generateEmployeeId = async (StaffProfile) => {
+  const profiles = await StaffProfile.findAll({
+    where: { employeeId: { [Op.regexp]: '^EMP[0-9]+$' } },
+    attributes: ['employeeId'],
+    raw: true,
+  });
+  if (!profiles.length) return 'EMP001';
+
+  const nums = profiles
+    .map((p) => parseInt(p.employeeId.replace('EMP', ''), 10))
+    .filter((n) => !isNaN(n));
+  if (!nums.length) return 'EMP001';
+
+  return 'EMP' + String(Math.max(...nums) + 1).padStart(3, '0');
+};
+
 // Generic number generator: PREFIX-YYYY-NNN
 // Used for prescriptions (RX), lab tests (LAB), appointments (APT).
 //
@@ -49,4 +70,10 @@ const generateLabTestNumber = async (LabTest) => {
   return generateNumber(LabTest, 'testNumber', 'LAB');
 };
 
-module.exports = { generateUHID, generateNumber, generatePrescriptionNumber, generateLabTestNumber };
+module.exports = {
+  generateUHID,
+  generateEmployeeId,
+  generateNumber,
+  generatePrescriptionNumber,
+  generateLabTestNumber,
+};

@@ -8,16 +8,14 @@ const { PERMISSIONS, hasPermission, effectivePermissions } = require('../constan
 const { getRotationStatus } = require('../utils/passwordRotation');
 const db = require('../models');
 
-const { User, DoctorProfile, StaffProfile, LabTechProfile, Patient } = db;
+const { User, StaffProfile, Patient } = db;
 const { logLogin } = require('../services/activityLogService');
+const { STAFF_ROLES } = require('../constants/staffRoles');
 
-// Maps the three staff-type roles to their profile models.
-// Keeps buildUserResponse DRY — no if/else chain needed.
-const profileModelMap = {
-  doctor: DoctorProfile,
-  staff:  StaffProfile,
-  lab:    LabTechProfile,
-};
+// Every staff cadre shares one profile table now, so this is a membership test
+// rather than a lookup map. Patients resolve to Patient, handled separately in
+// buildUserResponse.
+const hasStaffProfile = (role) => STAFF_ROLES.includes(role);
 
 
 // ------------------------------------
@@ -52,13 +50,16 @@ const buildUserResponse = async (user) => {
   userData.passwordExpiresOn    = rotation.expiresOn;
   userData.passwordPolicyLabel  = rotation.policyLabel;
 
-  const ProfileModel = profileModelMap[user.role];
-
-  if (ProfileModel) {
-    // doctor, staff, or lab — fetch their profile and spread the fields
-    const profile = await ProfileModel.findOne({ where: { UserId: user.id } });
+  if (hasStaffProfile(user.role)) {
+    const profile = await StaffProfile.findOne({ where: { UserId: user.id } });
     if (profile) {
-      const { id, UserId, createdAt, updatedAt, ...fields } = profile.dataValues;
+      // Audit and soft-delete bookkeeping is stripped along with the PKs —
+      // it is internal, and this object is returned to the browser on login.
+      const {
+        id, UserId, createdAt, updatedAt,
+        createdBy, updatedBy, deletedAt, deletedBy,
+        ...fields
+      } = profile.dataValues;
       Object.assign(userData, fields);
     }
   } else if (user.role === 'patient') {
