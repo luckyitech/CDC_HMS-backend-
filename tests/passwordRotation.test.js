@@ -1,34 +1,30 @@
 const { test, describe } = require('node:test');
 const assert = require('node:assert/strict');
 
+const db = require('../models');
 const {
-  currentPeriodStart, nextRotationDate, isPasswordExpired,
-  ROTATING_ROLES, INTERVALS, isValidInterval,
+  expiryCutoff, passwordExpiresAt, shiftByInterval, isPasswordExpired,
+  getRotationConfig, clearRotationCache,
+  ROTATING_ROLES, INTERVALS, DEFAULT_INTERVAL, MINIMUM_PASSWORD_AGE_DAYS, isValidInterval,
 } = require('../utils/passwordRotation');
 
 // =====================================================================
-// Scheduled staff password rotation — the date arithmetic only.
+// Scheduled staff password rotation — the interval arithmetic only.
 //
 // Pure functions, no database: isPasswordExpired answers "is this password
-// older than the current period?" and knows nothing about whether the feature
-// is switched on. The cases that matter are the period boundaries themselves
-// (Sunday night vs Monday morning), the start of a month that does not begin
-// on a Monday, and the roles that are exempt.
+// older than one whole interval?" and knows nothing about whether the feature
+// is switched on. The clock runs per user from when THEY last set a password,
+// so the cases that matter are the boundary itself (one interval to the
+// second), month-length clamping, the never-set case, and the exempt roles.
 // =====================================================================
 
-// 2026-08-03 is a Monday, and also the first Monday of August 2026.
-// Times are clinic-local (+03).
-const at = (iso) => new Date(`${iso}T09:00:00+03:00`);
-const MONDAY    = at('2026-08-03');
-const WEDNESDAY = at('2026-08-05');
-const SUNDAY    = new Date('2026-08-09T22:00:00+03:00');
+const DAY = 86_400_000;
+const at = (iso) => new Date(`${iso}T09:00:00+03:00`);   // clinic-local (+03)
+const daysBefore = (now, n) => new Date(now.getTime() - n * DAY);
 
+const NOW = at('2026-08-10');
 const staffWith = (passwordChangedAt, role = 'doctor') => ({ role, passwordChangedAt });
-
-const isMonday = (iso) => {
-  const [y, m, d] = iso.split('-').map(Number);
-  return new Date(Date.UTC(y, m - 1, d)).getUTCDay() === 1;
-};
+const iso = (d) => d.toISOString().slice(0, 10);
 
 describe('interval definitions', () => {
   test('exactly the three the admin can pick', () => {
@@ -40,159 +36,199 @@ describe('interval definitions', () => {
     assert.equal(isValidInterval('daily'), false);
     assert.equal(isValidInterval(undefined), false);
   });
-});
 
-describe('currentPeriodStart — weekly', () => {
-  test('is today when today is Monday', () => {
-    assert.equal(currentPeriodStart('weekly', MONDAY), '2026-08-03');
-  });
-
-  test('is the Monday just gone on a midweek day', () => {
-    assert.equal(currentPeriodStart('weekly', WEDNESDAY), '2026-08-03');
-  });
-
-  test('Sunday still belongs to the period that opened on Monday', () => {
-    // The bug this guards: treating Sunday as the start of a new period would
-    // expire everyone a day early, every single time.
-    assert.equal(currentPeriodStart('weekly', SUNDAY), '2026-08-03');
+  test('labels read as "set a new password <label>"', () => {
+    assert.equal(INTERVALS.weekly.label, 'every week');
+    assert.equal(INTERVALS.fortnightly.label, 'every two weeks');
+    assert.equal(INTERVALS.monthly.label, 'every month');
   });
 });
 
-describe('currentPeriodStart — fortnightly', () => {
-  test('holds the same start across both weeks of the period', () => {
-    assert.equal(currentPeriodStart('fortnightly', at('2026-08-03')), '2026-08-03');
-    assert.equal(currentPeriodStart('fortnightly', at('2026-08-09')), '2026-08-03');
-    assert.equal(currentPeriodStart('fortnightly', at('2026-08-10')), '2026-08-03', 'week two, same period');
-    assert.equal(currentPeriodStart('fortnightly', at('2026-08-16')), '2026-08-03');
+describe('interval arithmetic', () => {
+  test('weekly and fortnightly are plain day counts', () => {
+    assert.equal(iso(shiftByInterval(at('2026-08-10'), 'weekly', 1)), '2026-08-17');
+    assert.equal(iso(shiftByInterval(at('2026-08-10'), 'fortnightly', 1)), '2026-08-24');
   });
 
-  test('rolls over on the second Monday', () => {
-    assert.equal(currentPeriodStart('fortnightly', at('2026-08-17')), '2026-08-17');
+  test('monthly is a calendar month, not 30 days', () => {
+    assert.equal(iso(shiftByInterval(at('2026-08-10'), 'monthly', 1)), '2026-09-10');
+    assert.equal(iso(shiftByInterval(at('2026-02-10'), 'monthly', 1)), '2026-03-10');
   });
 
-  test('the schedule is anchored to a fixed epoch, not to when it was switched on', () => {
-    // Toggling the feature off and on must not shift which Mondays count, or
-    // the clinic's rotation date would wander every time someone touches it.
-    const starts = ['2026-08-03', '2026-08-17', '2026-08-31', '2026-09-14'];
-    for (const s of starts) assert.equal(currentPeriodStart('fortnightly', at(s)), s);
-  });
-});
-
-describe('currentPeriodStart — monthly', () => {
-  test('is the first Monday of the month', () => {
-    assert.equal(currentPeriodStart('monthly', at('2026-08-03')), '2026-08-03');
-    assert.equal(currentPeriodStart('monthly', at('2026-08-31')), '2026-08-03');
-    assert.equal(currentPeriodStart('monthly', at('2026-09-07')), '2026-09-07');
-  });
-
-  test('days before the first Monday still belong to last month period', () => {
-    // 1 Aug 2026 is a Saturday; the first Monday is the 3rd. Without this the
-    // period would silently restart on the 1st and expire everyone early.
-    assert.equal(currentPeriodStart('monthly', at('2026-08-01')), '2026-07-06');
-    assert.equal(currentPeriodStart('monthly', at('2026-08-02')), '2026-07-06');
-  });
-
-  test('handles a month that begins on a Monday', () => {
-    // 1 June 2026 is a Monday — the period starts on the 1st itself.
-    assert.equal(currentPeriodStart('monthly', at('2026-06-01')), '2026-06-01');
-    assert.equal(currentPeriodStart('monthly', at('2026-06-30')), '2026-06-01');
+  test('month arithmetic clamps instead of overflowing', () => {
+    // The bug this guards: setMonth() alone turns 31 Jan + 1 month into 3 March,
+    // quietly handing a January user three extra days of password life.
+    assert.equal(iso(shiftByInterval(at('2026-01-31'), 'monthly', 1)), '2026-02-28');
+    assert.equal(iso(shiftByInterval(at('2026-03-31'), 'monthly', 1)), '2026-04-30');
+    assert.equal(iso(shiftByInterval(at('2028-01-31'), 'monthly', 1)), '2028-02-29', 'leap year');
   });
 
   test('crosses a year boundary', () => {
-    // 1 Jan 2027 is a Friday, so early January still belongs to December.
-    assert.equal(currentPeriodStart('monthly', at('2027-01-02')), '2026-12-07');
-    assert.equal(currentPeriodStart('monthly', at('2027-01-04')), '2027-01-04');
+    assert.equal(iso(shiftByInterval(at('2026-12-20'), 'monthly', 1)), '2027-01-20');
+    assert.equal(iso(shiftByInterval(at('2026-12-29'), 'weekly', 1)), '2027-01-05');
+  });
+
+  test('the cutoff is exactly one interval behind now', () => {
+    assert.equal(iso(expiryCutoff('weekly', NOW)), '2026-08-03');
+    assert.equal(iso(expiryCutoff('fortnightly', NOW)), '2026-07-27');
+    assert.equal(iso(expiryCutoff('monthly', NOW)), '2026-07-10');
   });
 });
 
-describe('nextRotationDate', () => {
-  test('weekly is a week on', () => {
-    assert.equal(nextRotationDate('weekly', WEDNESDAY), '2026-08-10');
+describe('passwordExpiresAt — the per-user clock', () => {
+  test('runs from when the user set it, not from a shared calendar date', () => {
+    // This is the whole point of the rolling model: two people who changed on
+    // different days get different expiry dates.
+    assert.equal(iso(passwordExpiresAt(staffWith(at('2026-08-08')), 'weekly')), '2026-08-15');
+    assert.equal(iso(passwordExpiresAt(staffWith(at('2026-08-10')), 'weekly')), '2026-08-17');
+    assert.equal(iso(passwordExpiresAt(staffWith(at('2026-08-12')), 'weekly')), '2026-08-19');
   });
 
-  test('fortnightly is a fortnight on', () => {
-    assert.equal(nextRotationDate('fortnightly', WEDNESDAY), '2026-08-17');
+  test('a Saturday change buys a full period, not two days', () => {
+    // The behaviour that was asked for. Under the old fixed-Monday schedule a
+    // password set on Saturday 8 Aug expired on Monday 10 Aug.
+    const saturday = at('2026-08-08');
+    assert.equal(iso(passwordExpiresAt(staffWith(saturday), 'weekly')), '2026-08-15');
+    assert.equal(isPasswordExpired(staffWith(saturday), 'weekly', at('2026-08-10')), false);
   });
 
-  test('monthly is the first Monday of next month', () => {
-    assert.equal(nextRotationDate('monthly', WEDNESDAY), '2026-09-07');
-  });
-
-  test('monthly crosses December into January', () => {
-    assert.equal(nextRotationDate('monthly', at('2026-12-14')), '2027-01-04');
-  });
-
-  test('on a rotation Monday it points at the next one, not today', () => {
-    // Today's rotation has already happened — a password set this morning is
-    // good for the period, so the date shown to the user must be the next one.
-    assert.equal(nextRotationDate('weekly', MONDAY), '2026-08-10');
-    assert.equal(nextRotationDate('fortnightly', MONDAY), '2026-08-17');
-    assert.equal(nextRotationDate('monthly', MONDAY), '2026-09-07');
-  });
-
-  test('always lands on a Monday, and always in the future', () => {
-    for (const interval of Object.keys(INTERVALS)) {
-      for (let d = 1; d <= 60; d += 1) {
-        const day = new Date(Date.UTC(2026, 7, d, 6)).toISOString().slice(0, 10);
-        const next = nextRotationDate(interval, at(day));
-        assert.ok(isMonday(next), `${interval} ${day} → ${next} should be a Monday`);
-        assert.ok(next > currentPeriodStart(interval, at(day)), `${interval} ${day}: next must be ahead`);
-      }
-    }
+  test('null when the user has never set their own password', () => {
+    assert.equal(passwordExpiresAt(staffWith(null), 'weekly'), null);
   });
 });
 
 describe('isPasswordExpired', () => {
-  test('a password never set by the user is expired', () => {
-    // An admin-created account still on its emailed temp password.
-    assert.equal(isPasswordExpired(staffWith(null), 'weekly', WEDNESDAY), true);
+  test('a password never set by the user is due immediately', () => {
+    // An admin-created account still on its emailed temp password, or one reset
+    // by scripts/set-password.js. The admin knows it, so the user does not own it.
+    for (const interval of Object.keys(INTERVALS)) {
+      assert.equal(isPasswordExpired(staffWith(null), interval, NOW), true, interval);
+    }
   });
 
-  test('set before the period opened — expired', () => {
-    assert.equal(isPasswordExpired(staffWith(at('2026-07-31')), 'weekly', WEDNESDAY), true);
-  });
-
-  test('set at 23:59 Sunday — expired on Monday morning', () => {
-    const sundayNight = new Date('2026-08-02T23:59:00+03:00');
-    assert.equal(isPasswordExpired(staffWith(sundayNight), 'weekly', MONDAY), true);
-  });
-
-  test('set at 00:01 Monday — still valid', () => {
-    const mondayEarly = new Date('2026-08-03T00:01:00+03:00');
-    assert.equal(isPasswordExpired(staffWith(mondayEarly), 'weekly', WEDNESDAY), false);
+  test('valid right up to the boundary, expired on it', () => {
+    assert.equal(isPasswordExpired(staffWith(daysBefore(NOW, 6)), 'weekly', NOW), false, 'day 6');
+    assert.equal(isPasswordExpired(staffWith(daysBefore(NOW, 7)), 'weekly', NOW), true, 'day 7');
+    assert.equal(isPasswordExpired(staffWith(daysBefore(NOW, 8)), 'weekly', NOW), true, 'day 8');
   });
 
   test('a longer interval keeps the same password valid for longer', () => {
-    // Set Monday 3 Aug; checked Tuesday 11 Aug, which is a new week but the
-    // same fortnight and the same month.
-    const setOn = at('2026-08-03');
-    const checked = at('2026-08-11');
-    assert.equal(isPasswordExpired(staffWith(setOn), 'weekly', checked), true);
-    assert.equal(isPasswordExpired(staffWith(setOn), 'fortnightly', checked), false);
-    assert.equal(isPasswordExpired(staffWith(setOn), 'monthly', checked), false);
+    const tenDaysOld = staffWith(daysBefore(NOW, 10));
+    assert.equal(isPasswordExpired(tenDaysOld, 'weekly', NOW), true);
+    assert.equal(isPasswordExpired(tenDaysOld, 'fortnightly', NOW), false);
+    assert.equal(isPasswordExpired(tenDaysOld, 'monthly', NOW), false);
   });
 
-  test('set on Saturday — expires the following Monday, two days later', () => {
-    // Intended: the rotation day is fixed, so a late-period change does not buy
-    // a full period. Documented behaviour, not an accident.
-    const saturday = at('2026-08-08');
-    assert.equal(isPasswordExpired(staffWith(saturday), 'weekly', SUNDAY), false, 'still fine on Sunday');
-    assert.equal(isPasswordExpired(staffWith(saturday), 'weekly', at('2026-08-10')), true, 'expired Monday');
-  });
-
-  test('applies to every rotating role, on every interval', () => {
+  test('every rotating role is treated the same', () => {
     for (const role of ROTATING_ROLES) {
-      for (const interval of Object.keys(INTERVALS)) {
-        assert.equal(isPasswordExpired(staffWith(null, role), interval, WEDNESDAY), true, `${role}/${interval}`);
-      }
+      assert.equal(isPasswordExpired(staffWith(null, role), 'weekly', NOW), true, role);
+      assert.equal(isPasswordExpired(staffWith(daysBefore(NOW, 1), role), 'weekly', NOW), false, role);
     }
   });
 
   test('admins and patients are exempt even with no password change on record', () => {
     // The admin holds the on/off switch; locking them out leaves no way back.
     for (const interval of Object.keys(INTERVALS)) {
-      assert.equal(isPasswordExpired(staffWith(null, 'admin'), interval, WEDNESDAY), false);
-      assert.equal(isPasswordExpired(staffWith(null, 'patient'), interval, WEDNESDAY), false);
+      assert.equal(isPasswordExpired(staffWith(null, 'admin'), interval, NOW), false);
+      assert.equal(isPasswordExpired(staffWith(null, 'patient'), interval, NOW), false);
     }
+  });
+});
+
+describe('grace floor', () => {
+  // Today every interval is longer than the floor, so the interval test is what
+  // actually decides and the floor is a backstop. It exists so that shortening
+  // an interval — or adding a shorter one later — cannot expire somebody the
+  // same morning they chose a new password. These lock in the invariant.
+  test('a freshly chosen password is never expired, on any interval', () => {
+    for (const interval of Object.keys(INTERVALS)) {
+      assert.equal(isPasswordExpired(staffWith(NOW), interval, NOW), false, `${interval} @ 0 days`);
+    }
+  });
+
+  test('no self-chosen password expires before the floor, on any interval', () => {
+    for (const interval of Object.keys(INTERVALS)) {
+      for (let hours = 0; hours < MINIMUM_PASSWORD_AGE_DAYS * 24; hours += 1) {
+        const changedAt = new Date(NOW.getTime() - hours * 3_600_000);
+        assert.equal(
+          isPasswordExpired(staffWith(changedAt), interval, NOW), false,
+          `${interval} @ ${hours}h`
+        );
+      }
+    }
+  });
+
+  test('the floor does not rescue a password the user never chose', () => {
+    // Rule 1 beats rule 2: a temp password is due however recently it was issued.
+    assert.equal(isPasswordExpired(staffWith(null), DEFAULT_INTERVAL, NOW), true);
+  });
+});
+
+describe('invariants over a long run', () => {
+  test('changing your password now never leaves you expired', () => {
+    for (const interval of Object.keys(INTERVALS)) {
+      for (let d = 0; d < 400; d += 1) {
+        const now = new Date(Date.UTC(2026, 0, 1 + d, 9));
+        assert.equal(
+          isPasswordExpired(staffWith(now), interval, now), false,
+          `${interval} ${iso(now)}`
+        );
+      }
+    }
+  });
+
+  test('expiry is always in the future of the change, and ordered by interval', () => {
+    for (let d = 0; d < 400; d += 1) {
+      const changedAt = new Date(Date.UTC(2026, 0, 1 + d, 9));
+      const user = staffWith(changedAt);
+      const weekly = passwordExpiresAt(user, 'weekly');
+      const fortnightly = passwordExpiresAt(user, 'fortnightly');
+      const monthly = passwordExpiresAt(user, 'monthly');
+      assert.ok(weekly > changedAt, `weekly ${iso(changedAt)}`);
+      assert.ok(fortnightly > weekly, `fortnightly ${iso(changedAt)}`);
+      assert.ok(monthly > fortnightly, `monthly ${iso(changedAt)}`);
+    }
+  });
+});
+
+describe('ships switched off', () => {
+  // The whole feature is inert until an administrator turns it on. This matters
+  // most at deploy time: pushing this code to a live clinic must change nothing
+  // for anyone until somebody makes that decision deliberately.
+  //
+  // Setting.findAll is stubbed rather than mocked wholesale — no database is
+  // needed, and the assertion is about how the rows are READ, which is the part
+  // that could regress.
+  const withRows = async (rows) => {
+    db.Setting.findAll = typeof rows === 'function' ? rows : async () => rows;
+    clearRotationCache();
+    return getRotationConfig();
+  };
+
+  test('a fresh server with no Setting row is off', async () => {
+    assert.equal((await withRows([])).enabled, false);
+  });
+
+  test('an unreadable settings table fails safe, not open', async () => {
+    // Locking every clinical user out because a lookup blipped would be a far
+    // worse outcome than a password living a few minutes past its expiry.
+    const cfg = await withRows(async () => { throw new Error('db unreachable'); });
+    assert.equal(cfg.enabled, false);
+    assert.equal(cfg.interval, DEFAULT_INTERVAL);
+  });
+
+  test('only the exact string "true" enables it', async () => {
+    for (const value of ['false', 'TRUE', '1', 'yes', '', 'on']) {
+      assert.equal((await withRows([{ key: 'passwordRotationEnabled', value }])).enabled, false, value);
+    }
+    assert.equal((await withRows([{ key: 'passwordRotationEnabled', value: 'true' }])).enabled, true);
+  });
+
+  test('a nonsense interval falls back rather than throwing', async () => {
+    const cfg = await withRows([
+      { key: 'passwordRotationEnabled', value: 'true' },
+      { key: 'passwordRotationInterval', value: 'hourly' },
+    ]);
+    assert.equal(cfg.interval, DEFAULT_INTERVAL);
   });
 });

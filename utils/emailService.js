@@ -101,6 +101,16 @@ const monoBlue = (val) => `<strong style="font-family:monospace;font-size:15px;c
 // Monospace dark — temporary passwords
 const monoDark = (val) => `<strong style="font-family:monospace;font-size:15px;letter-spacing:1px;color:#111827;">${val}</strong>`;
 
+// How a role is named in staff-facing copy. Shared by every email that has to
+// address someone by what they do, so two emails can never call the same person
+// different things.
+const ROLE_LABELS = {
+  doctor: 'Doctor',
+  staff:  'Staff Member',
+  lab:    'Lab Technician',
+  admin:  'Administrator',
+};
+
 // Format a date value for appointment emails
 const fmtDate = (date) => new Date(date).toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
 
@@ -191,7 +201,7 @@ const sendEmail = async (to, subject, html, extraAttachments = []) => {
 // Called when admin creates a new staff member account
 // ============================================================
 const sendStaffWelcomeEmail = async ({ to, name, role, tempPassword }) => {
-  const roleLabel = { doctor: 'Doctor', staff: 'Staff Member', lab: 'Lab Technician', admin: 'Administrator' }[role] || role;
+  const roleLabel = ROLE_LABELS[role] || role;
   const loginPath = { doctor: '/login/doctor', staff: '/login/staff', lab: '/login/lab', admin: '/login/admin' }[role] || '/login';
 
   const body = `
@@ -499,6 +509,65 @@ const sendPatientBarcodeEmail = async ({ to, name, uhid, dob, doctor, pngBuffer 
 };
 
 // ============================================================
+// EMAIL: Password Rotation Policy Notice — Staff / Doctor / Lab
+// Sent to every affected member of staff when an administrator
+// switches scheduled password rotation on, so nobody is surprised
+// by being held on the change-password screen at their next login.
+//
+// Two variants from one template:
+//   mustChangeNow  — already overdue, will be asked at next sign-in
+//   otherwise      — still valid, told the date it lapses
+//
+// Links to the portal root rather than a /login/<role> path: those
+// role paths are not routed in the frontend (only "/" and
+// "/forgot-password" exist), so a direct link would land on nothing.
+// ============================================================
+const sendPasswordRotationNoticeEmail = async ({
+  to, name, role, policyLabel, duration, mustChangeNow, expiresOn,
+}) => {
+  const roleLabel = ROLE_LABELS[role] || role;
+  const intro = mustChangeNow
+    ? `Your current password is already older than this, so you will be asked to set a
+       new one the next time you sign in. Until you do, the rest of the system stays
+       locked — you will be taken straight to the Change Password screen.`
+    : `Your current password still meets the policy. You will be asked to set a new one
+       when it reaches the end of its ${duration}.`;
+
+  const statusRow = mustChangeNow
+    ? credentialRow('Action needed', '<strong style="color:#B45309;">At your next sign-in</strong>')
+    : credentialRow('Your password is valid until', `<strong>${fmtDate(expiresOn)}</strong>`);
+
+  const body = `
+    <h2 style="margin:0 0 8px 0;font-size:20px;color:#111827;">A new password policy is now in effect</h2>
+    <p style="margin:0 0 24px 0;font-size:14px;color:#6B7280;">
+      Hi <strong>${name}</strong>, the clinic has switched on scheduled password rotation for
+      all clinical staff accounts. From now on you will need to set a new password
+      <strong>${policyLabel}</strong>.
+    </p>
+
+    <table width="100%" cellpadding="0" cellspacing="0">
+      ${credentialRow('Your account', roleLabel)}
+      ${credentialRow('How often', `${policyLabel} (${duration})`)}
+      ${statusRow}
+    </table>
+
+    <p style="margin:24px 0 0 0;font-size:14px;color:#6B7280;">${intro}</p>
+
+    <p style="margin:20px 0 0 0;font-size:13px;color:#374151;"><strong>What you need to know:</strong></p>
+    <ul style="margin:8px 0 0 0;padding-left:20px;font-size:13px;color:#6B7280;line-height:1.8;">
+      <li>You choose your own password — the system does not generate one for you</li>
+      <li>The clock runs from when you last changed it, so you always get the full ${duration}</li>
+      <li>You will need your current password to set a new one</li>
+      <li>You can change it at any time from <strong>Change Password</strong> in the sidebar</li>
+    </ul>
+
+    ${primaryButton('Go to CDC HMS', FRONTEND_URL)}
+  `;
+
+  await sendEmail(to, `CDC HMS — You will need a new password ${policyLabel}`, baseTemplate(body));
+};
+
+// ============================================================
 // EXPORTS
 // ============================================================
 module.exports = {
@@ -506,6 +575,7 @@ module.exports = {
   sendPatientWelcomeEmail,
   sendEmailUpdatedEmail,
   sendPasswordResetEmail,
+  sendPasswordRotationNoticeEmail,
   sendAppointmentConfirmationEmail,
   sendDoctorAppointmentNotificationEmail,
   sendAppointmentCancellationEmail,

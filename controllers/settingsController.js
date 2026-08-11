@@ -1,52 +1,45 @@
-const { Op } = require('sequelize');
 const { success, error } = require('../utils/response');
 const {
   ROTATING_ROLES,
-  ROTATION_DAY_NAME,
+  MINIMUM_PASSWORD_AGE_DAYS,
   INTERVALS,
   isValidInterval,
   getRotationConfig,
   setRotationConfig,
-  currentPeriodStart,
-  nextRotationDate,
+  expiredWhere,
+  dueSoonWhere,
 } = require('../utils/passwordRotation');
-const { clinicMidnight } = require('../utils/clinicTime');
+const { notifyStaffOfRotationPolicy } = require('../services/passwordRotationNotifier');
 const db = require('../models');
 
 const { User } = db;
 
 // Shared shape for both the read and the write, so the admin page always gets
-// the recomputed schedule back after changing something.
+// the recomputed numbers back after changing something.
 const buildRotationPayload = async () => {
   const { enabled, interval } = await getRotationConfig();
-  const periodStart = currentPeriodStart(interval);
 
-  // Same predicate as isPasswordExpired, expressed in SQL: never set, or set
-  // before the current period opened.
-  const where = { role: ROTATING_ROLES, isActive: true };
-  const [dueCount, totalStaff] = await Promise.all([
-    User.count({
-      where: {
-        ...where,
-        [Op.or]: [
-          { passwordChangedAt: null },
-          { passwordChangedAt: { [Op.lt]: clinicMidnight(periodStart) } },
-        ],
-      },
-    }),
-    User.count({ where }),
+  const activeStaff = { role: ROTATING_ROLES, isActive: true };
+
+  // Both predicates come from utils/passwordRotation so the counts shown here
+  // can never disagree with what the login gate actually enforces.
+  const [dueCount, dueSoonCount, totalStaff] = await Promise.all([
+    User.count({ where: { ...activeStaff, ...expiredWhere(interval) } }),
+    User.count({ where: { ...activeStaff, ...dueSoonWhere(interval) } }),
+    User.count({ where: activeStaff }),
   ]);
 
   return {
     enabled,
     interval,
     intervalLabel: INTERVALS[interval].label,
-    intervalOptions: Object.values(INTERVALS),
-    rotationDay: ROTATION_DAY_NAME,
+    intervalOptions: Object.values(INTERVALS).map(({ value, label, description, duration }) => ({
+      value, label, description, duration,
+    })),
     affectedRoles: ROTATING_ROLES,
-    periodStart,
-    nextRotation: nextRotationDate(interval),
+    minimumPasswordAgeDays: MINIMUM_PASSWORD_AGE_DAYS,
     dueCount,
+    dueSoonCount,
     totalStaff,
   };
 };
@@ -71,7 +64,7 @@ const getPasswordRotation = async (req, res) => {
  * Body may carry either or both of:
  *   enabled  — boolean
  *   interval — 'weekly' | 'fortnightly' | 'monthly'
- * Authorization: admin
+ * Authorization: a real admin account (see routes/settings.js)
  */
 const updatePasswordRotation = async (req, res) => {
   try {
@@ -91,7 +84,22 @@ const updatePasswordRotation = async (req, res) => {
       );
     }
 
-    await setRotationConfig({ enabled, interval });
+    const wasEnabled = (await getRotationConfig()).enabled;
+    const config = await setRotationConfig({ enabled, interval });
+
+    // Announce the policy the moment it is switched on, so staff hear it from
+    // their inbox rather than from being locked out mid-shift. Only on the
+    // off -> on transition: re-saving an interval while it is already running
+    // would otherwise mail the whole clinic every time the admin nudges a button.
+    //
+    // Not awaited. The admin's response must not wait on one SMTP round trip per
+    // member of staff, and a mail outage must never stop the policy taking
+    // effect — the login gate enforces it, not the email.
+    if (!wasEnabled && config.enabled) {
+      notifyStaffOfRotationPolicy(config.interval)
+        .catch((err) => console.warn('[Settings] rotation notice failed:', err.message));
+    }
+
     return success(res, await buildRotationPayload());
   } catch (err) {
     console.error('updatePasswordRotation error:', err.message);

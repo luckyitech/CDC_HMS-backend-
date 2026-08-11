@@ -1,17 +1,12 @@
 // =====================================================================
 // Scheduled password rotation for clinical staff.
 //
-// The clinic picks how often staff must set a new password — every week,
-// every two weeks, or every month — and the rotation always lands on a
-// MONDAY. That is the whole design: a password is expired when it is older
-// than the START of the current period, not when it is N days old. Everyone
-// rotates together on the same Monday morning, so "change your password" is a
-// shared routine rather than 40 staggered personal anniversaries nobody can
-// predict.
-//
-// The consequence worth knowing: a password set the Saturday before a rotation
-// Monday still expires two days later. That is inherent to a fixed rotation
-// day and is the behaviour that was asked for.
+// The clinic picks how long a password may live — one week, two weeks, or one
+// month — and the clock runs PER USER from the moment they last set their own
+// password. Change it on a Saturday and it is good for a full period from that
+// Saturday. Nobody gets a short cycle because of when in the week they happened
+// to log in, and expiries spread themselves across the calendar instead of
+// landing on the whole clinic at once.
 //
 // Scope: doctor, staff and lab only. Patients are not clinic employees, and
 // admins are exempt on purpose — the admin holds the on/off switch, and an
@@ -19,10 +14,23 @@
 // DB edit. Note this is the ROLE 'admin', not the ADMIN_ACCESS permission: a
 // doctor granted admin access is still clinical staff and still rotates, and
 // the real admin account remains the way back in either way.
+//
+// Two rules sit on top of the plain "older than the interval" test:
+//
+//   1. A password the user never chose — an admin-created account still on its
+//      emailed temp password, or one reset by scripts/set-password.js — is due
+//      immediately. The admin knows that password, so it is not a credential
+//      the user owns. The grace floor below deliberately does NOT cover this.
+//
+//   2. A password the user DID choose is never expired while it is younger than
+//      MINIMUM_PASSWORD_AGE_DAYS. Today every interval is longer than the floor,
+//      so it does not bite; it is the backstop that stops a shortened interval
+//      expiring somebody the same morning they set a new password.
 // =====================================================================
 
+const { Op } = require('sequelize');
 const db = require('../models');
-const { clinicToday, clinicMidnight } = require('./clinicTime');
+const { clinicToday } = require('./clinicTime');
 
 const { Setting } = db;
 
@@ -32,16 +40,31 @@ const INTERVAL_KEY = 'passwordRotationInterval';
 // Roles subject to rotation. Anything not in here is never asked to rotate.
 const ROTATING_ROLES = ['doctor', 'staff', 'lab'];
 
-// The day the period turns over, as JS getUTCDay() numbers it (0 = Sunday).
-const ROTATION_DAY = 1; // Monday
-const ROTATION_DAY_NAME = 'Monday';
+// A self-chosen password younger than this is never expired, whatever the
+// interval says. See rule 2 above.
+const MINIMUM_PASSWORD_AGE_DAYS = 3;
+const DAY_MS = 86_400_000;
 
 // The intervals an admin can choose from. `label` is what staff are shown, so
 // it has to read as a sentence fragment in "set a new password <label>".
+// `months`/`days` is how the period is added to or subtracted from an instant.
+// `label`      reads as a sentence fragment in "set a new password <label>"
+// `description` is the option's own name on the admin picker
+// `duration`    spells the period out, so the picker does not make the admin
+//               work out what "every two weeks" means in days
 const INTERVALS = {
-  weekly:      { value: 'weekly',      label: 'every Monday',                  description: 'Every week' },
-  fortnightly: { value: 'fortnightly', label: 'every second Monday',           description: 'Every two weeks' },
-  monthly:     { value: 'monthly',     label: 'the first Monday of the month', description: 'Every month' },
+  weekly: {
+    value: 'weekly', label: 'every week', description: 'Every week',
+    duration: '7 days', days: 7,
+  },
+  fortnightly: {
+    value: 'fortnightly', label: 'every two weeks', description: 'Every two weeks',
+    duration: '14 days', days: 14,
+  },
+  monthly: {
+    value: 'monthly', label: 'every month', description: 'Every month',
+    duration: '1 calendar month', months: 1,
+  },
 };
 const DEFAULT_INTERVAL = 'weekly';
 
@@ -106,105 +129,90 @@ const setRotationConfig = async ({ enabled, interval } = {}) => {
 };
 
 // ---------------------------------------------------------------------
-// Date helpers, in clinic time
+// Interval arithmetic
 // ---------------------------------------------------------------------
-// Dates here stay in the 'YYYY-MM-DD' string space that clinicTime works in.
-// Weekday is read off a UTC anchor built from the clinic's own Y/M/D, so it is
-// the weekday of the clinic's date and not of whatever instant the server is
-// living in.
-const weekdayOf = (clinicDate) => {
-  const [y, m, d] = String(clinicDate).split('-').map(Number);
-  return new Date(Date.UTC(y, m - 1, d)).getUTCDay();
+// Month arithmetic clamps rather than overflowing: one month after 31 January
+// is 28 February, not 3 March. Plain setMonth() rolls the surplus days into the
+// following month, which would hand a January user three extra days and make
+// "one month" mean different things depending on the date.
+const addMonths = (date, n) => {
+  const d = new Date(date);
+  const day = d.getDate();
+  d.setDate(1);
+  d.setMonth(d.getMonth() + n);
+  const lastDayOfTargetMonth = new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate();
+  d.setDate(Math.min(day, lastDayOfTargetMonth));
+  return d;
 };
 
-const shiftDate = (clinicDate, days) => {
-  const [y, m, d] = String(clinicDate).split('-').map(Number);
-  const anchor = new Date(Date.UTC(y, m - 1, d, 12)); // noon anchor, DST-safe
-  anchor.setUTCDate(anchor.getUTCDate() + days);
-  return anchor.toISOString().slice(0, 10);
+// Shifts an instant by one whole interval. sign = 1 forwards, -1 backwards.
+const shiftByInterval = (date, interval = DEFAULT_INTERVAL, sign = 1) => {
+  const spec = INTERVALS[interval] || INTERVALS[DEFAULT_INTERVAL];
+  if (spec.months) return addMonths(date, sign * spec.months);
+  const d = new Date(date);
+  d.setDate(d.getDate() + sign * spec.days);
+  return d;
 };
 
-// The Monday on or before a given date.
-const mondayOnOrBefore = (clinicDate) =>
-  shiftDate(clinicDate, -((weekdayOf(clinicDate) - ROTATION_DAY + 7) % 7));
+// The instant a password must have been set AFTER to still be valid. Anything
+// set at or before this is older than one whole interval. Expressed as a real
+// Date so the same predicate can be handed to Sequelize as a WHERE clause.
+const expiryCutoff = (interval = DEFAULT_INTERVAL, now = new Date()) =>
+  shiftByInterval(now, interval, -1);
 
-// The first Monday of the month a given date falls in.
-const firstMondayOfMonth = (clinicDate) => {
-  const [y, m] = String(clinicDate).split('-').map(Number);
-  const first = `${String(y).padStart(4, '0')}-${String(m).padStart(2, '0')}-01`;
-  // Forward to Monday: 0 days if the 1st is already a Monday.
-  return shiftDate(first, (ROTATION_DAY - weekdayOf(first) + 7) % 7);
-};
-
-// A known Monday, used to decide which Mondays are fortnight boundaries.
-// 1 Jan 1970 was a Thursday, so the 5th was the first Monday.
-const FORTNIGHT_EPOCH = '1970-01-05';
-
-const daysBetween = (from, to) => {
-  const toUtc = (s) => {
-    const [y, m, d] = s.split('-').map(Number);
-    return Date.UTC(y, m - 1, d);
-  };
-  return Math.round((toUtc(to) - toUtc(from)) / 86_400_000);
-};
-
-// ---------------------------------------------------------------------
-// Period boundaries
-// ---------------------------------------------------------------------
-// The Monday that opened the period currently in force. A password set before
-// this instant is expired.
-const currentPeriodStart = (interval = DEFAULT_INTERVAL, now = new Date()) => {
-  const today = clinicToday(now);
-
-  if (interval === 'monthly') {
-    const thisMonth = firstMondayOfMonth(today);
-    // Early days of a month that does not start on a Monday still belong to
-    // the period that opened last month — e.g. Sat 1 Aug, when the first
-    // Monday is the 3rd. Without this the period would silently restart.
-    return today < thisMonth
-      ? firstMondayOfMonth(shiftDate(`${today.slice(0, 8)}01`, -1))
-      : thisMonth;
-  }
-
-  const monday = mondayOnOrBefore(today);
-  if (interval === 'fortnightly') {
-    // Every other Monday, counted from a fixed epoch so the schedule is stable
-    // and does not shift when the setting is toggled.
-    const weeks = daysBetween(FORTNIGHT_EPOCH, monday) / 7;
-    return weeks % 2 === 0 ? monday : shiftDate(monday, -7);
-  }
-
-  return monday; // weekly
-};
-
-// The Monday the current password lapses on. Always strictly in the future of
-// the current period start — on a rotation Monday it points at the NEXT one,
-// because today's rotation has already happened.
-const nextRotationDate = (interval = DEFAULT_INTERVAL, now = new Date()) => {
-  const start = currentPeriodStart(interval, now);
-
-  if (interval === 'monthly') {
-    // First Monday of the month after the one the period started in.
-    const [y, m] = start.split('-').map(Number);
-    const nextMonth = new Date(Date.UTC(y, m, 1)); // m is 1-based, so this is +1
-    return firstMondayOfMonth(nextMonth.toISOString().slice(0, 10));
-  }
-
-  return shiftDate(start, interval === 'fortnightly' ? 14 : 7);
-};
+// When THIS user's current password lapses. Null when they have never set one
+// themselves — there is no clock to run, they are simply due.
+const passwordExpiresAt = (user, interval = DEFAULT_INTERVAL) =>
+  user.passwordChangedAt ? shiftByInterval(new Date(user.passwordChangedAt), interval, 1) : null;
 
 // ---------------------------------------------------------------------
 // The check
 // ---------------------------------------------------------------------
-// Pure and flag-agnostic: "is this password older than the current period?"
-// Callers decide whether the feature is on. Exported for tests.
+// Pure and flag-agnostic: "is this password older than one interval?" Callers
+// decide whether the feature is on. Exported for tests.
 const isPasswordExpired = (user, interval = DEFAULT_INTERVAL, now = new Date()) => {
   if (!ROTATING_ROLES.includes(user.role)) return false;
-  // Never set by the user themselves — an admin-issued temp password. Expired
-  // by definition: it is a password the user did not choose and the admin knows.
+
+  // Never set by the user themselves — an admin-issued temp password. Due by
+  // definition: it is a password the user did not choose and the admin knows.
+  // The grace floor below is deliberately not applied here.
   if (!user.passwordChangedAt) return true;
-  return new Date(user.passwordChangedAt) < clinicMidnight(currentPeriodStart(interval, now));
+
+  const changedAt = new Date(user.passwordChangedAt);
+
+  // Grace floor: too new to expire, whatever the interval is.
+  if (now - changedAt < MINIMUM_PASSWORD_AGE_DAYS * DAY_MS) return false;
+
+  return changedAt <= expiryCutoff(interval, now);
 };
+
+// The same rule as isPasswordExpired, as a Sequelize where-fragment.
+//
+// Sequelize cannot run a JS predicate inside SQL, so "is this password expired"
+// genuinely has to be expressed twice. Keeping both in this file, adjacent, is
+// the next best thing to not duplicating it: a change to one that is not
+// mirrored in the other is visible in the same screenful rather than hidden in
+// a controller. Both are driven by the same expiryCutoff(), which is the part
+// that actually encodes the interval.
+//
+// The grace floor is deliberately not repeated here: every interval is longer
+// than the floor, so anything the floor would protect already sits on the safe
+// side of the cutoff.
+const expiredWhere = (interval = DEFAULT_INTERVAL, now = new Date()) => ({
+  [Op.or]: [
+    { passwordChangedAt: null },
+    { passwordChangedAt: { [Op.lte]: expiryCutoff(interval, now) } },
+  ],
+});
+
+// Still valid, but lapses within `days`. Complements expiredWhere: the two
+// ranges touch at the cutoff and never overlap.
+const dueSoonWhere = (interval = DEFAULT_INTERVAL, days = 7, now = new Date()) => ({
+  passwordChangedAt: {
+    [Op.gt]: expiryCutoff(interval, now),
+    [Op.lte]: expiryCutoff(interval, new Date(now.getTime() + days * DAY_MS)),
+  },
+});
 
 // The whole answer for one user: is a change required right now, when does the
 // current password lapse, and how is the policy described? Used by login,
@@ -219,12 +227,17 @@ const getRotationStatus = async (user, now = new Date()) => {
     };
   }
 
+  const expiresAt = passwordExpiresAt(user, interval);
+
   return {
     enabled,
     interval,
     applies: true,
     mustChangePassword: isPasswordExpired(user, interval, now),
-    expiresOn: nextRotationDate(interval, now),
+    // Rendered as the clinic's calendar date, so the frontend keeps receiving
+    // the plain 'YYYY-MM-DD' it already knows how to display without shifting
+    // it a day in the browser's timezone.
+    expiresOn: expiresAt ? clinicToday(expiresAt) : null,
     policyLabel: INTERVALS[interval].label,
   };
 };
@@ -233,15 +246,18 @@ module.exports = {
   ENABLED_KEY,
   INTERVAL_KEY,
   ROTATING_ROLES,
-  ROTATION_DAY_NAME,
+  MINIMUM_PASSWORD_AGE_DAYS,
   INTERVALS,
   DEFAULT_INTERVAL,
   isValidInterval,
   getRotationConfig,
   setRotationConfig,
   clearRotationCache,
-  currentPeriodStart,
-  nextRotationDate,
+  shiftByInterval,
+  expiryCutoff,
+  expiredWhere,
+  dueSoonWhere,
+  passwordExpiresAt,
   isPasswordExpired,
   getRotationStatus,
 };
