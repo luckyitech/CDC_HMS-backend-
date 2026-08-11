@@ -209,6 +209,37 @@ exports.directAdmit = async (req, res) => {
 // ====================================
 // READS
 // ====================================
+// Save the admission NOTE to the record ("Save & Print"), per protocol — WITHOUT
+// requesting admission or moving the visit to billing. The doctor can then send
+// for admission (requestAdmission) or cancel and keep working. Idempotent: writes
+// the latest note onto the open queue row.
+exports.saveNote = async (req, res) => {
+  try {
+    const { queueId, admissionReason, admissionType } = req.body;
+    if (!admissionReason || !admissionReason.trim()) return error(res, 'The admission note is empty.', 400);
+
+    const queueItem = await Queue.findByPk(queueId, { include: [Patient] });
+    if (!queueItem) return error(res, 'Queue item not found', 404);
+    if (!queueItem.Patient) return error(res, 'Queue item has no patient', 400);
+
+    const family = await resolvePatient(queueItem.Patient.uhid);
+    if (!family) return error(res, 'Patient not found', 404);
+    if (family.isDeactivated) return error(res, 'Patient record is deactivated (merged)', 400);
+
+    await queueItem.update({
+      admissionReason,
+      admissionType: admissionType || queueItem.admissionType || null,
+      admissionRequestedByDoctorName: req.user.name,
+      admissionRequestedAt: queueItem.admissionRequestedAt || new Date(),
+    });
+
+    return success(res, { queueId: queueItem.id, saved: true });
+  } catch (err) {
+    console.error('Admission.saveNote error:', err);
+    return error(res, 'Failed to save admission note', 500);
+  }
+};
+
 // Advised admissions for one patient — the admission NOTES a doctor wrote from
 // the OPD consultation (stored on the queue row), merge-aware. Feeds the Visit
 // History "Actions" tab. Read-only.
@@ -220,7 +251,9 @@ exports.listAdvised = async (req, res) => {
     if (!family) return error(res, 'Patient not found', 404);
 
     const rows = await Queue.findAll({
-      where: { PatientId: { [Op.in]: family.patientIds }, admissionRequested: true },
+      // Any queue row that carries an admission NOTE — whether the doctor only
+      // documented it ("Save & Print") or went on to send for admission.
+      where: { PatientId: { [Op.in]: family.patientIds }, admissionReason: { [Op.ne]: null } },
       attributes: [
         'id', 'admissionType', 'admissionReason', 'admissionWardPreference',
         'admissionRequestedByDoctorName', 'admissionRequestedAt',

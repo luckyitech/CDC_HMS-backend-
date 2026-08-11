@@ -6,6 +6,8 @@ const admission = require('../controllers/admissionController');
 const READ = ['doctor', 'nurse', 'staff', 'admin', 'inpatient.access'];
 
 // Step 1 — doctor advises (from OPD consultation)
+// Save & Print the admission note (documented per protocol, no billing move).
+router.post('/note', authenticate, authorize('doctor'), admission.saveNote);
 router.post('/request', authenticate, authorize('doctor'), admission.requestAdmission);
 router.post('/cancel-request', authenticate, authorize('doctor', 'staff', 'admin'), admission.cancelAdmissionRequest);
 
