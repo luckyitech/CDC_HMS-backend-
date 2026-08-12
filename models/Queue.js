@@ -170,6 +170,15 @@ const Queue = defineModel('Queue', {
     type: DataTypes.TEXT,
     defaultValue: null,
   },
+  // When the admission NOTE was documented via "Save & Print", as distinct from
+  // admissionRequestedAt (when it was actually sent for admission). Added by
+  // 20260812000001. Mirrors referralNoteSavedAt. Documenting a note must not
+  // look like a request — admissionRequested/admissionRequestedAt stay untouched
+  // until requestAdmission runs.
+  admissionNoteSavedAt: {
+    type: DataTypes.DATE,
+    defaultValue: null,
+  },
   admissionType: {
     type: DataTypes.ENUM('Emergency', 'Elective', 'Transfer', 'Observation'),
     defaultValue: null,
