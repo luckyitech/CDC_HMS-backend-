@@ -40,6 +40,8 @@ module.exports = {
         type: Sequelize.INTEGER, allowNull: true,
         references: { model: 'Users', key: 'id' }, onUpdate: 'CASCADE', onDelete: 'SET NULL',
       });
+      await ensureColumn(queryInterface, 'expiryDate', { type: Sequelize.DATEONLY, allowNull: true });
+      await ensureColumn(queryInterface, 'archiveReason', { type: Sequelize.TEXT, allowNull: true });
 
       const indexes = await queryInterface.showIndex(TABLE);
       if (!indexes.some((i) => i.name === 'unique_staff_document_id')) {
@@ -73,11 +75,13 @@ module.exports = {
         references: { model: 'Users', key: 'id' }, onUpdate: 'CASCADE', onDelete: 'SET NULL',
       },
       uploadedByRole: { type: Sequelize.STRING, allowNull: true },
+      expiryDate:     { type: Sequelize.DATEONLY, allowNull: true },
       notes:          { type: Sequelize.TEXT, allowNull: true },
 
-      isArchived:   { type: Sequelize.BOOLEAN, allowNull: false, defaultValue: false },
-      archivedById: { type: Sequelize.INTEGER, allowNull: true },
-      archivedAt:   { type: Sequelize.DATE, allowNull: true },
+      isArchived:    { type: Sequelize.BOOLEAN, allowNull: false, defaultValue: false },
+      archivedById:  { type: Sequelize.INTEGER, allowNull: true },
+      archivedAt:    { type: Sequelize.DATE, allowNull: true },
+      archiveReason: { type: Sequelize.TEXT, allowNull: true },
 
       createdAt:  { type: Sequelize.DATE, allowNull: false },
       updatedAt:  { type: Sequelize.DATE, allowNull: false },

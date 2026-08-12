@@ -28,19 +28,42 @@ const formatSize = (bytes) => {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 };
 
-const formatDocument = (doc) => ({
-  id:         doc.id,
-  documentId: doc.documentId,
-  category:   doc.category,
-  visibility: doc.visibility,
-  fileName:   doc.fileName,
-  fileSize:   doc.fileSize,
-  fileUrl:    doc.fileUrl,
-  notes:      doc.notes,
-  uploadedBy: doc.uploader ? `${doc.uploader.firstName} ${doc.uploader.lastName}` : null,
-  uploadedByRole: doc.uploadedByRole,
-  uploadedAt: doc.createdAt,
-});
+// Days of notice before an expiry is worth flagging — the same threshold the
+// profile licence pill uses, so the two never disagree.
+const EXPIRY_WARNING_DAYS = 60;
+
+const daysUntil = (date) => {
+  if (!date) return null;
+  return Math.ceil((new Date(date).getTime() - Date.now()) / (1000 * 60 * 60 * 24));
+};
+
+const formatDocument = (doc) => {
+  const expiresInDays = daysUntil(doc.expiryDate);
+
+  return {
+    id:         doc.id,
+    documentId: doc.documentId,
+    category:   doc.category,
+    visibility: doc.visibility,
+    fileName:   doc.fileName,
+    fileSize:   doc.fileSize,
+    fileUrl:    doc.fileUrl,
+    notes:      doc.notes,
+    uploadedBy: doc.uploader ? `${doc.uploader.firstName} ${doc.uploader.lastName}` : null,
+    uploadedByRole: doc.uploadedByRole,
+    uploadedAt: doc.createdAt,
+
+    expiryDate:     doc.expiryDate,
+    expiresInDays,
+    // Derived here so every screen flags the same document at the same moment.
+    expiringSoon:   expiresInDays !== null && expiresInDays <= EXPIRY_WARNING_DAYS,
+    expired:        expiresInDays !== null && expiresInDays < 0,
+
+    isArchived:    doc.isArchived,
+    archivedAt:    doc.archivedAt,
+    archiveReason: doc.archiveReason,
+  };
+};
 
 // Deleting the file from disk when the database row could not be written, so a
 // failed upload does not leave an orphan behind.
@@ -61,7 +84,11 @@ const list = async (req, res) => {
   const isAdmin = req.user.role === 'admin';
 
   try {
-    const where = { UserId: req.staffUser.id, isArchived: false };
+    // Archived documents are hidden by default and only an admin can ask for
+    // them — they are the ones most likely to be sensitive.
+    const wantsArchived = isAdmin && req.query.archived === 'true';
+
+    const where = { UserId: req.staffUser.id, isArchived: wantsArchived };
     if (!isAdmin) where.visibility = 'Staff';
 
     const documents = await StaffDocument.findAll({
@@ -87,13 +114,20 @@ const list = async (req, res) => {
 const upload = async (req, res) => {
   if (!req.file) return error(res, 'No file uploaded', 400);
 
-  const { category, notes } = req.body;
+  const { category, notes, expiryDate } = req.body;
   const isAdmin = req.user.role === 'admin';
 
   try {
     if (category && !CATEGORIES.includes(category)) {
       discard(req.file);
       return error(res, 'Invalid document category', 400);
+    }
+
+    // Validated here rather than left to MySQL, which would reject it with a
+    // driver error after the file had already been written to disk.
+    if (expiryDate && !/^\d{4}-\d{2}-\d{2}$/.test(expiryDate)) {
+      discard(req.file);
+      return error(res, 'Expiry date must be in YYYY-MM-DD format', 400);
     }
 
     // Only an admin chooses visibility. Anything a staff member uploads about
@@ -121,6 +155,7 @@ const upload = async (req, res) => {
       fileUrl:    `/uploads/staff-documents/${req.file.filename}`,
       uploadedById:   req.user.id,
       uploadedByRole: req.user.role,
+      expiryDate: expiryDate || null,
       notes:      notes || null,
     });
 
@@ -140,7 +175,7 @@ const upload = async (req, res) => {
  * Authorization: Admin only
  */
 const update = async (req, res) => {
-  const { category, visibility, notes } = req.body;
+  const { category, visibility, notes, expiryDate } = req.body;
 
   try {
     const document = await StaffDocument.findOne({
@@ -158,6 +193,13 @@ const update = async (req, res) => {
       updates.visibility = visibility;
     }
     if (notes !== undefined) updates.notes = notes;
+    if (expiryDate !== undefined) {
+      if (expiryDate && !/^\d{4}-\d{2}-\d{2}$/.test(expiryDate)) {
+        return error(res, 'Expiry date must be in YYYY-MM-DD format', 400);
+      }
+      // Empty means "no expiry", which has to reach the column as null.
+      updates.expiryDate = expiryDate || null;
+    }
 
     if (!Object.keys(updates).length) return error(res, 'No changes supplied', 400);
 
@@ -179,23 +221,57 @@ const update = async (req, res) => {
  * Authorization: Admin only
  */
 const archive = async (req, res) => {
+  const { reason } = req.body || {};
+
   try {
     const document = await StaffDocument.findOne({
       where: { id: req.params.id, UserId: req.staffUser.id },
     });
     if (!document) return error(res, 'Document not found', 404);
     if (document.isArchived) return error(res, 'This document is already archived', 400);
+    if (reason && reason.length > 5000) return error(res, 'Reason is too long. Maximum 5000 characters.', 400);
 
     await document.update({
-      isArchived:   true,
-      archivedById: req.user.id,
-      archivedAt:   new Date(),
+      isArchived:    true,
+      archivedById:  req.user.id,
+      archivedAt:    new Date(),
+      archiveReason: reason || null,
     });
 
     return success(res, { id: document.id, archived: true });
   } catch (err) {
     console.error('Archive staff document error:', err.message);
     return error(res, 'Failed to archive document', 500);
+  }
+};
+
+/**
+ * PATCH /api/staff/:employeeId/documents/:id/restore
+ * Undoes an archive. Archiving without a way back makes admins reluctant to
+ * tidy up, which leaves the wrong documents on file.
+ *
+ * Authorization: Admin only
+ */
+const restore = async (req, res) => {
+  try {
+    const document = await StaffDocument.findOne({
+      where: { id: req.params.id, UserId: req.staffUser.id },
+    });
+    if (!document) return error(res, 'Document not found', 404);
+    if (!document.isArchived) return error(res, 'This document is not archived', 400);
+
+    await document.update({
+      isArchived:    false,
+      archivedById:  null,
+      archivedAt:    null,
+      archiveReason: null,
+    });
+
+    await document.reload({ include: [{ model: User, as: 'uploader', attributes: ['firstName', 'lastName'] }] });
+    return success(res, formatDocument(document));
+  } catch (err) {
+    console.error('Restore staff document error:', err.message);
+    return error(res, 'Failed to restore document', 500);
   }
 };
 
@@ -234,4 +310,4 @@ const serveFile = async (req, res) => {
   }
 };
 
-module.exports = { list, upload, update, archive, serveFile, CATEGORIES, VISIBILITIES };
+module.exports = { list, upload, update, archive, restore, serveFile, CATEGORIES, VISIBILITIES };

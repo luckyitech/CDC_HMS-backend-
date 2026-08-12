@@ -133,7 +133,11 @@ router.get('/:employeeId/documents/:id/file', authenticate, findStaff, adminOrSe
 router.patch('/:employeeId/documents/:id', authenticate, authorize('admin'), findStaff,
   staffDocumentController.update);
 
+// Archives rather than deletes — the file and the row both survive.
 router.delete('/:employeeId/documents/:id', authenticate, authorize('admin'), findStaff,
   staffDocumentController.archive);
+
+router.patch('/:employeeId/documents/:id/restore', authenticate, authorize('admin'), findStaff,
+  staffDocumentController.restore);
 
 module.exports = router;

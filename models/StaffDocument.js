@@ -50,6 +50,16 @@ const StaffDocument = defineModel('StaffDocument', {
   uploadedByRole: {
     type: DataTypes.STRING,
   },
+
+  // Optional expiry. A practising licence, an indemnity certificate and a BLS
+  // card all lapse on different dates, which a single licenceExpiry on the
+  // profile cannot express — so expiry belongs on the document, not the person.
+  // NULL means "does not expire" (a degree certificate).
+  expiryDate: {
+    type: DataTypes.DATEONLY,
+    defaultValue: null,
+  },
+
   notes: {
     type: DataTypes.TEXT,
     defaultValue: null,
@@ -68,6 +78,12 @@ const StaffDocument = defineModel('StaffDocument', {
   },
   archivedAt: {
     type: DataTypes.DATE,
+    defaultValue: null,
+  },
+  // Why it was archived — the useful half. "Superseded by the 2027 licence"
+  // and "uploaded to the wrong person" need different follow-up.
+  archiveReason: {
+    type: DataTypes.TEXT,
     defaultValue: null,
   },
 }, {
