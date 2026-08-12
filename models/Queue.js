@@ -143,7 +143,7 @@ const Queue = defineModel('Queue', {
   },
   // The full referral NOTE documented during the consultation ("Save & Print"),
   // independent of referralReason (the short reason captured at final submit).
-  // Added by 20260811000002. Feeds the Visit History Actions tab and letterhead
+  // Added by 20260811000006. Feeds the Visit History Actions tab and letterhead
   // print, mirroring admissionReason.
   referralNote: {
     type: DataTypes.TEXT,
@@ -151,6 +151,15 @@ const Queue = defineModel('Queue', {
   },
   referralNoteSavedAt: {
     type: DataTypes.DATE,
+    defaultValue: null,
+  },
+  // Who wrote the note. Separate from referredByDoctorName on purpose: after an
+  // INTERNAL referral that field holds the referring doctor, and the receiving
+  // doctor may write their own note on the same queue row. Writing the note
+  // author into referredByDoctorName would erase who actually made the referral.
+  // Added by 20260812000002.
+  referralNoteByDoctorName: {
+    type: DataTypes.STRING,
     defaultValue: null,
   },
 
@@ -172,7 +181,7 @@ const Queue = defineModel('Queue', {
   },
   // When the admission NOTE was documented via "Save & Print", as distinct from
   // admissionRequestedAt (when it was actually sent for admission). Added by
-  // 20260812000001. Mirrors referralNoteSavedAt. Documenting a note must not
+  // 20260812000002. Mirrors referralNoteSavedAt. Documenting a note must not
   // look like a request — admissionRequested/admissionRequestedAt stay untouched
   // until requestAdmission runs.
   admissionNoteSavedAt: {

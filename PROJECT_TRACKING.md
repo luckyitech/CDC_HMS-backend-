@@ -46,12 +46,46 @@ Fixes applied on top of the branch during review:
 capability seam and the advised-referrals gate. **Not yet run against a real database, and
 not yet exercised in a browser.**
 
+#### ⚠️ Deploy order — migrations MUST run before the new code starts
+
+`models/Queue.js` declares `referralNote`, `referralNoteSavedAt`,
+`referralNoteByDoctorName` and `admissionNoteSavedAt`. `server.js` runs
+`sequelize.sync({ alter: false })`, which does **not** add columns to an existing
+table — it only creates missing tables. So deploying the code without the
+migrations gives a server that boots cleanly ("Models synced", port open) and
+then fails **every** `Queue` query with `Unknown column`: the OPD board, triage,
+refer, admissions, dashboard, analytics, reports and stock dispensing all return
+500 at once, while the boot log looks healthy.
+
+```
+git pull            # or deploy the new build
+npm run migrate     # 20260811000006 + 20260812000002 — additive, guarded, re-runnable
+pm2 restart <app>   # only after the migration succeeds
+```
+
+Both migrations append nullable columns with no `after:` clause, so on MySQL
+8.0.12+ they qualify for `ALGORITHM=INSTANT` — no table rewrite. On 5.7, or 8.0
+with a non-DYNAMIC row format, each takes a brief exclusive metadata lock at
+start and end; run off-peak, and make sure no long-running transaction is open
+against `Queues` or the ALTER will stall behind it and queue every query after it.
+
+Do **not** run `migrate:undo` after go-live without a dump first — `down()` drops
+the columns and the clinical notes attributed by them.
+
 #### Outstanding before this can be marked Completed
 
 - [ ] Run `npm test` against a real database
 - [ ] Clinical walkthrough: admit and refer both routing through the billing modal
 - [ ] Re-apply the branch's User Management tab consolidation to `StaffFile.jsx`
 - [ ] Add `updatedById` to `StaffDocuments` (edits to an HR record are not attributable)
+- [ ] Decide whether Save & Print should version each save. Today the note is a
+      column on the queue row, so a second save overwrites the first and one visit
+      holds at most one admission note and one referral note. A separate table
+      would keep every version — cheaper to decide now than to migrate later.
+- [ ] `inpatient.access` currently also opens `routes/radiology.js` and
+      `routes/inpatientBilling.js`, whose list endpoints are not inpatient-scoped —
+      a granted user sees outpatient radiology orders too. Narrow the scope or the
+      capability.
 
 ---
 

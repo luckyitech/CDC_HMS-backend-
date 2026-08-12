@@ -10,6 +10,10 @@ const {
   Queue, Patient, User, DischargeSummary,
 } = db;
 
+// Mirrors the Queue.admissionType ENUM. Sequelize does not validate ENUM
+// membership, so the write paths check against this before it reaches MySQL.
+const ADMISSION_TYPES = ['Emergency', 'Elective', 'Transfer', 'Observation'];
+
 const admissionIncludes = [
   { model: Patient, attributes: ['uhid', 'firstName', 'lastName', 'isInpatient'] },
   { model: Ward, attributes: ['id', 'name', 'code', 'type'] },
@@ -232,6 +236,13 @@ exports.saveNote = async (req, res) => {
     const { queueId, admissionReason, admissionType } = req.body;
     if (!admissionReason || !admissionReason.trim()) return error(res, 'The admission note is empty.', 400);
 
+    // admissionType lands in an ENUM column. Sequelize does not check ENUM
+    // membership, so an unexpected value reaches MySQL: a 500 under STRICT mode,
+    // or a silently blanked clinical field without it.
+    if (admissionType && !ADMISSION_TYPES.includes(admissionType)) {
+      return error(res, `admissionType must be one of: ${ADMISSION_TYPES.join(', ')}`, 400);
+    }
+
     const queueItem = await Queue.findByPk(queueId, { include: [Patient] });
     if (!queueItem) return error(res, 'Queue item not found', 404);
     if (!queueItem.Patient) return error(res, 'Queue item has no patient', 400);
@@ -299,11 +310,16 @@ exports.listAdvised = async (req, res) => {
       savedAt: q.admissionNoteSavedAt || q.admissionRequestedAt,
       // requestedAt — when it was actually sent for admission.
       requestedAt: q.admissionRequestedAt,
-      // sent — whether it was actually sent for admission, as opposed to only
-      // documented. Reads the admissionRequested flag rather than inferring from
-      // admissionRequestedAt, which older saveNote rows stamped even when nothing
-      // was requested. Mirrors `sent: !!q.referredAt` on the referral side.
-      sent: !!q.admissionRequested,
+      // sent — whether it was ever actually sent for admission, as opposed to
+      // only documented. NOT just admissionRequested: cancelAdmissionRequest
+      // resets that flag to false, so a request that genuinely reached the front
+      // desk and was then cancelled would otherwise read identically to a note
+      // that was never sent at all. admissionCancelledAt and
+      // admissionConvertedToId are the durable evidence that it happened.
+      //
+      // Deliberately not inferred from admissionRequestedAt: saveNote used to
+      // stamp that even when nothing was requested, so historical rows would lie.
+      sent: !!(q.admissionRequested || q.admissionCancelledAt || q.admissionConvertedToId),
       cancelledAt: q.admissionCancelledAt,
       converted: !!q.admissionConvertedToId,
     }));
