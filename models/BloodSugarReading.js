@@ -30,10 +30,20 @@ const BloodSugarReading = defineModel('BloodSugarReading', {
   // Composite unique constraint:
   // one patient can only have one reading per date per time slot.
   // If they try to save the same slot again, the controller uses upsert.
+  //
+  // The column is PatientId — capitalised, because Patient.hasMany() generates
+  // it rather than it being declared above. This read 'patientId' until now.
+  // MySQL treats column identifiers as case-insensitive, so the index built
+  // correctly and nothing was broken; every other model that indexes a foreign
+  // key names it exactly (the Stock models declare theirs explicitly), so this
+  // was the odd one out. Postgres, which folds unquoted identifiers to
+  // lowercase, would not have matched it.
+  //
+  // No database change: the index is matched by name, which is unchanged.
   indexes: [
     {
       unique: true,
-      fields: ['patientId', 'date', 'timeSlot'],
+      fields: ['PatientId', 'date', 'timeSlot'],
       name: 'unique_reading_per_slot',
     },
   ],
