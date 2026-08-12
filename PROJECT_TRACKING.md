@@ -7,6 +7,54 @@ Running record of features, fixes and significant changes. A task is only marked
 
 ## In Progress
 
+### HMS-improvements integration
+
+- **Branch:** `integration/hms-improvements-safe`
+- **Status:** Implemented — **awaiting testing against a real database**
+- **Started:** 2026-08-12
+- **Plan:** `HMS-IMPROVEMENTS-MERGE-PLAN.md`
+- **Description:** Takes the conflict-free scope of `HMS-improvements` onto main: the
+  permission-aware `authorize()` seam and `inpatient.access` capability, the admission and
+  referral "Save & Print" endpoints, the merge-aware Visit History reads, and admissions
+  routing through billing instead of bypassing it.
+
+  The branch's staff-document vertical slice is **deliberately not taken** — main's
+  implementation is more developed (nested under the staff API, `adminOrSelf` access,
+  `visibility` ENUM, an `update` endpoint), and both create a `StaffDocuments` table
+  behind a `showAllTables` guard, so merging both would have created the table with the
+  wrong schema and failed silently at the first upload.
+
+Backend:
+- `middleware/auth.js` — `authorize()` accepts capabilities alongside roles
+- `constants/permissions.js` — `INPATIENT_ACCESS`; applied across 10 inpatient routes
+- `POST /admissions/note`, `POST /queue/:id/refer-note` — document a note without billing
+- `GET /admissions/advised`, `GET /queue/advised-referrals` — uhid-scoped, merge-aware
+- `requestAdmission` merges `selectedCharges` / `selectedProcedures`
+- Migrations `20260811000006` (referral note) and `20260812000001` (admission note saved-at),
+  both `describeTable`-guarded and re-runnable
+
+Fixes applied on top of the branch during review:
+- `advised-referrals` was missing `admin`, so an admin viewing a patient file silently lost
+  referral notes (the frontend `.catch` hid the 403)
+- Neither Save & Print endpoint carried the `status === 'With Doctor'` guard that `refer()`
+  has — any doctor could write a note onto any queue row by id
+- `saveNote` stamped `admissionRequestedAt`, making a merely-documented note look requested;
+  it now writes `admissionNoteSavedAt` and leaves the request fields to `requestAdmission`
+
+**Verification done so far:** all changed files parse; frontend builds and lints clean;
+`tests/authorizeCapabilities.test.js` added (10 assertions, no database) covering the
+capability seam and the advised-referrals gate. **Not yet run against a real database, and
+not yet exercised in a browser.**
+
+#### Outstanding before this can be marked Completed
+
+- [ ] Run `npm test` against a real database
+- [ ] Clinical walkthrough: admit and refer both routing through the billing modal
+- [ ] Re-apply the branch's User Management tab consolidation to `StaffFile.jsx`
+- [ ] Add `updatedById` to `StaffDocuments` (edits to an HR record are not attributable)
+
+---
+
 ### Staff Profiles (doctor / nurse / lab tech / staff)
 
 - **Branch:** `feature/staff-profiles`
