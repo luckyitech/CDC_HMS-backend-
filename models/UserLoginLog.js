@@ -9,8 +9,13 @@ const UserLoginLog = defineModel('UserLoginLog', {
     type: DataTypes.STRING,
     allowNull: false,
   },
+  // Every role whose logins are recorded. Nurse and admin were missing, so
+  // their logins had nowhere to go and the Activity view stayed empty for them.
+  // Keep this in step with TRACKED_ROLES in services/activityLogService.js —
+  // a role in that set but not this enum is silently dropped, because the
+  // insert is fire-and-forget.
   role: {
-    type: DataTypes.ENUM('doctor', 'staff', 'lab'),
+    type: DataTypes.ENUM('doctor', 'staff', 'lab', 'nurse', 'admin'),
     allowNull: false,
   },
   ipAddress: {
