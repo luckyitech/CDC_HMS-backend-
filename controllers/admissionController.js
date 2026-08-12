@@ -1,4 +1,4 @@
-const { Op } = require('sequelize');
+const { Op, fn, col } = require('sequelize');
 const { success, error } = require('../utils/response');
 const { resolvePatient } = require('../utils/patientFamily');
 const { broadcast } = require('../utils/sseManager');
@@ -236,6 +236,13 @@ exports.saveNote = async (req, res) => {
     if (!queueItem) return error(res, 'Queue item not found', 404);
     if (!queueItem.Patient) return error(res, 'Queue item has no patient', 400);
 
+    // Same guard queueController.refer() applies to referrals: a note may only be
+    // written while the doctor is actively consulting. Without it any doctor can
+    // write onto any queue row by id, including an already-billed visit.
+    if (queueItem.status !== 'With Doctor') {
+      return error(res, 'An admission note can only be saved while the patient status is "With Doctor"', 400);
+    }
+
     const family = await resolvePatient(queueItem.Patient.uhid);
     if (!family) return error(res, 'Patient not found', 404);
     if (family.isDeactivated) return error(res, 'Patient record is deactivated (merged)', 400);
@@ -244,7 +251,10 @@ exports.saveNote = async (req, res) => {
       admissionReason,
       admissionType: admissionType || queueItem.admissionType || null,
       admissionRequestedByDoctorName: req.user.name,
-      admissionRequestedAt: queueItem.admissionRequestedAt || new Date(),
+      // Documenting a note is NOT requesting admission. admissionRequestedAt is
+      // left untouched — requestAdmission owns it — and the save is stamped on
+      // its own column, mirroring referralNoteSavedAt on the referral side.
+      admissionNoteSavedAt: new Date(),
     });
 
     return success(res, { queueId: queueItem.id, saved: true });
@@ -270,10 +280,12 @@ exports.listAdvised = async (req, res) => {
       where: { PatientId: { [Op.in]: family.patientIds }, admissionReason: { [Op.ne]: null } },
       attributes: [
         'id', 'admissionType', 'admissionReason', 'admissionWardPreference',
-        'admissionRequestedByDoctorName', 'admissionRequestedAt',
-        'admissionCancelledAt', 'admissionConvertedToId',
+        'admissionRequestedByDoctorName', 'admissionNoteSavedAt', 'admissionRequestedAt',
+        'admissionRequested', 'admissionCancelledAt', 'admissionConvertedToId',
       ],
-      order: [['admissionRequestedAt', 'DESC']],
+      // Newest note first. COALESCE because rows written before
+      // admissionNoteSavedAt existed only carry admissionRequestedAt.
+      order: [[fn('COALESCE', col('admissionNoteSavedAt'), col('admissionRequestedAt')), 'DESC']],
     });
 
     const admissions = rows.map((q) => ({
@@ -281,7 +293,17 @@ exports.listAdvised = async (req, res) => {
       admissionType: q.admissionType,
       note: q.admissionReason,
       doctorName: q.admissionRequestedByDoctorName,
+      // savedAt — when the note was documented. Always present, so the client has
+      // one date to group by (mirrors referrals). Falls back to admissionRequestedAt
+      // for rows written before the column existed.
+      savedAt: q.admissionNoteSavedAt || q.admissionRequestedAt,
+      // requestedAt — when it was actually sent for admission.
       requestedAt: q.admissionRequestedAt,
+      // sent — whether it was actually sent for admission, as opposed to only
+      // documented. Reads the admissionRequested flag rather than inferring from
+      // admissionRequestedAt, which older saveNote rows stamped even when nothing
+      // was requested. Mirrors `sent: !!q.referredAt` on the referral side.
+      sent: !!q.admissionRequested,
       cancelledAt: q.admissionCancelledAt,
       converted: !!q.admissionConvertedToId,
     }));

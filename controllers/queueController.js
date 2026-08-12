@@ -469,6 +469,13 @@ const saveReferralNote = async (req, res) => {
     if (!item) return error(res, 'Queue item not found', 404);
     if (!item.Patient) return error(res, 'Queue item has no patient', 400);
 
+    // Same guard refer() applies: a note may only be written while the doctor is
+    // actively consulting. Without it any doctor can write onto any queue row by
+    // id, including a visit that is already billed or completed.
+    if (item.status !== 'With Doctor') {
+      return error(res, 'A referral note can only be saved while the patient status is "With Doctor"', 400);
+    }
+
     const { resolvePatient } = require('../utils/patientFamily');
     const family = await resolvePatient(item.Patient.uhid);
     if (!family) return error(res, 'Patient not found', 404);
