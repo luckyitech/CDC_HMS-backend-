@@ -91,8 +91,22 @@ selected endpoints, and the permission-aware sidebar. The vocabulary is still ju
   through an authenticated route with a path-traversal guard
 - Leave and Documents tabs, with staff self-service (own leave request, own uploads)
 
-**Still to do:** attendance is deliberately out of scope; performance and payroll remain
-parked.
+**Deferred — staff self-service.** The API is ready: every leave and document route is
+`adminOrSelf`, and a staff member's own leave request is created `Pending` rather than
+approved. What is missing is the way in — the staff file sits under `/admin/...`, which is
+`requiredRole="admin"`, so no other portal can reach it.
+
+Until that is built, **leave is admin-recorded only**: the staff member tells the admin, the
+admin records it, and it is approved on the spot.
+
+To finish it later: a "My Profile" route in each portal rendering `StaffFile` with `isAdmin`
+false, resolving the employee ID from the session rather than the URL — they would see
+Documents and Leave only. Two decisions still open:
+- which portals get the sidebar entry (all four, or only staff and nurse)
+- whether a pending request notifies an admin; nothing does today, and they would have to open
+  the person's file to notice. The `Notification` model already exists.
+
+**Still out of scope:** attendance; performance and payroll remain parked.
 
 - **Next step:** run the five migrations on a copy of production data, confirm the backfill
   produced one `StaffProfile` per staff user with sensible employee IDs, then test the page.
