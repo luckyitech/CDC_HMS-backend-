@@ -3,12 +3,13 @@ const router = express.Router();
 const { body } = require('express-validator');
 const validate = require('../middleware/validate');
 const { authenticate, authorize } = require('../middleware/auth');
+const { CLINICAL_READ_ROLES } = require('../constants/permissions');
 const glp1ReviewController = require('../controllers/glp1ReviewController');
 
 // ====================================
 // UNDERSTANDING AUTHORIZATION
 // ====================================
-// LIST (GET):      DOCTORS and STAFF can read
+// LIST (GET):      Every internal role can read
 // CREATE (POST):   DOCTORS and STAFF — monitoring visits are filled by whoever
 //                  sees the patient, doctor or nurse. The id stamped on the row
 //                  comes from the token and is the Clinician column.
@@ -22,12 +23,12 @@ const glp1ReviewController = require('../controllers/glp1ReviewController');
 // ------------------------------------
 // GET /api/glp1-reviews — List reviews
 // ------------------------------------
-// Authorization: Doctor, Staff
+// Authorization: every internal role
 // Query: ?therapyId= or ?uhid= (one is required), ?includeDeleted=true
 router.get(
   '/',
   authenticate,
-  authorize('doctor', 'staff'),
+  authorize(...CLINICAL_READ_ROLES),
   glp1ReviewController.list
 );
 

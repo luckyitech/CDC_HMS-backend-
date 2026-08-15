@@ -3,6 +3,7 @@ const router  = express.Router();
 const { body } = require('express-validator');
 const validate = require('../middleware/validate');
 const { authenticate, authorize } = require('../middleware/auth');
+const { CLINICAL_READ_ROLES } = require('../constants/permissions');
 const queueController = require('../controllers/queueController');
 
 // ------------------------------------
@@ -36,7 +37,7 @@ router.get('/', authenticate, authorize('staff', 'doctor', 'nurse'), queueContro
 // loses referral notes — an incomplete record with no error shown. Mirrors the
 // admissions counterpart (routes/admissions.js READ).
 // ------------------------------------
-router.get('/advised-referrals', authenticate, authorize('staff', 'doctor', 'nurse', 'admin'), queueController.listAdvisedReferrals);
+router.get('/advised-referrals', authenticate, authorize(...CLINICAL_READ_ROLES), queueController.listAdvisedReferrals);
 
 // ------------------------------------
 // POST /api/queue — add patient to queue

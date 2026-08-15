@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { authenticate, authorize } = require('../middleware/auth');
+const { CLINICAL_READ_ROLES } = require('../constants/permissions');
 const admission = require('../controllers/admissionController');
 
 const READ = ['doctor', 'nurse', 'staff', 'admin', 'inpatient.access'];
@@ -18,7 +19,10 @@ router.post('/direct', authenticate, authorize('staff', 'admin'), admission.dire
 // Reads
 router.get('/', authenticate, authorize(...READ), admission.list);
 // /advised must come before /:id so it isn't captured as an id.
-router.get('/advised', authenticate, authorize(...READ), admission.listAdvised);
+// This one is uhid-scoped and feeds the patient file's Visit History, so it
+// takes the wider patient-record read list (adds 'lab'). The ward-level reads
+// above stay on the inpatient READ list.
+router.get('/advised', authenticate, authorize(...CLINICAL_READ_ROLES, 'inpatient.access'), admission.listAdvised);
 router.get('/:id', authenticate, authorize(...READ), admission.getById);
 
 // Mutations

@@ -3,6 +3,7 @@ const router = express.Router();
 const { body } = require('express-validator');
 const validate = require('../middleware/validate');
 const { authenticate, authorize } = require('../middleware/auth');
+const { CLINICAL_READ_ROLES } = require('../constants/permissions');
 const appointmentController = require('../controllers/appointmentController');
 
 // ====================================
@@ -11,7 +12,7 @@ const appointmentController = require('../controllers/appointmentController');
 // Appointment routes have specific role requirements:
 //
 // BOOK (POST):        Patients (own), Doctors / Staff / Admin (on behalf of patient via uhid)
-// LIST (GET):         PATIENTS (own only), DOCTORS, STAFF can view
+// LIST (GET):         PATIENTS (own only) plus every internal role
 // UPDATE STATUS (PUT): STAFF, DOCTORS, PATIENTS can update status
 // STATS (GET):        Only DOCTORS and ADMINS can view stats
 
@@ -66,13 +67,13 @@ router.post(
 // ------------------------------------
 // GET /api/appointments — List appointments
 // ------------------------------------
-// Authorization: Patient (own), Doctor, Staff
+// Authorization: Patient (own) plus every internal role
 // Patient role: Automatically filtered to their own appointments
 // Optional query parameters: uhid, doctor, date, status
 router.get(
   '/',
   authenticate,
-  authorize('patient', 'doctor', 'staff', 'admin'),
+  authorize(...CLINICAL_READ_ROLES, 'patient'),
   appointmentController.list
 );
 

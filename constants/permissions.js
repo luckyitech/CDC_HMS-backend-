@@ -38,6 +38,18 @@ const ALL_PERMISSIONS = Object.values(PERMISSIONS);
 // sense for someone who is a subject of the records rather than a user of them.
 const PERMISSIBLE_ROLES = ['doctor', 'staff', 'lab', 'nurse'];
 
+// Every internal role. Read access to a patient's record is not restricted by
+// cadre: anyone who works here and is looking at a patient file sees the whole
+// file. Writes are NOT covered by this — each route keeps its own, narrower
+// list for POST/PUT/DELETE, so who may *record* a clinical entry is unchanged.
+//
+// 'patient' is deliberately absent. The patient portal is a different trust
+// boundary: a patient is the subject of these records, not a user of them, and
+// doctors' notes are written on the understanding that patients do not read
+// them. Routes that intentionally expose a patient's own data to them keep
+// 'patient' listed explicitly alongside this spread.
+const CLINICAL_READ_ROLES = ['doctor', 'staff', 'nurse', 'lab', 'admin'];
+
 /**
  * Everything a user can do, as a Set.
  *
@@ -71,6 +83,7 @@ module.exports = {
   PERMISSIONS,
   ALL_PERMISSIONS,
   PERMISSIBLE_ROLES,
+  CLINICAL_READ_ROLES,
   effectivePermissions,
   hasPermission,
   isTrueAdmin,

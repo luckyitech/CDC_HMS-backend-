@@ -3,12 +3,13 @@ const router = express.Router();
 const { body } = require('express-validator');
 const validate = require('../middleware/validate');
 const { authenticate, authorize } = require('../middleware/auth');
+const { CLINICAL_READ_ROLES } = require('../constants/permissions');
 const glp1WeekNoteController = require('../controllers/glp1WeekNoteController');
 
 // ====================================
 // UNDERSTANDING AUTHORIZATION
 // ====================================
-// LIST (GET):      DOCTORS and STAFF
+// LIST (GET):      Every internal role (renders in the patient file)
 // CREATE (POST):   DOCTORS and STAFF — nurses add the injection note, doctors
 //                  the clinical note. Both land in the same table.
 // DELETE (DELETE): DOCTORS and STAFF — soft delete. Ownership is enforced in the
@@ -21,7 +22,7 @@ const glp1WeekNoteController = require('../controllers/glp1WeekNoteController');
 router.get(
   '/',
   authenticate,
-  authorize('doctor', 'staff'),
+  authorize(...CLINICAL_READ_ROLES),
   glp1WeekNoteController.list
 );
 

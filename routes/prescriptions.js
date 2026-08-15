@@ -3,6 +3,7 @@ const router = express.Router();
 const { body } = require('express-validator');
 const validate = require('../middleware/validate');
 const { authenticate, authorize } = require('../middleware/auth');
+const { CLINICAL_READ_ROLES } = require('../constants/permissions');
 const prescriptionController = require('../controllers/prescriptionController');
 
 // ====================================
@@ -11,10 +12,10 @@ const prescriptionController = require('../controllers/prescriptionController');
 // Each route below has specific role requirements. Here's the logic:
 //
 // CREATE (POST):   Only DOCTORS can prescribe medications
-// LIST (GET):      DOCTORS, STAFF, PATIENTS can view prescriptions
+// LIST (GET):      Every internal role, plus PATIENTS
 //                  (Patients can only see their own via filtering)
-// STATS (GET):     DOCTORS and STAFF need dashboard statistics
-// SINGLE (GET):    DOCTORS, STAFF, PATIENTS (same filtering logic)
+// STATS (GET):     Every internal role needs dashboard statistics
+// SINGLE (GET):    Every internal role, plus PATIENTS (same filtering logic)
 // UPDATE (PUT):    Only DOCTORS can update prescription status
 // DELETE (DELETE): Only DOCTORS and ADMINS can delete prescriptions
 
@@ -57,7 +58,7 @@ router.post(
 router.get(
   '/stats',
   authenticate,
-  authorize('doctor', 'staff', 'admin'),
+  authorize(...CLINICAL_READ_ROLES),
   prescriptionController.stats
 );
 
@@ -69,7 +70,7 @@ router.get(
 router.get(
   '/top-drugs',
   authenticate,
-  authorize('doctor', 'staff', 'admin'),
+  authorize(...CLINICAL_READ_ROLES),
   prescriptionController.getTopDrugs
 );
 
@@ -84,7 +85,7 @@ router.get(
 router.get(
   '/',
   authenticate,
-  authorize('doctor', 'staff', 'admin', 'patient'),
+  authorize(...CLINICAL_READ_ROLES, 'patient'),
   prescriptionController.list
 );
 
@@ -99,7 +100,7 @@ router.get(
 router.get(
   '/:id',
   authenticate,
-  authorize('doctor', 'staff', 'admin', 'patient'),
+  authorize(...CLINICAL_READ_ROLES, 'patient'),
   prescriptionController.getOne
 );
 

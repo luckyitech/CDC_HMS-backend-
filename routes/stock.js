@@ -3,7 +3,7 @@ const router = express.Router();
 const { body } = require('express-validator');
 const validate = require('../middleware/validate');
 const { authenticate, authorize, requirePermission } = require('../middleware/auth');
-const { PERMISSIONS } = require('../constants/permissions');
+const { PERMISSIONS, CLINICAL_READ_ROLES } = require('../constants/permissions');
 
 // The stock module's capability. Was a bespoke authorizeStock middleware reading
 // a dedicated boolean column; now one of the generic per-user permissions.
@@ -66,9 +66,11 @@ router.post('/use', authenticate, authorize('doctor', 'staff', 'admin'), [
 // FEFO suggestion for the checkout nudge — clinical/reception roles.
 router.get('/fefo-suggestion', authenticate, authorize('doctor', 'staff', 'admin'), movements.fefoSuggestion);
 
-// A patient's dispensing history — patient-care context, clinical/reception
-// roles (exposes only this patient's own rows), not authorizeStock.
-router.get('/patient-dispenses', authenticate, authorize('doctor', 'staff', 'admin'), movements.patientDispenses);
+// A patient's dispensing history — patient-care context, every internal role
+// (exposes only this patient's own rows), not authorizeStock. It renders inside
+// the patient file's Visit History, so it follows the patient-record read list
+// rather than the stock capability.
+router.get('/patient-dispenses', authenticate, authorize(...CLINICAL_READ_ROLES), movements.patientDispenses);
 
 // Checkout dispense — reception dispenses the supplies scanned on a patient's
 // discharge charge sheet, patient-linked, in one transaction. Clinical/

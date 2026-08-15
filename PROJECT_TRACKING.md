@@ -7,6 +7,62 @@ Running record of features, fixes and significant changes. A task is only marked
 
 ## In Progress
 
+### Patient file read access — every internal role sees the whole record
+
+- **Branch:** `fix/patient-profile-read-access` (both repos)
+- **Status:** Implemented — **awaiting testing**
+- **Started:** 2026-08-15
+- **Reported as:** "staff can't read any doctor's notes on their portal, even the admin —
+  when they look at a patient's file it doesn't display anything."
+
+  Two independent causes, either of which alone produced a blank tab:
+
+  1. **`GET /api/consultation-notes` was `authorize('doctor', 'staff')`** — no `admin`, no
+     `nurse`. Admins and nurses got a 403 that `ConsultationNotesContext` turned into
+     `{ notes: [] }`, so the tab rendered empty instead of erroring.
+  2. **`ConsultationNotesList` filtered its read-only view to `n.date === today`** — so
+     even for staff, who *were* authorised, nothing appeared unless a doctor had written
+     a note that same day. The date was also `toISOString()` (UTC) against a backend
+     `clinicToday()` (EAT), so the two disagreed until 03:00 local.
+
+  Decision taken: reading a patient's record is no longer restricted by cadre. Every
+  internal role (`doctor`, `staff`, `nurse`, `lab`, `admin`) may read every section of a
+  patient file. **Write access is unchanged** — who may create a note, prescribe, or edit
+  a record is exactly as before. `patient` is deliberately excluded: the patient portal is
+  a separate trust boundary and doctors' notes are written on the understanding that
+  patients do not read them.
+
+Backend:
+- `constants/permissions.js` — new `CLINICAL_READ_ROLES` constant, with the reasoning for
+  why `patient` is not in it
+- Applied to the GET routes behind every patient-file tab: consultation notes (list + by
+  id), prescriptions (list, single, stats, top-drugs), documents (list + file), patients
+  (list, vitals, vitals history, blood sugar, equipment ×3, care-link partners, diagnoses,
+  chart metrics), GLP-1 administrations / reviews / week notes, appointments list,
+  `queue/advised-referrals`, `admissions/advised`, `stock/patient-dispenses`
+- `admissions/advised` and `queue/advised-referrals` are uhid-scoped and feed the patient
+  file, so they take the wider list; the ward-level admission reads keep the narrower
+  inpatient `READ` list
+
+Frontend:
+- `ConsultationNotesList.jsx` — read-only view renders the full returned history (newest
+  first, with assessment and plan) instead of only today's note; distinct loading, failed
+  and genuinely-empty states so a permission error can never again look like "no notes";
+  editor prefill date switched from UTC to local
+- `PatientFile.jsx` — one shared `PATIENT_FILE_TABS` list for all portals. Doctor gains
+  Doctor's Notes and Prescriptions; staff and admin gain Visit History. The doctor portal's
+  `glycemic-charts` tab (which embedded the whole GlycemicCharts *page*, header and patient
+  picker included) now uses `GlycemicChartPanel` like the other portals
+- Prescriptions fetch no longer skips the doctor portal, which would have left its new tab
+  empty
+
+- **Next step:** log in as staff, nurse and admin, open a patient with historical notes,
+  and confirm every tab populates. Then mark Completed with the date.
+- **Not done:** the lab portal has no `patient-profile/:uhid` route at all, so lab users
+  still cannot reach a patient file from their UI even though the API now allows the read.
+  Adding one needs a read-only portal config (the staff config it would fall through to
+  has `canEditPatient: true`). Needs a decision.
+
 ### HMS-improvements integration
 
 - **Branch:** `integration/hms-improvements-safe`
