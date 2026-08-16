@@ -31,6 +31,12 @@ router.get('/', authenticate, authorize('staff', 'doctor', 'nurse'), queueContro
 router.get('/advised-referrals', authenticate, authorize('staff', 'doctor', 'nurse'), queueController.listAdvisedReferrals);
 
 // ------------------------------------
+// GET /api/queue/patient/:uhid — a patient's visit workflow history (check-in
+// and milestone timestamps). MUST be before /:id so "patient" isn't read as an id.
+// ------------------------------------
+router.get('/patient/:uhid', authenticate, authorize('staff', 'doctor', 'nurse', 'admin'), queueController.patientHistory);
+
+// ------------------------------------
 // POST /api/queue — add patient to queue
 // ------------------------------------
 router.post('/', authenticate, authorize('staff'), [

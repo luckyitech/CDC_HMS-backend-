@@ -92,6 +92,7 @@ const formatItem = (item, position) => {
     addedBy:               q.addedBy               || null,
     triagedBy:             q.triagedBy             || null,
     dischargedBy:          q.dischargedBy          || null,
+    dischargedAt:          q.dischargedAt          || null,
     removedBy:             q.removedBy             || null,
     removalReason:         q.removalReason         || null,
     // Referral audit trail — null on non-referred entries
@@ -531,4 +532,51 @@ const listAdvisedReferrals = async (req, res) => {
   }
 };
 
-module.exports = { add, list, update, remove, stats, callNext, refer, saveReferralNote, listAdvisedReferrals };
+// ------------------------------------
+// GET /api/queue/patient/:uhid — the patient's visit workflow history: the
+// queue-milestone timestamps (check-in, triage, doctor, completion) for every
+// visit. Merge-aware. Feeds the Visit Timeline in Visit History.
+// ------------------------------------
+const patientHistory = async (req, res) => {
+  try {
+    const { uhid } = req.params;
+    if (!uhid) return error(res, 'uhid is required', 400);
+
+    const { resolvePatient } = require('../utils/patientFamily');
+    const family = await resolvePatient(uhid);
+    if (!family) return error(res, 'Patient not found', 404);
+
+    const rows = await Queue.findAll({
+      where: { PatientId: { [Op.in]: family.patientIds } },
+      attributes: [
+        'id', 'status', 'createdAt',
+        'triageStartTime', 'triageEndTime',
+        'consultationStartTime', 'consultationEndTime',
+        'consultationSessions', 'referredAt', 'dischargedAt', 'dischargedBy',
+      ],
+      order: [['createdAt', 'ASC']],
+    });
+
+    const visits = rows.map((q) => ({
+      id:                    q.id,
+      status:                q.status,
+      checkedInAt:           q.createdAt,
+      triageStartTime:       q.triageStartTime,
+      triageEndTime:         q.triageEndTime,
+      consultationStartTime: q.consultationStartTime,
+      consultationEndTime:   q.consultationEndTime,
+      // [{ doctorId, doctorName, startTime, endTime }] — one per doctor seen.
+      doctorSessions:        Array.isArray(q.consultationSessions) ? q.consultationSessions : [],
+      referredAt:            q.referredAt,
+      dischargedAt:          q.dischargedAt,
+      dischargedBy:          q.dischargedBy,
+    }));
+
+    return success(res, { visits });
+  } catch (err) {
+    console.error('Queue.patientHistory error:', err);
+    return error(res, 'Failed to load visit workflow history', 500);
+  }
+};
+
+module.exports = { add, list, update, remove, stats, callNext, refer, saveReferralNote, listAdvisedReferrals, patientHistory };

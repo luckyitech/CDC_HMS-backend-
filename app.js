@@ -60,6 +60,7 @@ app.use('/api/treatment-plans',    require('./routes/treatmentPlans'));
 app.use('/api/physical-exams',     require('./routes/physicalExams'));
 app.use('/api/assessments',        require('./routes/assessments'));
 app.use('/api/consultation-notes', require('./routes/consultationNotes'));
+app.use('/api/nursing-notes',      require('./routes/nursingNotes'));
 app.use('/api/glp1-medications',   require('./routes/glp1Medications'));
 app.use('/api/glp1-therapies',     require('./routes/glp1Therapies'));
 app.use('/api/glp1-reviews',       require('./routes/glp1Reviews'));
