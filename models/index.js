@@ -23,6 +23,7 @@ const TreatmentPlan       = require('./TreatmentPlan');
 const PhysicalExamination = require('./PhysicalExamination');
 const InitialAssessment   = require('./InitialAssessment');
 const ConsultationNote    = require('./ConsultationNote');
+const NursingNote         = require('./NursingNote');
 const MedicalDocument     = require('./MedicalDocument');
 const Appointment         = require('./Appointment');
 const MedicalEquipment    = require('./MedicalEquipment');
@@ -143,6 +144,10 @@ InitialAssessment.belongsTo(User, { as: 'doctor', foreignKey: 'doctorId' });
 Patient.hasMany(ConsultationNote);
 ConsultationNote.belongsTo(Patient);
 ConsultationNote.belongsTo(User, { as: 'doctor', foreignKey: 'doctorId' });
+
+Patient.hasMany(NursingNote);
+NursingNote.belongsTo(Patient);
+NursingNote.belongsTo(User, { as: 'author', foreignKey: 'authorId' });
 
 Patient.hasMany(MedicalDocument);
 MedicalDocument.belongsTo(Patient);
@@ -385,6 +390,7 @@ const db = {
   PhysicalExamination,
   InitialAssessment,
   ConsultationNote,
+  NursingNote,
   MedicalDocument,
   Appointment,
   MedicalEquipment,
