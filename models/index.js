@@ -67,6 +67,9 @@ const InpatientCharge          = require('./InpatientCharge');
 const RadiologyOrder           = require('./RadiologyOrder');
 const FluidBalanceEntry        = require('./FluidBalanceEntry');
 
+// --- HMIS V4 ultrasound (DICOM bridge ingest) ---
+const UltrasoundImage          = require('./UltrasoundImage');
+
 // =============================================
 // ASSOCIATIONS
 // =============================================
@@ -371,6 +374,9 @@ Patient.hasMany(RadiologyOrder);     RadiologyOrder.belongsTo(Patient);
 RadiologyOrder.belongsTo(User, { as: 'orderedByUser', foreignKey: 'orderedById' });
 RadiologyOrder.belongsTo(User, { as: 'reportedByUser', foreignKey: 'reportedById' });
 
+// --- HMIS V4 ultrasound images (machine-ingested; PatientId nullable ⇒ Unassigned) ---
+Patient.hasMany(UltrasoundImage);    UltrasoundImage.belongsTo(Patient);
+
 Admission.hasMany(FluidBalanceEntry);   FluidBalanceEntry.belongsTo(Admission);
 Patient.hasMany(FluidBalanceEntry);     FluidBalanceEntry.belongsTo(Patient);
 FluidBalanceEntry.belongsTo(User, { as: 'recordedByUser', foreignKey: 'recordedById' });
@@ -437,6 +443,8 @@ const db = {
   InpatientCharge,
   RadiologyOrder,
   FluidBalanceEntry,
+  // --- HMIS V4 ultrasound ---
+  UltrasoundImage,
 };
 
 module.exports = db;

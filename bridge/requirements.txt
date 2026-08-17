@@ -1,0 +1,9 @@
+pydicom>=3.0
+pynetdicom>=2.1
+numpy>=1.26
+pillow>=10.0
+pylibjpeg>=2.0
+pylibjpeg-libjpeg>=2.0
+pylibjpeg-openjpeg>=2.0
+requests>=2.31
+python-dotenv>=1.0

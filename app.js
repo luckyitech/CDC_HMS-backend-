@@ -14,6 +14,7 @@ app.set('trust proxy', 1);
 app.use(cors({
   origin: [
     'http://localhost:5173', 'http://localhost:5174',
+    'http://localhost:5175', // HMIS V4 local dev (run-V4-frontend.sh)
     // Local Thyroid site preview (python http.server, port 8080+). Local testing only.
     'http://localhost:8080', 'http://localhost:8081', 'http://localhost:8082',
     'https://cdiabetescentre.com', 'https://www.cdiabetescentre.com',
@@ -94,6 +95,9 @@ app.use('/api/discharge-summaries',      require('./routes/dischargeSummaries'))
 app.use('/api/radiology',                require('./routes/radiology'));
 app.use('/api/inpatient/fluid-balance',  require('./routes/fluidBalance'));
 app.use('/api/inpatient/billing',        require('./routes/inpatientBilling'));
+
+// --- HMIS V4 ultrasound (HS70A DICOM bridge ingest + gallery) ---
+app.use('/api/ultrasound',               require('./routes/ultrasound'));
 
 // Global error handler — must be last
 app.use(errorHandler);
