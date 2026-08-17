@@ -3,13 +3,13 @@ const router = express.Router();
 const { body } = require('express-validator');
 const validate = require('../middleware/validate');
 const { authenticate, authorize } = require('../middleware/auth');
-const { RECORD_READERS } = require('../constants/roles');
+const { CLINICAL_READ_ROLES } = require('../constants/permissions');
 const glp1AdministrationController = require('../controllers/glp1AdministrationController');
 
 // ====================================
 // UNDERSTANDING AUTHORIZATION
 // ====================================
-// LIST (GET):      DOCTORS and STAFF
+// LIST (GET):      Every internal role (renders in the patient file)
 // RECORD (POST):   DOCTORS and STAFF — nurses give most weekly injections, so
 //                  staff can record them. Staff still cannot start or stop a
 //                  course; that stays a prescribing decision.
@@ -22,7 +22,7 @@ const glp1AdministrationController = require('../controllers/glp1AdministrationC
 router.get(
   '/',
   authenticate,
-  authorize(...RECORD_READERS),
+  authorize(...CLINICAL_READ_ROLES),
   glp1AdministrationController.list
 );
 

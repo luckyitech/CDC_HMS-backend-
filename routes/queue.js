@@ -3,6 +3,7 @@ const router  = express.Router();
 const { body } = require('express-validator');
 const validate = require('../middleware/validate');
 const { authenticate, authorize } = require('../middleware/auth');
+const { CLINICAL_READ_ROLES } = require('../constants/permissions');
 const queueController = require('../controllers/queueController');
 
 // ------------------------------------
@@ -27,8 +28,16 @@ router.get('/', authenticate, authorize('staff', 'doctor', 'nurse'), queueContro
 // ------------------------------------
 // GET /api/queue/advised-referrals — referral notes for one patient (Visit
 // History Actions). MUST be before /:id so "advised-referrals" isn't read as an id.
+//
+// 'admin' is included deliberately, unlike the queue-management routes above:
+// this is a PATIENT-RECORD read, not a queue operation. It feeds
+// VisitHistoryPanel, which the admin portal renders at
+// /admin/patient-profile/:uhid. Without admin here the read 403s and the
+// frontend's .catch swallows it, so an admin sees admission notes but silently
+// loses referral notes — an incomplete record with no error shown. Mirrors the
+// admissions counterpart (routes/admissions.js READ).
 // ------------------------------------
-router.get('/advised-referrals', authenticate, authorize('staff', 'doctor', 'nurse'), queueController.listAdvisedReferrals);
+router.get('/advised-referrals', authenticate, authorize(...CLINICAL_READ_ROLES), queueController.listAdvisedReferrals);
 
 // ------------------------------------
 // GET /api/queue/patient/:uhid — a patient's visit workflow history (check-in

@@ -3,17 +3,18 @@ const router = express.Router();
 const { body } = require('express-validator');
 const validate = require('../middleware/validate');
 const { authenticate, authorize } = require('../middleware/auth');
-const { RECORD_READERS } = require('../constants/roles');
 const physicalExamController = require('../controllers/physicalExamController');
 
 // ====================================
 // UNDERSTANDING AUTHORIZATION
 // ====================================
-// Physical Examination routes are doctor-only:
+// Physical Examination routes are doctor/admin only — reverted back to this
+// after briefly widening reads to every internal role; staff should not see
+// a patient's exam findings:
 //
 // CREATE (POST):     Only DOCTORS can create physical exams
-// LIST (GET):        Only DOCTORS can view physical exams
-// SINGLE (GET):      Only DOCTORS can view a single exam
+// LIST (GET):        DOCTORS and ADMINS can view physical exams
+// SINGLE (GET):      DOCTORS and ADMINS can view a single exam
 // UPDATE (PUT):      Only DOCTORS can update exams
 // DELETE (DELETE):   Only DOCTORS and ADMINS can delete exams
 
@@ -52,25 +53,25 @@ router.post(
 // ------------------------------------
 // GET /api/physical-exams — List physical examinations
 // ------------------------------------
-// Authorization: every Patient-File role (doctor, nurse, staff, admin)
+// Authorization: Doctor, Admin
 // REQUIRED query parameter: uhid (Patient UHID)
 // OPTIONAL query parameter: search (searches across all fields)
 // Example: GET /api/physical-exams?uhid=CDC001&search=cardiovascular
 router.get(
   '/',
   authenticate,
-  authorize(...RECORD_READERS),
+  authorize('doctor', 'admin'),
   physicalExamController.list
 );
 
 // ------------------------------------
 // GET /api/physical-exams/:id — Single physical examination
 // ------------------------------------
-// Authorization: every Patient-File role (doctor, nurse, staff, admin)
+// Authorization: Doctor, Admin
 router.get(
   '/:id',
   authenticate,
-  authorize(...RECORD_READERS),
+  authorize('doctor', 'admin'),
   physicalExamController.getOne
 );
 

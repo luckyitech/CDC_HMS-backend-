@@ -107,7 +107,9 @@ const remove = async (req, res) => {
       return error(res, 'You can only remove your own nursing notes', 403);
     }
 
-    note.status = 'deleted';
+    note.status    = 'deleted';
+    note.deletedBy = req.user.id;   // From JWT token, never the request body
+    note.deletedAt = new Date();
     await note.save();
     return success(res, { message: 'Nursing note removed', id: note.id });
   } catch (err) {

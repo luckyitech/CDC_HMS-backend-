@@ -3,7 +3,7 @@ const { success, error } = require('../utils/response');
 const db = require('../models');
 const { generatePrescriptionNumber } = require('../utils/generateId');
 
-const { Prescription, Patient, User, DoctorProfile } = db;
+const { Prescription, Patient, User, StaffProfile } = db;
 
 
 // ====================================
@@ -33,7 +33,7 @@ const formatPrescription = (prescription) => {
     doctorName: p.doctor
       ? `Dr. ${p.doctor.firstName} ${p.doctor.lastName}`
       : null,
-    doctorLicenseNumber: p.doctor?.DoctorProfile?.licenseNumber || null,
+    doctorLicenseNumber: p.doctor?.StaffProfile?.licenseNumber || null,
     date: p.date,
     diagnosis: p.diagnosis,
     status: p.status,
@@ -61,7 +61,7 @@ const prescriptionIncludes = [
     model: User,
     as: 'doctor',
     attributes: ['firstName', 'lastName'],
-    include: [{ model: DoctorProfile, attributes: ['licenseNumber'] }],
+    include: [{ model: StaffProfile, attributes: ['licenseNumber'] }],
   },
 ];
 

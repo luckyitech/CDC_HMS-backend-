@@ -3,13 +3,14 @@ const router = express.Router();
 const { body } = require('express-validator');
 const validate = require('../middleware/validate');
 const { authenticate, authorize } = require('../middleware/auth');
-const { RECORD_READERS } = require('../constants/roles');
 const assessmentController = require('../controllers/assessmentController');
 
 // ====================================
 // UNDERSTANDING AUTHORIZATION
 // ====================================
-// Initial Assessment routes are doctor-only:
+// Initial Assessment routes are doctor/admin only — reverted back to this
+// after briefly widening reads to every internal role; staff should not see
+// a patient's full initial assessment (HPI, ROS, history):
 //
 // CREATE (POST):     Only DOCTORS can create initial assessments
 // LIST (GET):        DOCTORS and ADMINS can view assessments
@@ -48,24 +49,24 @@ router.post(
 // ------------------------------------
 // GET /api/assessments — List initial assessments
 // ------------------------------------
-// Authorization: every Patient-File role (doctor, nurse, staff, admin)
+// Authorization: Doctor, Admin
 // REQUIRED query parameter: uhid (Patient UHID)
 // Example: GET /api/assessments?uhid=CDC001&page=1&limit=20
 router.get(
   '/',
   authenticate,
-  authorize(...RECORD_READERS),
+  authorize('doctor', 'admin'),
   assessmentController.list
 );
 
 // ------------------------------------
 // GET /api/assessments/:id — Single initial assessment
 // ------------------------------------
-// Authorization: every Patient-File role (doctor, nurse, staff, admin)
+// Authorization: Doctor, Admin
 router.get(
   '/:id',
   authenticate,
-  authorize(...RECORD_READERS),
+  authorize('doctor', 'admin'),
   assessmentController.getOne
 );
 

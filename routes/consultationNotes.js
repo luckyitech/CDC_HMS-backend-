@@ -3,14 +3,16 @@ const router = express.Router();
 const { body } = require('express-validator');
 const validate = require('../middleware/validate');
 const { authenticate, authorize } = require('../middleware/auth');
-const { RECORD_READERS } = require('../constants/roles');
+const { CLINICAL_READ_ROLES } = require('../constants/permissions');
 const consultationNoteController = require('../controllers/consultationNoteController');
 
 // ====================================
 // UNDERSTANDING AUTHORIZATION
 // ====================================
 // CREATE (POST):     Only DOCTORS can create consultation notes
-// LIST / GET (GET):  DOCTORS and STAFF can read (staff = read-only view in patient profile)
+// LIST / GET (GET):  Every internal role can read (read-only view in the
+//                    patient file). Was doctor + staff, which meant admins and
+//                    nurses got a 403 the frontend swallowed into a blank tab.
 // UPDATE (PUT):      Only DOCTORS can edit their own notes
 // DELETE (DELETE):   DOCTORS and ADMINS only
 
@@ -57,22 +59,22 @@ router.post(
 // ------------------------------------
 // GET /api/consultation-notes — List consultation notes
 // ------------------------------------
-// Authorization: every Patient-File role (doctor, nurse, staff, admin)
+// Authorization: every internal role (read-only — enforced on frontend)
 router.get(
   '/',
   authenticate,
-  authorize(...RECORD_READERS),
+  authorize(...CLINICAL_READ_ROLES),
   consultationNoteController.list
 );
 
 // ------------------------------------
 // GET /api/consultation-notes/:id — Get single consultation note
 // ------------------------------------
-// Authorization: every Patient-File role (doctor, nurse, staff, admin)
+// Authorization: every internal role
 router.get(
   '/:id',
   authenticate,
-  authorize(...RECORD_READERS),
+  authorize(...CLINICAL_READ_ROLES),
   consultationNoteController.getById
 );
 

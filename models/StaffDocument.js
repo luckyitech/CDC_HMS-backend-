@@ -1,73 +1,100 @@
 const { defineModel, DataTypes } = require('../utils/defineModel');
 
-// Staff-scoped documents — practising licences, qualification certificates,
-// training records, HR files. The staff equivalent of MedicalDocument, and it
-// deliberately mirrors that model's file-storage fields (fileName / filePath /
-// fileSize / fileUrl) so both reuse middleware/upload and the same on-disk
-// /uploads pipeline.
+// HR documents attached to a member of staff.
 //
-// Two links to User, both explicit camelCase foreign keys (association-generated
-// PascalCase keys are avoided here because there are two of them and they must
-// not collide):
-//   staffUserId  — whose file this document belongs to
-//   uploadedById — the admin who uploaded it
-// Both are wired in models/index.js.
+// Deliberately a separate table from MedicalDocument, and a separate directory
+// on disk. Staff HR files in the patient document store would surface in
+// patient document listings and inherit patient access rules — wrong on both
+// counts. The shape mirrors MedicalDocument so the two behave alike.
+//
+// UserId and uploadedById are added by the associations in index.js.
 const StaffDocument = defineModel('StaffDocument', {
   documentId: {
     type: DataTypes.STRING,
     allowNull: false,
   },
-  documentCategory: {
-    type: DataTypes.STRING,   // Practising Licence, Qualification, Training, ID, HR, Other
+  category: {
+    type: DataTypes.ENUM(
+      'Employment Contract', 'National ID', 'Practising Licence',
+      'Academic Certificate', 'CV', 'Training Certificate',
+      'Sick Note', 'Appraisal', 'Disciplinary', 'Other'
+    ),
+    allowNull: false,
+    defaultValue: 'Other',
   },
+
+  // Who may see it. A contract, an appraisal and a disciplinary letter are not
+  // the same as a CV, so one flat list visible to the staff member would be
+  // wrong. Defaults to the restrictive option: a document nobody classified
+  // stays admin-only rather than leaking.
+  visibility: {
+    type: DataTypes.ENUM('Staff', 'Admin only'),
+    allowNull: false,
+    defaultValue: 'Admin only',
+  },
+
   fileName: {
     type: DataTypes.STRING,
-    allowNull: false,         // original file name
+    allowNull: false,       // original file name, as uploaded
   },
   filePath: {
     type: DataTypes.STRING,
-    allowNull: false,         // server-side stored path
+    allowNull: false,       // server-side stored path
   },
   fileSize: {
-    type: DataTypes.STRING,   // "320 KB"
+    type: DataTypes.STRING, // "320 KB"
   },
   fileUrl: {
-    type: DataTypes.STRING,   // internal path: /uploads/documents/<uuid.ext>
+    type: DataTypes.STRING, // /uploads/staff-documents/<uuid.ext>
   },
-  // Optional expiry — practising licences and certifications lapse. NULL means
-  // "no expiry" (e.g. a degree certificate). The frontend flags a document
-  // amber as it approaches this date.
+  uploadedByRole: {
+    type: DataTypes.STRING,
+  },
+
+  // Optional expiry. A practising licence, an indemnity certificate and a BLS
+  // card all lapse on different dates, which a single licenceExpiry on the
+  // profile cannot express — so expiry belongs on the document, not the person.
+  // NULL means "does not expire" (a degree certificate).
   expiryDate: {
     type: DataTypes.DATEONLY,
     defaultValue: null,
   },
+
   notes: {
     type: DataTypes.TEXT,
     defaultValue: null,
   },
-  // Soft delete. Clinical/HR records are never hard-deleted (see the codebase
-  // convention that new tables soft-delete via a status field). 'archived'
-  // hides a document from every view without removing the file or row.
-  status: {
-    type: DataTypes.ENUM('active', 'archived'),
+
+  // Archive rather than delete, matching MedicalDocument: a wrongly uploaded
+  // file is hidden everywhere but never destroyed.
+  isArchived: {
+    type: DataTypes.BOOLEAN,
     allowNull: false,
-    defaultValue: 'active',
+    defaultValue: false,
   },
-  archivedBy: {
-    type: DataTypes.STRING,
+  archivedById: {
+    type: DataTypes.INTEGER,
+    defaultValue: null,
+  },
+  // Who last edited the record (category, visibility, expiry or notes).
+  // updatedAt comes from the model's timestamps; this is the missing actor.
+  updatedById: {
+    type: DataTypes.INTEGER,
     defaultValue: null,
   },
   archivedAt: {
     type: DataTypes.DATE,
     defaultValue: null,
   },
+  // Why it was archived — the useful half. "Superseded by the 2027 licence"
+  // and "uploaded to the wrong person" need different follow-up.
   archiveReason: {
     type: DataTypes.TEXT,
     defaultValue: null,
   },
 }, {
   indexes: [
-    { unique: true, fields: ['documentId'], name: 'unique_staff_documentId' },
+    { unique: true, fields: ['documentId'], name: 'unique_staff_document_id' },
   ],
 });
 

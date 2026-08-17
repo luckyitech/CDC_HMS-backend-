@@ -1,144 +1,95 @@
-const { Op } = require('sequelize');
+// Staff HR documents — contracts, certificates, licences, sick notes.
+//
+// findStaff has already resolved :employeeId onto req.staffProfile and
+// req.staffUser. See STAFF_PROFILE_DESIGN.md.
+
+const path = require('path');
+const fs = require('fs');
+const crypto = require('crypto');
 const { success, error } = require('../utils/response');
 const db = require('../models');
-const fs = require('fs');
-const path = require('path');
 
 const { StaffDocument, User } = db;
 
-// ====================================
-// CONSTANTS
-// ====================================
+const UPLOAD_DIR = path.join(__dirname, '..', 'uploads', 'staff-documents');
 
-// Staff document categories. Free-ish but validated against this list so the
-// data stays reportable (unlike a free-text field).
-const ALLOWED_CATEGORIES = [
-  'Practising Licence',
-  'Qualification',
-  'Training',
-  'Identification',
-  'HR',
-  'Other',
+const CATEGORIES = [
+  'Employment Contract', 'National ID', 'Practising Licence',
+  'Academic Certificate', 'CV', 'Training Certificate',
+  'Sick Note', 'Appraisal', 'Disciplinary', 'Other',
 ];
 
-// Roles that can hold a staff file. Patients are excluded outright — they are
-// subjects of records, not staff members.
-const STAFF_ROLES = ['doctor', 'staff', 'lab', 'nurse', 'admin'];
+const VISIBILITIES = ['Staff', 'Admin only'];
 
-// ====================================
-// HELPERS
-// ====================================
-
-const formatFileSize = (bytes) => {
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(2)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
+const formatSize = (bytes) => {
+  if (!bytes && bytes !== 0) return null;
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 };
 
-const formatDoc = (doc) => ({
-  id: doc.id,
-  documentId: doc.documentId,
-  staffUserId: doc.staffUserId,
-  uploadedBy: doc.uploader ? `${doc.uploader.firstName} ${doc.uploader.lastName}` : null,
-  documentCategory: doc.documentCategory,
-  fileName: doc.fileName,
-  fileSize: doc.fileSize,
-  fileUrl: doc.fileUrl,
-  expiryDate: doc.expiryDate,
-  notes: doc.notes,
-  status: doc.status,
-  archivedBy: doc.archivedBy,
-  archivedAt: doc.archivedAt,
-  archiveReason: doc.archiveReason,
-  uploadedAt: doc.createdAt,
-});
+// Days of notice before an expiry is worth flagging — the same threshold the
+// profile licence pill uses, so the two never disagree.
+const EXPIRY_WARNING_DAYS = 60;
 
-// ====================================
-// CONTROLLER ACTIONS
-// ====================================
+const daysUntil = (date) => {
+  if (!date) return null;
+  return Math.ceil((new Date(date).getTime() - Date.now()) / (1000 * 60 * 60 * 24));
+};
 
-/**
- * POST /api/staff-documents
- * Upload a staff document (multipart/form-data). Admin only.
- */
-const upload = async (req, res) => {
-  try {
-    if (!req.file) {
-      return error(res, 'No file uploaded. Please select a file to upload.', 400);
-    }
+const formatDocument = (doc) => {
+  const expiresInDays = daysUntil(doc.expiryDate);
 
-    const { staffUserId, documentCategory, expiryDate, notes } = req.body;
+  return {
+    id:         doc.id,
+    documentId: doc.documentId,
+    category:   doc.category,
+    visibility: doc.visibility,
+    fileName:   doc.fileName,
+    fileSize:   doc.fileSize,
+    fileUrl:    doc.fileUrl,
+    notes:      doc.notes,
+    uploadedBy: doc.uploader ? `${doc.uploader.firstName} ${doc.uploader.lastName}` : null,
+    uploadedByRole: doc.uploadedByRole,
+    uploadedAt: doc.createdAt,
 
-    if (req.file.originalname.length > 255) {
-      fs.unlinkSync(req.file.path);
-      return error(res, 'Filename is too long. Maximum 255 characters allowed.', 400);
-    }
-    if (!staffUserId) {
-      fs.unlinkSync(req.file.path);
-      return error(res, 'Staff member is required.', 400);
-    }
-    if (documentCategory && !ALLOWED_CATEGORIES.includes(documentCategory)) {
-      fs.unlinkSync(req.file.path);
-      return error(res, `Invalid category. Allowed: ${ALLOWED_CATEGORIES.join(', ')}`, 400);
-    }
-    if (expiryDate && !/^\d{4}-\d{2}-\d{2}$/.test(expiryDate)) {
-      fs.unlinkSync(req.file.path);
-      return error(res, 'Invalid expiry date format. Use YYYY-MM-DD.', 400);
-    }
-    if (notes && notes.length > 5000) {
-      fs.unlinkSync(req.file.path);
-      return error(res, 'Notes are too long. Maximum 5000 characters allowed.', 400);
-    }
+    expiryDate:     doc.expiryDate,
+    expiresInDays,
+    // Derived here so every screen flags the same document at the same moment.
+    expiringSoon:   expiresInDays !== null && expiresInDays <= EXPIRY_WARNING_DAYS,
+    expired:        expiresInDays !== null && expiresInDays < 0,
 
-    // The staff member must exist and be an actual staff role, not a patient.
-    const staffUser = await User.findByPk(staffUserId);
-    if (!staffUser || !STAFF_ROLES.includes(staffUser.role)) {
-      fs.unlinkSync(req.file.path);
-      return error(res, 'Staff member not found.', 404);
-    }
+    isArchived:    doc.isArchived,
+    archivedAt:    doc.archivedAt,
+    archiveReason: doc.archiveReason,
+  };
+};
 
-    const document = await StaffDocument.create({
-      documentId:       `SDOC-${Date.now()}`,
-      staffUserId:      staffUser.id,
-      uploadedById:     req.user.id,
-      documentCategory: documentCategory || 'Other',
-      fileName:         req.file.originalname,
-      filePath:         req.file.path,
-      fileSize:         formatFileSize(req.file.size),
-      fileUrl:          `/uploads/documents/${req.file.filename}`,
-      expiryDate:       expiryDate || null,
-      notes:            notes || null,
-      status:           'active',
-    });
-
-    const full = await StaffDocument.findByPk(document.id, {
-      include: [{ model: User, as: 'uploader', attributes: ['firstName', 'lastName'] }],
-    });
-
-    return success(res, formatDoc(full), 201);
-  } catch (err) {
-    if (req.file && req.file.path && fs.existsSync(req.file.path)) {
-      fs.unlinkSync(req.file.path);
-    }
-    console.error('StaffDocument.upload error:', err);
-    return error(res, 'Failed to upload document. Please try again.', 500);
-  }
+// Deleting the file from disk when the database row could not be written, so a
+// failed upload does not leave an orphan behind.
+const discard = (file) => {
+  if (!file) return;
+  fs.promises.unlink(file.path).catch(() => {});
 };
 
 /**
- * GET /api/staff-documents?staffUserId=&archived=true
- * List a staff member's documents. Admin only.
+ * GET /api/staff/:employeeId/documents
+ * Admins see everything; a staff member viewing their own file sees only what
+ * is marked visible to them — a contract or disciplinary letter is not theirs
+ * to read from here.
+ *
+ * Authorization: Admin, or the staff member themselves
  */
 const list = async (req, res) => {
-  try {
-    const { staffUserId, archived } = req.query;
-    if (!staffUserId) {
-      return error(res, 'staffUserId is required.', 400);
-    }
+  const isAdmin = req.user.role === 'admin';
 
-    const where = {
-      staffUserId,
-      status: archived === 'true' ? 'archived' : 'active',
-    };
+  try {
+    // Archived documents are hidden by default and only an admin can ask for
+    // them — they are the ones most likely to be sensitive.
+    const wantsArchived = isAdmin && req.query.archived === 'true';
+
+    const where = { UserId: req.staffUser.id, isArchived: wantsArchived };
+    if (!isAdmin) where.visibility = 'Staff';
 
     const documents = await StaffDocument.findAll({
       where,
@@ -146,93 +97,220 @@ const list = async (req, res) => {
       order: [['createdAt', 'DESC']],
     });
 
-    return success(res, {
-      documents: documents.map(formatDoc),
-      total: documents.length,
-    });
+    return success(res, documents.map(formatDocument));
   } catch (err) {
-    console.error('StaffDocument.list error:', err);
-    return error(res, 'Failed to retrieve documents. Please try again.', 500);
+    console.error('List staff documents error:', err.message);
+    return error(res, 'Failed to load documents', 500);
   }
 };
 
 /**
- * PUT /api/staff-documents/:id/archive
- * Soft-delete a document — hides it from every view without removing the file
- * or row. Admin only.
+ * POST /api/staff/:employeeId/documents
+ * Multipart upload. uploadStaffDocument has already validated extension and
+ * MIME type and written the file.
+ *
+ * Authorization: Admin, or the staff member themselves
+ */
+const upload = async (req, res) => {
+  if (!req.file) return error(res, 'No file uploaded', 400);
+
+  const { category, notes, expiryDate } = req.body;
+  const isAdmin = req.user.role === 'admin';
+
+  try {
+    if (category && !CATEGORIES.includes(category)) {
+      discard(req.file);
+      return error(res, 'Invalid document category', 400);
+    }
+
+    // Validated here rather than left to MySQL, which would reject it with a
+    // driver error after the file had already been written to disk.
+    if (expiryDate && !/^\d{4}-\d{2}-\d{2}$/.test(expiryDate)) {
+      discard(req.file);
+      return error(res, 'Expiry date must be in YYYY-MM-DD format', 400);
+    }
+
+    // Only an admin chooses visibility. Anything a staff member uploads about
+    // themselves is visible to them by definition; letting them set it would
+    // also let them mark their own document admin-only and lose sight of it.
+    let visibility = 'Admin only';
+    if (isAdmin) {
+      if (req.body.visibility && !VISIBILITIES.includes(req.body.visibility)) {
+        discard(req.file);
+        return error(res, 'Invalid visibility', 400);
+      }
+      visibility = req.body.visibility || 'Admin only';
+    } else {
+      visibility = 'Staff';
+    }
+
+    const document = await StaffDocument.create({
+      UserId:     req.staffUser.id,
+      documentId: `SDOC-${crypto.randomBytes(6).toString('hex').toUpperCase()}`,
+      category:   category || 'Other',
+      visibility,
+      fileName:   req.file.originalname,
+      filePath:   req.file.path,
+      fileSize:   formatSize(req.file.size),
+      fileUrl:    `/uploads/staff-documents/${req.file.filename}`,
+      uploadedById:   req.user.id,
+      uploadedByRole: req.user.role,
+      expiryDate: expiryDate || null,
+      notes:      notes || null,
+    });
+
+    await document.reload({ include: [{ model: User, as: 'uploader', attributes: ['firstName', 'lastName'] }] });
+    return success(res, formatDocument(document), 201);
+  } catch (err) {
+    discard(req.file);
+    console.error('Upload staff document error:', err.message);
+    return error(res, 'Failed to upload document', 500);
+  }
+};
+
+/**
+ * PATCH /api/staff/:employeeId/documents/:id
+ * Reclassify a document or change who can see it.
+ *
+ * Authorization: Admin only
+ */
+const update = async (req, res) => {
+  const { category, visibility, notes, expiryDate } = req.body;
+
+  try {
+    const document = await StaffDocument.findOne({
+      where: { id: req.params.id, UserId: req.staffUser.id },
+    });
+    if (!document) return error(res, 'Document not found', 404);
+
+    const updates = {};
+    if (category !== undefined) {
+      if (!CATEGORIES.includes(category)) return error(res, 'Invalid document category', 400);
+      updates.category = category;
+    }
+    if (visibility !== undefined) {
+      if (!VISIBILITIES.includes(visibility)) return error(res, 'Invalid visibility', 400);
+      updates.visibility = visibility;
+    }
+    if (notes !== undefined) updates.notes = notes;
+    if (expiryDate !== undefined) {
+      if (expiryDate && !/^\d{4}-\d{2}-\d{2}$/.test(expiryDate)) {
+        return error(res, 'Expiry date must be in YYYY-MM-DD format', 400);
+      }
+      // Empty means "no expiry", which has to reach the column as null.
+      updates.expiryDate = expiryDate || null;
+    }
+
+    if (!Object.keys(updates).length) return error(res, 'No changes supplied', 400);
+
+    // Attribution comes from the JWT, never the request body.
+    updates.updatedById = req.user.id;
+
+    await document.update(updates);
+    await document.reload({ include: [{ model: User, as: 'uploader', attributes: ['firstName', 'lastName'] }] });
+
+    return success(res, formatDocument(document));
+  } catch (err) {
+    console.error('Update staff document error:', err.message);
+    return error(res, 'Failed to update document', 500);
+  }
+};
+
+/**
+ * DELETE /api/staff/:employeeId/documents/:id
+ * Archives the row and leaves the file on disk, matching how patient documents
+ * behave. A contract removed by mistake is recoverable.
+ *
+ * Authorization: Admin only
  */
 const archive = async (req, res) => {
+  const { reason } = req.body || {};
+
   try {
-    const { id } = req.params;
-    const { reason } = req.body;
+    const document = await StaffDocument.findOne({
+      where: { id: req.params.id, UserId: req.staffUser.id },
+    });
+    if (!document) return error(res, 'Document not found', 404);
+    if (document.isArchived) return error(res, 'This document is already archived', 400);
+    if (reason && reason.length > 5000) return error(res, 'Reason is too long. Maximum 5000 characters.', 400);
 
-    const document = await StaffDocument.findByPk(id);
-    if (!document) return error(res, 'Document not found.', 404);
-    if (document.status === 'archived') return error(res, 'This document is already archived.', 400);
-    if (reason && reason.length > 5000) return error(res, 'Reason is too long. Maximum 5000 characters allowed.', 400);
-
-    const archiver = await User.findByPk(req.user.id);
     await document.update({
-      status: 'archived',
-      archivedBy: archiver ? `${archiver.firstName} ${archiver.lastName}` : null,
-      archivedAt: new Date(),
+      isArchived:    true,
+      archivedById:  req.user.id,
+      archivedAt:    new Date(),
       archiveReason: reason || null,
     });
 
-    const full = await StaffDocument.findByPk(document.id, {
-      include: [{ model: User, as: 'uploader', attributes: ['firstName', 'lastName'] }],
-    });
-    return success(res, formatDoc(full));
+    return success(res, { id: document.id, archived: true });
   } catch (err) {
-    console.error('StaffDocument.archive error:', err);
-    return error(res, 'Failed to archive document. Please try again.', 500);
+    console.error('Archive staff document error:', err.message);
+    return error(res, 'Failed to archive document', 500);
   }
 };
 
 /**
- * PUT /api/staff-documents/:id/restore
- * Restore an archived document. Admin only.
+ * PATCH /api/staff/:employeeId/documents/:id/restore
+ * Undoes an archive. Archiving without a way back makes admins reluctant to
+ * tidy up, which leaves the wrong documents on file.
+ *
+ * Authorization: Admin only
  */
 const restore = async (req, res) => {
   try {
-    const { id } = req.params;
-    const document = await StaffDocument.findByPk(id);
-    if (!document) return error(res, 'Document not found.', 404);
-    if (document.status !== 'archived') return error(res, 'This document is not archived.', 400);
-
-    await document.update({ status: 'active', archivedBy: null, archivedAt: null, archiveReason: null });
-
-    const full = await StaffDocument.findByPk(document.id, {
-      include: [{ model: User, as: 'uploader', attributes: ['firstName', 'lastName'] }],
+    const document = await StaffDocument.findOne({
+      where: { id: req.params.id, UserId: req.staffUser.id },
     });
-    return success(res, formatDoc(full));
+    if (!document) return error(res, 'Document not found', 404);
+    if (!document.isArchived) return error(res, 'This document is not archived', 400);
+
+    await document.update({
+      isArchived:    false,
+      archivedById:  null,
+      archivedAt:    null,
+      archiveReason: null,
+    });
+
+    await document.reload({ include: [{ model: User, as: 'uploader', attributes: ['firstName', 'lastName'] }] });
+    return success(res, formatDocument(document));
   } catch (err) {
-    console.error('StaffDocument.restore error:', err);
-    return error(res, 'Failed to restore document. Please try again.', 500);
+    console.error('Restore staff document error:', err.message);
+    return error(res, 'Failed to restore document', 500);
   }
 };
 
 /**
- * GET /api/staff-documents/file/:filename
- * Serve a staff document file. Admin only — these are sensitive HR records, so
- * they are never exposed as static files, only through this authenticated route.
+ * GET /api/staff/:employeeId/documents/:id/file
+ * Streams the file through an authenticated route rather than serving the
+ * upload directory statically — otherwise anyone holding a URL could read an
+ * employment contract without logging in.
+ *
+ * Authorization: Admin, or the staff member themselves for documents marked
+ * visible to staff
  */
 const serveFile = async (req, res) => {
-  try {
-    const { filename } = req.params;
-    const document = await StaffDocument.findOne({
-      where: { fileUrl: `/uploads/documents/${filename}` },
-    });
-    if (!document) return error(res, 'File not found.', 404);
+  const isAdmin = req.user.role === 'admin';
 
-    if (!fs.existsSync(document.filePath)) {
-      return error(res, 'Physical file not found on server.', 404);
+  try {
+    const document = await StaffDocument.findOne({
+      where: { id: req.params.id, UserId: req.staffUser.id },
+    });
+    if (!document) return error(res, 'Document not found', 404);
+    if (!isAdmin && document.visibility !== 'Staff') return error(res, 'Access denied', 403);
+
+    // Resolve and confirm the file is inside the upload directory before
+    // reading it, so a tampered filePath cannot be used to read other files.
+    const resolved = path.resolve(document.filePath);
+    if (!resolved.startsWith(path.resolve(UPLOAD_DIR))) {
+      console.error('Staff document path outside upload dir:', document.id);
+      return error(res, 'Document unavailable', 404);
     }
-    res.sendFile(path.resolve(document.filePath));
+    if (!fs.existsSync(resolved)) return error(res, 'File is missing from the server', 404);
+
+    return res.download(resolved, document.fileName);
   } catch (err) {
-    console.error('StaffDocument.serveFile error:', err);
-    return error(res, 'Failed to retrieve file. Please try again.', 500);
+    console.error('Serve staff document error:', err.message);
+    return error(res, 'Failed to load document', 500);
   }
 };
 
-module.exports = { upload, list, archive, restore, serveFile };
+module.exports = { list, upload, update, archive, restore, serveFile, CATEGORIES, VISIBILITIES };

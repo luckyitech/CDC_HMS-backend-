@@ -182,8 +182,14 @@ describe('patients can never hold permissions', () => {
     assert.deepEqual(patient.permissions, []);
   });
 
-  test('the permissible roles are exactly doctor, staff and lab', () => {
-    assert.deepEqual([...PERMISSIBLE_ROLES].sort(), ['doctor', 'lab', 'staff']);
+  test('the permissible roles are exactly doctor, staff, lab and nurse', () => {
+    // 'nurse' joined PERMISSIBLE_ROLES in 75ca595 (HMIS V3 inpatient module) and
+    // this assertion was never updated with it, so the suite has been red on main
+    // since. Nursing is first-class now — a nurse holding inpatient.access is the
+    // whole point of the capability — so the constant is right and the test was
+    // stale, not the other way round.
+    assert.deepEqual([...PERMISSIBLE_ROLES].sort(), ['doctor', 'lab', 'nurse', 'staff']);
+    // The part that actually matters and must never change:
     assert.ok(!PERMISSIBLE_ROLES.includes('patient'));
     assert.ok(!PERMISSIBLE_ROLES.includes('admin'), 'admins hold everything implicitly');
   });

@@ -440,10 +440,17 @@ const refer = async (req, res) => {
       selectedCharges:      mergedCharges,
       selectedProcedures:   mergedProcedures,
       // Persist the note so it lands in Visit History Actions even when the
-      // doctor sent the referral without clicking Save & Print first. Keep any
-      // previously-saved note if this submit didn't carry one.
+      // doctor sent the referral without clicking Save & Print first. The empty
+      // branch below is what keeps a previously-saved note when this submit
+      // didn't carry one; when it DID, the text is current, so the timestamp
+      // must be too — an edited letter stamped with the earlier save time reads
+      // as a document that was never changed.
       ...(referralNote && referralNote.trim()
-        ? { referralNote, referralNoteSavedAt: item.referralNoteSavedAt || new Date() }
+        ? {
+            referralNote,
+            referralNoteSavedAt:      new Date(),
+            referralNoteByDoctorName: req.user.name || 'Unknown',
+          }
         : {}),
     };
 
@@ -486,14 +493,45 @@ const refer = async (req, res) => {
 // moving the visit to billing. The doctor can then send the referral (refer) or
 // keep working. Mirrors the admission saveNote pattern. Merge-aware read guard.
 // Idempotent: writes the latest note onto the open queue row.
+//
+// This endpoint must never touch the referral's own audit fields. On an INTERNAL
+// referral the queue row is handed to a second doctor, who then consults with
+// status 'With Doctor' — so a naive note save would overwrite referredByDoctorName
+// with the RECEIVING doctor while leaving referredAt at the original time, erasing
+// who made the referral and making an unsent draft read as a sent referral.
 const saveReferralNote = async (req, res) => {
   try {
     const { referralNote, referralType } = req.body;
     if (!referralNote || !referralNote.trim()) return error(res, 'The referral note is empty.', 400);
 
+    // referralType lands in an ENUM column. Sequelize does not check ENUM
+    // membership, so an unexpected value reaches MySQL: a 500 under STRICT mode,
+    // or a silently blanked clinical field without it.
+    if (referralType && !['Internal', 'External'].includes(referralType)) {
+      return error(res, 'referralType must be "Internal" or "External"', 400);
+    }
+
     const item = await Queue.findByPk(req.params.id, { include: [Patient] });
     if (!item) return error(res, 'Queue item not found', 404);
     if (!item.Patient) return error(res, 'Queue item has no patient', 400);
+
+    // Same guard refer() applies: a note may only be written while the doctor is
+    // actively consulting. Without it any doctor can write onto any queue row by
+    // id, including a visit that is already billed or completed.
+    if (item.status !== 'With Doctor') {
+      return error(res, 'A referral note can only be saved while the patient status is "With Doctor"', 400);
+    }
+
+    // The referral on this row is already final. One queue row carries one
+    // referral, so a further note here would be filed under someone else's
+    // referral in Visit History. Refuse rather than corrupt the record.
+    if (item.referredAt) {
+      return error(
+        res,
+        `This visit was already referred${item.referredByDoctorName ? ` by ${item.referredByDoctorName}` : ''}; a new referral note cannot be saved against it.`,
+        409,
+      );
+    }
 
     const { resolvePatient } = require('../utils/patientFamily');
     const family = await resolvePatient(item.Patient.uhid);
@@ -502,9 +540,12 @@ const saveReferralNote = async (req, res) => {
 
     await item.update({
       referralNote,
-      referralType:         referralType || item.referralType || null,
-      referredByDoctorName: req.user.name,
-      referralNoteSavedAt:  new Date(),
+      // The note author — NOT referredByDoctorName, which belongs to refer().
+      referralNoteByDoctorName: req.user.name,
+      referralNoteSavedAt:      new Date(),
+      // Safe: the referredAt guard above means no referral has been finalised on
+      // this row, so referralType is still the draft's to set.
+      referralType:             referralType || item.referralType || null,
     });
 
     return success(res, { queueId: item.id, saved: true });
@@ -533,8 +574,8 @@ const listAdvisedReferrals = async (req, res) => {
       where: { PatientId: { [Op.in]: family.patientIds }, referralNote: { [Op.ne]: null } },
       attributes: [
         'id', 'referralType', 'referralNote', 'referredToDoctorName',
-        'externalReferralTarget', 'referredByDoctorName', 'referralNoteSavedAt',
-        'referredAt',
+        'externalReferralTarget', 'referredByDoctorName', 'referralNoteByDoctorName',
+        'referralNoteSavedAt', 'referredAt',
       ],
       order: [['referralNoteSavedAt', 'DESC']],
     });
@@ -544,7 +585,10 @@ const listAdvisedReferrals = async (req, res) => {
       referralType: q.referralType,
       destination: q.referredToDoctorName || q.externalReferralTarget || null,
       note: q.referralNote,
-      doctorName: q.referredByDoctorName,
+      // The note's author. Falls back to referredByDoctorName for rows written
+      // before referralNoteByDoctorName existed, and for notes captured by
+      // refer() itself (where the two are the same doctor anyway).
+      doctorName: q.referralNoteByDoctorName || q.referredByDoctorName,
       savedAt: q.referralNoteSavedAt,
       // referredAt is only set once the referral is finalised; null while advised.
       sent: !!q.referredAt,

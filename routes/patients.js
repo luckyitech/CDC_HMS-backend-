@@ -3,8 +3,8 @@ const router  = express.Router();
 const { body } = require('express-validator');
 const validate = require('../middleware/validate');
 const { authenticate, authorize } = require('../middleware/auth');
-const { RECORD_READERS } = require('../constants/roles');
 const findPatient = require('../middleware/findPatient');
+const { CLINICAL_READ_ROLES } = require('../constants/permissions');
 const patientController          = require('../controllers/patientController');
 const bloodSugarController       = require('../controllers/bloodSugarController');
 const equipmentController        = require('../controllers/equipmentController');
@@ -87,7 +87,7 @@ router.patch('/:uhid/reactivate', authenticate, authorize('admin'), patientContr
 // 'nurse' added alongside 'staff' on the triage-facing endpoints below: the
 // nurse portal reuses the front desk's Triage screen, which searches patients,
 // reads vitals history, and writes vitals + allergies.
-router.get('/', authenticate, authorize('doctor', 'staff', 'admin', 'nurse'), patientController.list);
+router.get('/', authenticate, authorize(...CLINICAL_READ_ROLES), patientController.list);
 
 // ------------------------------------
 // GET /api/patients/:uhid — single patient (all authenticated roles)
@@ -112,12 +112,16 @@ router.put('/:uhid', authenticate, authorize('staff', 'admin', 'nurse'), findPat
 // ------------------------------------
 // Patient diagnoses — tracked list (summary panel). Clinical record: retire, never delete.
 const patientDiagnosisController = require('../controllers/patientDiagnosisController');
+// Doctor-only, both reading and writing — reverted back to this after briefly
+// widening it to every role; the doctor's diagnosis list is not meant for
+// staff to see.
 router.get('/:uhid/diagnoses', authenticate, authorize('doctor'), findPatient, patientDiagnosisController.list);
 router.post('/:uhid/diagnoses', authenticate, authorize('doctor'), findPatient, patientDiagnosisController.create);
 router.patch('/:uhid/diagnoses/:id/resolve', authenticate, authorize('doctor'), findPatient, patientDiagnosisController.resolve);
 router.patch('/:uhid/diagnoses/:id/reactivate', authenticate, authorize('doctor'), findPatient, patientDiagnosisController.reactivate);
 
 // GET/PATCH /api/patients/:uhid/chart-metrics — doctor's followed chart metrics (summary panel)
+// Doctor-only — reverted back to this after briefly widening it to every role.
 router.get('/:uhid/chart-metrics', authenticate, authorize('doctor'), findPatient, patientController.getChartMetrics);
 router.patch('/:uhid/chart-metrics', authenticate, authorize('doctor'), findPatient, patientController.updateChartMetrics);
 
@@ -149,12 +153,12 @@ router.post('/:uhid/vitals/doctor', authenticate, authorize('doctor'), findPatie
 // ------------------------------------
 // GET /api/patients/:uhid/vitals/history — all vitals records (MUST be before /:uhid/vitals)
 // ------------------------------------
-router.get('/:uhid/vitals/history', authenticate, authorize('doctor', 'staff', 'nurse'), findPatient, patientController.getVitalsHistory);
+router.get('/:uhid/vitals/history', authenticate, authorize(...CLINICAL_READ_ROLES), findPatient, patientController.getVitalsHistory);
 
 // ------------------------------------
 // GET /api/patients/:uhid/vitals — latest vitals
 // ------------------------------------
-router.get('/:uhid/vitals', authenticate, authorize('doctor', 'staff', 'nurse'), findPatient, patientController.getVitals);
+router.get('/:uhid/vitals', authenticate, authorize(...CLINICAL_READ_ROLES), findPatient, patientController.getVitals);
 
 // ------------------------------------
 // POST /api/patients/:uhid/blood-sugar — single or bulk reading (upsert)
@@ -167,7 +171,7 @@ router.post('/:uhid/blood-sugar', authenticate, authorize('patient'), findPatien
 // ------------------------------------
 // GET /api/patients/:uhid/blood-sugar — readings with date filters
 // ------------------------------------
-router.get('/:uhid/blood-sugar', authenticate, authorize('patient', ...RECORD_READERS), findPatient, bloodSugarController.get);
+router.get('/:uhid/blood-sugar', authenticate, authorize(...CLINICAL_READ_ROLES, 'patient'), findPatient, bloodSugarController.get);
 
 // ====================================
 // MEDICAL EQUIPMENT ENDPOINTS
@@ -176,17 +180,17 @@ router.get('/:uhid/blood-sugar', authenticate, authorize('patient', ...RECORD_RE
 // ------------------------------------
 // GET /api/patients/:uhid/equipment/history — MUST be before /:uhid/equipment/:id
 // ------------------------------------
-router.get('/:uhid/equipment/history',   authenticate, authorize(...RECORD_READERS), equipmentController.getHistory);
+router.get('/:uhid/equipment/history',   authenticate, authorize(...CLINICAL_READ_ROLES), equipmentController.getHistory);
 
 // ------------------------------------
 // GET /api/patients/:uhid/equipment/audit-log — MUST be before /:uhid/equipment/:id
 // ------------------------------------
-router.get('/:uhid/equipment/audit-log', authenticate, authorize(...RECORD_READERS), equipmentController.getAuditLog);
+router.get('/:uhid/equipment/audit-log', authenticate, authorize(...CLINICAL_READ_ROLES), equipmentController.getAuditLog);
 
 // ------------------------------------
 // GET /api/patients/:uhid/equipment — current equipment
 // ------------------------------------
-router.get('/:uhid/equipment', authenticate, authorize(...RECORD_READERS), equipmentController.getCurrent);
+router.get('/:uhid/equipment', authenticate, authorize(...CLINICAL_READ_ROLES), equipmentController.getCurrent);
 
 // ------------------------------------
 // POST /api/patients/:uhid/equipment — add new equipment
@@ -222,7 +226,7 @@ router.post('/:uhid/equipment/:id/replace', authenticate, authorize('doctor', 'n
 // ------------------------------------
 // GET /api/patients/:uhid/carelink-partners
 // ------------------------------------
-router.get('/:uhid/carelink-partners', authenticate, authorize(...RECORD_READERS), careLinkPartnerController.getAll);
+router.get('/:uhid/carelink-partners', authenticate, authorize(...CLINICAL_READ_ROLES), careLinkPartnerController.getAll);
 
 // ------------------------------------
 // POST /api/patients/:uhid/carelink-partners

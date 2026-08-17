@@ -3,7 +3,6 @@ const router = express.Router();
 const { body } = require('express-validator');
 const validate = require('../middleware/validate');
 const { authenticate, authorize } = require('../middleware/auth');
-const { RECORD_READERS } = require('../constants/roles');
 const glp1SymptomController = require('../controllers/glp1SymptomController');
 
 // ====================================
@@ -17,12 +16,12 @@ const glp1SymptomController = require('../controllers/glp1SymptomController');
 // ------------------------------------
 // GET /api/glp1-symptoms — The clinic symptom catalogue
 // ------------------------------------
-// Authorization: every Patient-File role (doctor, nurse, staff, admin)
+// Authorization: Doctor, Staff
 // Query: ?active=false to include retired symptoms
 router.get(
   '/',
   authenticate,
-  authorize(...RECORD_READERS),
+  authorize('doctor', 'nurse', 'staff'),
   glp1SymptomController.list
 );
 

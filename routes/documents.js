@@ -3,8 +3,8 @@ const router = express.Router();
 const { body } = require('express-validator');
 const validate = require('../middleware/validate');
 const { authenticate, authorize } = require('../middleware/auth');
-const { RECORD_READERS } = require('../constants/roles');
 const upload = require('../middleware/upload');
+const { CLINICAL_READ_ROLES } = require('../constants/permissions');
 const documentController = require('../controllers/documentController');
 
 // ------------------------------------
@@ -29,7 +29,7 @@ router.post('/', authenticate, authorize('patient', 'doctor', 'staff', 'admin'),
 // ------------------------------------
 // GET /api/documents — list documents
 // ------------------------------------
-router.get('/', authenticate, authorize('patient', ...RECORD_READERS), documentController.list);
+router.get('/', authenticate, authorize(...CLINICAL_READ_ROLES, 'patient'), documentController.list);
 
 // ------------------------------------
 // PUT /api/documents/:id/status — review/archive document
@@ -54,6 +54,6 @@ router.put('/:id/restore', authenticate, authorize('admin'), documentController.
 // ------------------------------------
 // GET /api/documents/file/:filename — serve file (authenticated)
 // ------------------------------------
-router.get('/file/:filename', authenticate, authorize('patient', ...RECORD_READERS), documentController.serveFile);
+router.get('/file/:filename', authenticate, authorize(...CLINICAL_READ_ROLES, 'patient'), documentController.serveFile);
 
 module.exports = router;

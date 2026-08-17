@@ -1,4 +1,4 @@
-const { Op } = require('sequelize');
+const { Op, fn, col } = require('sequelize');
 const { success, error } = require('../utils/response');
 const { resolvePatient } = require('../utils/patientFamily');
 const { broadcast } = require('../utils/sseManager');
@@ -9,6 +9,10 @@ const {
   sequelize, Admission, BedAssignment, Bed, Ward, Room,
   Queue, Patient, User, DischargeSummary,
 } = db;
+
+// Mirrors the Queue.admissionType ENUM. Sequelize does not validate ENUM
+// membership, so the write paths check against this before it reaches MySQL.
+const ADMISSION_TYPES = ['Emergency', 'Elective', 'Transfer', 'Observation'];
 
 const admissionIncludes = [
   { model: Patient, attributes: ['uhid', 'firstName', 'lastName', 'isInpatient'] },
@@ -232,9 +236,23 @@ exports.saveNote = async (req, res) => {
     const { queueId, admissionReason, admissionType } = req.body;
     if (!admissionReason || !admissionReason.trim()) return error(res, 'The admission note is empty.', 400);
 
+    // admissionType lands in an ENUM column. Sequelize does not check ENUM
+    // membership, so an unexpected value reaches MySQL: a 500 under STRICT mode,
+    // or a silently blanked clinical field without it.
+    if (admissionType && !ADMISSION_TYPES.includes(admissionType)) {
+      return error(res, `admissionType must be one of: ${ADMISSION_TYPES.join(', ')}`, 400);
+    }
+
     const queueItem = await Queue.findByPk(queueId, { include: [Patient] });
     if (!queueItem) return error(res, 'Queue item not found', 404);
     if (!queueItem.Patient) return error(res, 'Queue item has no patient', 400);
+
+    // Same guard queueController.refer() applies to referrals: a note may only be
+    // written while the doctor is actively consulting. Without it any doctor can
+    // write onto any queue row by id, including an already-billed visit.
+    if (queueItem.status !== 'With Doctor') {
+      return error(res, 'An admission note can only be saved while the patient status is "With Doctor"', 400);
+    }
 
     const family = await resolvePatient(queueItem.Patient.uhid);
     if (!family) return error(res, 'Patient not found', 404);
@@ -244,7 +262,10 @@ exports.saveNote = async (req, res) => {
       admissionReason,
       admissionType: admissionType || queueItem.admissionType || null,
       admissionRequestedByDoctorName: req.user.name,
-      admissionRequestedAt: queueItem.admissionRequestedAt || new Date(),
+      // Documenting a note is NOT requesting admission. admissionRequestedAt is
+      // left untouched — requestAdmission owns it — and the save is stamped on
+      // its own column, mirroring referralNoteSavedAt on the referral side.
+      admissionNoteSavedAt: new Date(),
     });
 
     return success(res, { queueId: queueItem.id, saved: true });
@@ -270,10 +291,12 @@ exports.listAdvised = async (req, res) => {
       where: { PatientId: { [Op.in]: family.patientIds }, admissionReason: { [Op.ne]: null } },
       attributes: [
         'id', 'admissionType', 'admissionReason', 'admissionWardPreference',
-        'admissionRequestedByDoctorName', 'admissionRequestedAt',
-        'admissionCancelledAt', 'admissionConvertedToId',
+        'admissionRequestedByDoctorName', 'admissionNoteSavedAt', 'admissionRequestedAt',
+        'admissionRequested', 'admissionCancelledAt', 'admissionConvertedToId',
       ],
-      order: [['admissionRequestedAt', 'DESC']],
+      // Newest note first. COALESCE because rows written before
+      // admissionNoteSavedAt existed only carry admissionRequestedAt.
+      order: [[fn('COALESCE', col('admissionNoteSavedAt'), col('admissionRequestedAt')), 'DESC']],
     });
 
     const admissions = rows.map((q) => ({
@@ -281,7 +304,22 @@ exports.listAdvised = async (req, res) => {
       admissionType: q.admissionType,
       note: q.admissionReason,
       doctorName: q.admissionRequestedByDoctorName,
+      // savedAt — when the note was documented. Always present, so the client has
+      // one date to group by (mirrors referrals). Falls back to admissionRequestedAt
+      // for rows written before the column existed.
+      savedAt: q.admissionNoteSavedAt || q.admissionRequestedAt,
+      // requestedAt — when it was actually sent for admission.
       requestedAt: q.admissionRequestedAt,
+      // sent — whether it was ever actually sent for admission, as opposed to
+      // only documented. NOT just admissionRequested: cancelAdmissionRequest
+      // resets that flag to false, so a request that genuinely reached the front
+      // desk and was then cancelled would otherwise read identically to a note
+      // that was never sent at all. admissionCancelledAt and
+      // admissionConvertedToId are the durable evidence that it happened.
+      //
+      // Deliberately not inferred from admissionRequestedAt: saveNote used to
+      // stamp that even when nothing was requested, so historical rows would lie.
+      sent: !!(q.admissionRequested || q.admissionCancelledAt || q.admissionConvertedToId),
       cancelledAt: q.admissionCancelledAt,
       converted: !!q.admissionConvertedToId,
     }));

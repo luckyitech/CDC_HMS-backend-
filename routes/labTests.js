@@ -3,7 +3,6 @@ const router = express.Router();
 const { body } = require('express-validator');
 const validate = require('../middleware/validate');
 const { authenticate, authorize } = require('../middleware/auth');
-const { RECORD_READERS } = require('../constants/roles');
 const labTestController = require('../controllers/labTestController');
 
 // ====================================
@@ -88,7 +87,7 @@ router.get(
 // ------------------------------------
 // GET /api/lab-tests — List all lab tests
 // ------------------------------------
-// Authorization: every Patient-File role (doctor, nurse, staff, admin) + lab
+// Authorization: Lab technicians, doctors, staff
 // How filtering works:
 // - Doctors can see all tests they ordered
 // - Lab techs can see all tests (for processing)
@@ -96,18 +95,18 @@ router.get(
 router.get(
   '/',
   authenticate,
-  authorize('lab', ...RECORD_READERS),
+  authorize('lab', 'nurse', 'doctor', 'staff', 'admin'),
   labTestController.list
 );
 
 // ------------------------------------
 // GET /api/lab-tests/:id — Single lab test
 // ------------------------------------
-// Authorization: every Patient-File role (doctor, nurse, staff, admin) + lab
+// Authorization: Lab technicians, doctors, staff
 router.get(
   '/:id',
   authenticate,
-  authorize('lab', ...RECORD_READERS),
+  authorize('lab', 'nurse', 'doctor', 'staff', 'admin'),
   labTestController.getOne
 );
 

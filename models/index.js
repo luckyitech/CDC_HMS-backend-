@@ -3,9 +3,16 @@ const Sequelize = require('sequelize');
 
 // --- All model imports ---
 const User                = require('./User');
+// DoctorProfile and LabTechProfile are deprecated — StaffProfile is now the
+// single profile table for every cadre. They are kept readable for one release
+// as a rollback path and dropped by a later migration.
+// See STAFF_PROFILE_DESIGN.md.
 const DoctorProfile       = require('./DoctorProfile');
 const StaffProfile        = require('./StaffProfile');
 const LabTechProfile      = require('./LabTechProfile');
+const StaffLeave          = require('./StaffLeave');
+const LeaveBalance        = require('./LeaveBalance');
+const StaffDocument       = require('./StaffDocument');
 const Patient             = require('./Patient');
 const PatientVital        = require('./PatientVital');
 const BloodSugarReading   = require('./BloodSugarReading');
@@ -18,7 +25,6 @@ const InitialAssessment   = require('./InitialAssessment');
 const ConsultationNote    = require('./ConsultationNote');
 const NursingNote         = require('./NursingNote');
 const MedicalDocument     = require('./MedicalDocument');
-const StaffDocument       = require('./StaffDocument');
 const Appointment         = require('./Appointment');
 const MedicalEquipment    = require('./MedicalEquipment');
 const EquipmentHistory    = require('./EquipmentHistory');
@@ -75,6 +81,21 @@ StaffProfile.belongsTo(User);
 User.hasOne(LabTechProfile);
 LabTechProfile.belongsTo(User);
 
+// --- Staff leave, entitlement and HR documents ---
+// onDelete is left at the Sequelize default: staff accounts are archived rather
+// than destroyed, so cascade behaviour should never come into play.
+User.hasMany(StaffLeave);
+StaffLeave.belongsTo(User);
+StaffLeave.belongsTo(User, { as: 'approvedBy', foreignKey: 'approvedById' });
+
+User.hasMany(LeaveBalance);
+LeaveBalance.belongsTo(User);
+
+User.hasMany(StaffDocument);
+StaffDocument.belongsTo(User);
+StaffDocument.belongsTo(User, { as: 'uploader',    foreignKey: 'uploadedById' });
+StaffDocument.belongsTo(User, { as: 'lastEditor',  foreignKey: 'updatedById'  });
+
 // --- Patient ↔ User (two links, aliases required) ---
 User.hasOne(Patient);                                                          // patient's own login
 Patient.belongsTo(User);
@@ -130,17 +151,12 @@ ConsultationNote.belongsTo(User, { as: 'doctor', foreignKey: 'doctorId' });
 
 Patient.hasMany(NursingNote);
 NursingNote.belongsTo(Patient);
-NursingNote.belongsTo(User, { as: 'author', foreignKey: 'authorId' });
+NursingNote.belongsTo(User, { as: 'author',        foreignKey: 'authorId'  });
+NursingNote.belongsTo(User, { as: 'deletedByUser', foreignKey: 'deletedBy' });
 
 Patient.hasMany(MedicalDocument);
 MedicalDocument.belongsTo(Patient);
 MedicalDocument.belongsTo(User, { as: 'uploader', foreignKey: 'uploadedById' });
-
-// Staff documents — two explicit links to User: the staff member the file
-// belongs to (staffUserId) and the admin who uploaded it (uploadedById).
-User.hasMany(StaffDocument, { as: 'staffDocuments', foreignKey: 'staffUserId' });
-StaffDocument.belongsTo(User, { as: 'staff', foreignKey: 'staffUserId' });
-StaffDocument.belongsTo(User, { as: 'uploader', foreignKey: 'uploadedById' });
 
 Patient.hasMany(Appointment);
 Appointment.belongsTo(Patient);
@@ -366,6 +382,9 @@ const db = {
   DoctorProfile,
   StaffProfile,
   LabTechProfile,
+  StaffLeave,
+  LeaveBalance,
+  StaffDocument,
   Patient,
   PatientVital,
   BloodSugarReading,
@@ -378,7 +397,6 @@ const db = {
   ConsultationNote,
   NursingNote,
   MedicalDocument,
-  StaffDocument,
   Appointment,
   MedicalEquipment,
   EquipmentHistory,
