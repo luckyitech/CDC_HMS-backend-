@@ -32,7 +32,7 @@ router.get(
 router.post(
   '/',
   authenticate,
-  authorize('doctor', 'staff'),
+  authorize('doctor', 'nurse', 'staff'),
   [
     body('therapyId')
       .isInt({ min: 1 })
@@ -56,7 +56,7 @@ router.post(
 router.delete(
   '/:id',
   authenticate,
-  authorize('doctor', 'staff'),
+  authorize('doctor', 'nurse', 'staff'),
   glp1WeekNoteController.remove
 );
 

@@ -21,7 +21,7 @@ const glp1SymptomController = require('../controllers/glp1SymptomController');
 router.get(
   '/',
   authenticate,
-  authorize('doctor', 'staff'),
+  authorize('doctor', 'nurse', 'staff'),
   glp1SymptomController.list
 );
 

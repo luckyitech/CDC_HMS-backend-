@@ -195,7 +195,7 @@ router.get('/:uhid/equipment', authenticate, authorize(...CLINICAL_READ_ROLES), 
 // ------------------------------------
 // POST /api/patients/:uhid/equipment — add new equipment
 // ------------------------------------
-router.post('/:uhid/equipment', authenticate, authorize('doctor', 'staff'), [
+router.post('/:uhid/equipment', authenticate, authorize('doctor', 'nurse', 'staff'), [
   body('deviceType').isIn(['pump', 'transmitter']).withMessage('Device type must be pump or transmitter'),
   body('type').isIn(['new', 'pre-owned', 'replacement', 'upgrade']).withMessage('Invalid equipment type'),
   body('serialNo').notEmpty().withMessage('Serial number is required'),
@@ -208,7 +208,7 @@ router.post('/:uhid/equipment', authenticate, authorize('doctor', 'staff'), [
 // ------------------------------------
 // POST /api/patients/:uhid/equipment/:id/replace — replace equipment
 // ------------------------------------
-router.post('/:uhid/equipment/:id/replace', authenticate, authorize('doctor', 'staff'), [
+router.post('/:uhid/equipment/:id/replace', authenticate, authorize('doctor', 'nurse', 'staff'), [
   body('deviceType').isIn(['pump', 'transmitter']).withMessage('Device type must be pump or transmitter'),
   body('reason').notEmpty().withMessage('Reason for replacement is required'),
   body('type').isIn(['new', 'pre-owned', 'replacement', 'upgrade']).withMessage('Invalid equipment type'),
@@ -231,7 +231,7 @@ router.get('/:uhid/carelink-partners', authenticate, authorize(...CLINICAL_READ_
 // ------------------------------------
 // POST /api/patients/:uhid/carelink-partners
 // ------------------------------------
-router.post('/:uhid/carelink-partners', authenticate, authorize('doctor', 'staff'), [
+router.post('/:uhid/carelink-partners', authenticate, authorize('doctor', 'nurse', 'staff'), [
   body('firstName').notEmpty().withMessage('First name is required'),
   body('lastName').notEmpty().withMessage('Last name is required'),
   body('email').isEmail().withMessage('Valid email is required'),
@@ -242,16 +242,16 @@ router.post('/:uhid/carelink-partners', authenticate, authorize('doctor', 'staff
 // ------------------------------------
 // PUT /api/patients/:uhid/carelink-partners/:id
 // ------------------------------------
-router.put('/:uhid/carelink-partners/:id', authenticate, authorize('doctor', 'staff'), careLinkPartnerController.update);
+router.put('/:uhid/carelink-partners/:id', authenticate, authorize('doctor', 'nurse', 'staff'), careLinkPartnerController.update);
 
 // ------------------------------------
 // DELETE /api/patients/:uhid/carelink-partners/:id
 // ------------------------------------
-router.delete('/:uhid/carelink-partners/:id', authenticate, authorize('doctor', 'staff'), careLinkPartnerController.remove);
+router.delete('/:uhid/carelink-partners/:id', authenticate, authorize('doctor', 'nurse', 'staff'), careLinkPartnerController.remove);
 
 // ------------------------------------
 // PUT /api/patients/:uhid/equipment/:id — update equipment
 // ------------------------------------
-router.put('/:uhid/equipment/:id', authenticate, authorize('doctor', 'staff'), equipmentController.update);
+router.put('/:uhid/equipment/:id', authenticate, authorize('doctor', 'nurse', 'staff'), equipmentController.update);
 
 module.exports = router;
