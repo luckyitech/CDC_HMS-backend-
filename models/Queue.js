@@ -21,12 +21,22 @@ const Queue = defineModel('Queue', {
     type: DataTypes.TEXT,
   },
 
-  // Set by the controller when triage starts / ends
+  // Set by the controller when triage starts / ends. Start = the row moves to
+  // 'In Triage' (the nurse opens the vitals form); end = vitals are saved for
+  // this visit (patientController.recordVitals), or, failing that, the row
+  // leaves 'In Triage'. Neither is overwritten once set.
   triageStartTime: {
     type: DataTypes.DATE,
     defaultValue: null,
   },
   triageEndTime: {
+    type: DataTypes.DATE,
+    defaultValue: null,
+  },
+  // When the nurse routed the patient to a doctor — the transition from a
+  // nurse-facing status to 'Awaiting Doctor'. Distinct from triageEndTime:
+  // vitals can be saved well before the patient is actually sent on.
+  sentToDoctorAt: {
     type: DataTypes.DATE,
     defaultValue: null,
   },
