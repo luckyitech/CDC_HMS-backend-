@@ -1,0 +1,6 @@
+.env
+incoming/
+queue/
+bridge.log
+__pycache__/
+*.pyc
