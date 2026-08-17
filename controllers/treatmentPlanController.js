@@ -28,6 +28,9 @@ const formatTreatmentPlan = (plan) => {
     doctorName: p.doctor
       ? `Dr. ${p.doctor.firstName} ${p.doctor.lastName}`
       : null,
+    // See consultationNoteController.formatConsultationNote — visit scoping.
+    doctorId: p.doctorId,
+    createdAt: p.createdAt,
     date: p.date,
     time: p.time,
     diagnosis: p.diagnosis,
