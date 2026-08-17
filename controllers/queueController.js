@@ -6,6 +6,10 @@ const db = require('../models');
 
 const { Queue, Patient, User } = db;
 
+// Statuses in which the patient is with nursing, not a doctor. Leaving one of
+// these for 'Awaiting Doctor' is the nurse → doctor dispatch (sentToDoctorAt).
+const NURSE_FACING_STATUSES = ['Awaiting Triage', 'In Triage', 'Pending Injection'];
+
 // ------------------------------------
 // Consultation session helpers
 // ------------------------------------
@@ -79,6 +83,7 @@ const formatItem = (item, position) => {
                              : null,
     triageStartTime:        q.triageStartTime        || null,
     triageEndTime:          q.triageEndTime          || null,
+    sentToDoctorAt:         q.sentToDoctorAt         || null,
     consultationStartTime:  q.consultationStartTime  || null,
     consultationEndTime:    q.consultationEndTime    || null,
     consultationSessions:   q.consultationSessions   || [],
@@ -92,6 +97,7 @@ const formatItem = (item, position) => {
     addedBy:               q.addedBy               || null,
     triagedBy:             q.triagedBy             || null,
     dischargedBy:          q.dischargedBy          || null,
+    dischargedAt:          q.dischargedAt          || null,
     removedBy:             q.removedBy             || null,
     removalReason:         q.removalReason         || null,
     // Referral audit trail — null on non-referred entries
@@ -236,9 +242,19 @@ const update = async (req, res) => {
       updates.triagedBy       = req.user.name || 'Unknown';
       updates.triageStartTime = new Date();
     }
-    // Capture when triage ends — any transition away from 'In Triage'
-    if (item.status === 'In Triage' && updates.status && updates.status !== 'In Triage') {
+    // Triage end is normally stamped when vitals are saved for the visit
+    // (patientController.recordVitals). Leaving 'In Triage' is the fallback for
+    // a row that was opened but never had vitals saved — never overwrite the
+    // real end time with the later departure time.
+    if (item.status === 'In Triage' && updates.status && updates.status !== 'In Triage' && !item.triageEndTime) {
       updates.triageEndTime = new Date();
+    }
+    // Nurse → doctor dispatch. Only from a nurse-facing status: a doctor's
+    // internal referral and the nurse's "add to bill" merge also send
+    // 'Awaiting Doctor' (from 'With Doctor' / 'Awaiting Doctor') and must not
+    // stamp this. Never overwritten.
+    if (updates.status === 'Awaiting Doctor' && NURSE_FACING_STATUSES.includes(item.status) && !item.sentToDoctorAt) {
+      updates.sentToDoctorAt = new Date();
     }
     // Doctor starts consulting — open a new session entry.
     // For referred patients, item.consultationStartTime is already set by the referring doctor,
@@ -575,4 +591,53 @@ const listAdvisedReferrals = async (req, res) => {
   }
 };
 
-module.exports = { add, list, update, remove, stats, callNext, refer, saveReferralNote, listAdvisedReferrals };
+// ------------------------------------
+// GET /api/queue/patient/:uhid — the patient's visit workflow history: the
+// queue-milestone timestamps (check-in, triage, doctor, completion) for every
+// visit. Merge-aware. Feeds the Visit Timeline in Visit History.
+// ------------------------------------
+const patientHistory = async (req, res) => {
+  try {
+    const { uhid } = req.params;
+    if (!uhid) return error(res, 'uhid is required', 400);
+
+    const { resolvePatient } = require('../utils/patientFamily');
+    const family = await resolvePatient(uhid);
+    if (!family) return error(res, 'Patient not found', 404);
+
+    const rows = await Queue.findAll({
+      where: { PatientId: { [Op.in]: family.patientIds } },
+      attributes: [
+        'id', 'status', 'createdAt',
+        'triageStartTime', 'triageEndTime', 'triagedBy', 'sentToDoctorAt',
+        'consultationStartTime', 'consultationEndTime',
+        'consultationSessions', 'referredAt', 'dischargedAt', 'dischargedBy',
+      ],
+      order: [['createdAt', 'ASC']],
+    });
+
+    const visits = rows.map((q) => ({
+      id:                    q.id,
+      status:                q.status,
+      checkedInAt:           q.createdAt,
+      triageStartTime:       q.triageStartTime,
+      triageEndTime:         q.triageEndTime,
+      triagedBy:             q.triagedBy,          // name snapshot from the JWT at triage
+      sentToDoctorAt:        q.sentToDoctorAt,     // nurse → doctor dispatch
+      consultationStartTime: q.consultationStartTime,
+      consultationEndTime:   q.consultationEndTime,
+      // [{ doctorId, doctorName, startTime, endTime }] — one per doctor seen.
+      doctorSessions:        Array.isArray(q.consultationSessions) ? q.consultationSessions : [],
+      referredAt:            q.referredAt,
+      dischargedAt:          q.dischargedAt,
+      dischargedBy:          q.dischargedBy,
+    }));
+
+    return success(res, { visits });
+  } catch (err) {
+    console.error('Queue.patientHistory error:', err);
+    return error(res, 'Failed to load visit workflow history', 500);
+  }
+};
+
+module.exports = { add, list, update, remove, stats, callNext, refer, saveReferralNote, listAdvisedReferrals, patientHistory };

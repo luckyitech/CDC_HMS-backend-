@@ -74,10 +74,12 @@ the columns and the clinical notes attributed by them.
 
 #### Outstanding before this can be marked Completed
 
-- [ ] Run `npm test` against a real database
+- [x] Run `npm test` against a real database — done 2026-08-17 during the round-2
+      integration: 144 pass / 5 fail, the 5 identical to `main`'s own baseline
 - [ ] Clinical walkthrough: admit and refer both routing through the billing modal
 - [ ] Re-apply the branch's User Management tab consolidation to `StaffFile.jsx`
-- [ ] Add `updatedById` to `StaffDocuments` (edits to an HR record are not attributable)
+- [x] Add `updatedById` to `StaffDocuments` — done 2026-08-17, with a `lastEditor`
+      association and JWT attribution in the update handler
 - [ ] Decide whether Save & Print should version each save. Today the note is a
       column on the queue row, so a second save overwrites the first and one visit
       holds at most one admission note and one referral note. A separate table
@@ -86,6 +88,77 @@ the columns and the clinical notes attributed by them.
       `routes/inpatientBilling.js`, whose list endpoints are not inpatient-scoped —
       a granted user sees outpatient radiology orders too. Narrow the scope or the
       capability.
+
+---
+
+### HMS-improvements integration — round 2
+
+- **Branch:** `integration/hms-improvements-r2` (both repos), merged to `main`
+- **Status:** Implemented and merged — **awaiting the clinical walkthrough**
+- **Started / merged:** 2026-08-17
+- **Plan:** project docs `HMS-improvements-merge-plan-round2.md` and
+  `HMS-improvements-r2-integration-results.md`
+- **Description:** Takes the genuinely new work from `HMS-improvements`: nursing
+  notes (the DAR Kardex), the visit workflow history endpoint, triage timestamps
+  and vitals attribution, and on the frontend the unified patient file, the
+  nursing workflow, the visit timeline and the PWA stability fixes.
+
+`HMS-improvements` was never rebased on main, so for the second round running it
+carried commits whose equivalents main already had in a better shape. Two were
+dropped:
+
+- `f3648ea` — the staff-document slice, dropped again for the round-1 reasons,
+  and it drags a migration that collides with main's `20260811000001`.
+- `f0c4fb3` — a second role vocabulary (`constants/roles.js` / `RECORD_READERS`)
+  solving the nurse-403 problem main had already solved with
+  `CLINICAL_READ_ROLES`. Its set omits `lab` and would have re-opened diagnoses,
+  assessments and physical exams to `staff`, undoing `3cfe768`. The write gates
+  it carried were re-applied by hand in main's vocabulary instead — nurse added
+  to 13 write gates and 7 read gates, adding `'nurse'` only, so no gate lost a
+  role.
+
+Backend:
+- Nursing notes vertical slice — model, controller, routes, `GET /api/queue/patient/:uhid`
+- Migrations `20260813000001`, `20260816000001`, `20260817000001`, `20260817000002`,
+  all guarded and idempotent, no timestamp collisions with main
+- `deletedBy` / `deletedAt` on `NursingNotes` (`20260817000003`) — a soft-deleted
+  clinical note now records who removed it and when
+- `updatedById` on `StaffDocuments` (`20260817000004`)
+
+Frontend:
+- Unified patient file: shared tab set plus a queue-gated, role-specific live tab
+  (doctor → Today's Consultation, staff/nurse → Nursing, admin → neither)
+- Visit History gains Doctor's Notes / Nursing / Visit Timeline per day
+- Doctor's-notes pagination fix — Visit History fetched one page while the API
+  pages at 20, so a patient with more than 20 notes silently showed only the 20
+  most recent. It now walks every page.
+
+**Verification done:** both cherry-picks clean; all migrations applied to a
+database seeded at main state and re-run as no-ops; `NursingNotes` schema and FKs
+checked; delete- and edit-attribution exercised end-to-end against a live MySQL;
+backend `npm test` **identical to main's baseline** (144 pass / 5 fail — the same
+5 fail on `main` today); frontend builds and lints clean; notes pagination
+unit-tested across page boundaries and failure cases.
+
+#### Outstanding before this can be marked Completed
+
+- [ ] **Clinical walkthrough — not yet done.** Open the Patient File as doctor,
+      nurse, staff and admin; run a live visit through triage → Kardex → send to
+      doctor → consultation → billing; check the Visit Timeline and every print
+      button.
+- [ ] Run `npm run migrate` against a copy of the real dev database. The
+      sandbox run used a schema built by `sequelize.sync()` at main state, which
+      is close to but not identical to a database grown migration-by-migration.
+- [ ] Assessments, physical exams, treatment plans and prescriptions in Visit
+      History still use the API's `limit = 20` default (pre-existing on main, not
+      introduced here). The same `fetchAllNotes` helper generalises to them.
+- [ ] `3cfe768` narrowed the assessment and physical-exam reads to
+      `'doctor', 'admin'`. Its message describes restricting `staff`, but
+      replacing `CLINICAL_READ_ROLES` with a literal also removed `nurse` and
+      `lab`. Confirm that is what was intended — a nurse cannot currently read
+      assessments or physical exams in the unified Patient File.
+- [ ] `main` has 5 failing tests (permission grant-escape, stock ledger rules).
+      They predate this work and fail identically with or without it.
 
 ---
 

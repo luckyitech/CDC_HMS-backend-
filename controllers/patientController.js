@@ -1,6 +1,7 @@
 const { Op } = require('sequelize');
 const { success } = require('../utils/response');
 const { clinicToday, clinicStartOfDay } = require('../utils/clinicTime');
+const { broadcast } = require('../utils/sseManager');
 const db = require('../models');
 const { resolvePatient } = require('../utils/patientFamily');
 const sequelize = require('../config/database');
@@ -21,10 +22,17 @@ const {
 // Helpers
 // ------------------------------------
 
+// Join used wherever vitals are read for display, so formatVitals can name the
+// clinician who took them. Same shape everywhere; add it to any new read site.
+const recordedByInclude = { model: User, as: 'recordedByUser', attributes: ['firstName', 'lastName'] };
+
+const clinicianName = (u) => (u ? `${u.firstName} ${u.lastName}`.trim() : null);
+
 // Formats a PatientVital row into the response shape with units.
 const formatVitals = (vital) => {
   if (!vital) return null;
   return {
+    id:                vital.id,
     bp:                vital.bp               !== null && vital.bp               !== undefined ? `${vital.bp} mmHg`           : null,
     heartRate:         vital.heartRate        !== null && vital.heartRate        !== undefined ? `${vital.heartRate} bpm`     : null,
     weight:            vital.weight           !== null && vital.weight           !== undefined ? `${vital.weight} kg`         : null,
@@ -39,7 +47,50 @@ const formatVitals = (vital) => {
     ketones:           vital.ketones           !== null && vital.ketones           !== undefined ? `${vital.ketones} mmol/L`     : null,
     chiefComplaint:    vital.chiefComplaint    || null,
     recordedAt:        vital.recordedAt || null,
+    // Who took them — null on rows from before recordedById existed, or when
+    // the query didn't join recordedByUser.
+    recordedById:      vital.recordedById ?? null,
+    recordedBy:        clinicianName(vital.recordedByUser),
   };
+};
+
+// A freshly created row has recordedById but no joined user; re-read it with the
+// join so the 201 response names the clinician like every other vitals read.
+const withRecordedBy = (vital) =>
+  PatientVital.findByPk(vital.id, { include: [recordedByInclude] }).then((v) => v || vital);
+
+// Nurse-facing statuses — the patient is with nursing, not a doctor. Mirrors
+// NURSE_FACING_STATUSES in queueController.
+const NURSE_FACING_STATUSES = ['Awaiting Triage', 'In Triage', 'Pending Injection'];
+
+// Saving triage vitals is what completes triage for a visit. The Nursing-tab
+// flow no longer passes through the 'In Triage' status transition that used to
+// stamp these, so stamp them here, off the vitals save itself:
+//   triageEndTime — now, if not already set (a second triage doesn't move it)
+//   triagedBy     — the saving clinician's name, if not already set
+// triageStartTime is NOT invented here: it is only stamped when the row moves to
+// 'In Triage' (the nurse opening the form). A row without it simply has no
+// triage duration, which the analytics already skip; a fake start would put a
+// zero-minute triage into the averages.
+// Merge-aware: the live row is looked up across the whole patient family.
+const stampTriageOnQueue = async (req) => {
+  const row = await Queue.findOne({
+    where: {
+      PatientId: { [Op.in]: req.patientIds },
+      status:    { [Op.in]: NURSE_FACING_STATUSES },
+      createdAt: { [Op.gte]: clinicStartOfDay() },
+    },
+    order: [['createdAt', 'DESC']],
+  });
+  if (!row) return null;
+
+  const updates = {};
+  if (!row.triageEndTime) updates.triageEndTime = new Date();
+  if (!row.triagedBy)     updates.triagedBy     = req.user.name || 'Unknown';
+  if (Object.keys(updates).length === 0) return row;
+  await row.update(updates);
+  broadcast('queue_updated');   // same signal every other queue write sends
+  return row;
 };
 
 // Compute age from dateOfBirth — always accurate, no stale DB value
@@ -146,6 +197,7 @@ const fetchFullPatient = (patientId) => {
     Patient.findByPk(patientId, { include: [doctorInclude, mergedIntoInclude] }),
     PatientVital.findOne({
       where: { PatientId: patientId },
+      include: [recordedByInclude],
       order: [['recordedAt', 'DESC']],
     }),
     Appointment.findOne({
@@ -401,6 +453,7 @@ const list = async (req, res) => {
   const [vitals, nextAppts, lastQueues] = await Promise.all([
     PatientVital.findAll({
       where: { PatientId: patientIds },
+      include: [recordedByInclude],
       order: [['recordedAt', 'DESC']],
     }),
     Appointment.findAll({
@@ -689,12 +742,19 @@ const recordVitals = async (req, res) => {
 
   const vital = await PatientVital.create({
     ...req.body,
-    PatientId: req.patient.id,
+    PatientId:    req.patient.id,
+    recordedById: req.user.id,   // from the JWT — after the spread so the body can't set it
     bmi,
     waistHeightRatio,
   });
 
-  return success(res, formatVitals(vital), 201);
+  // Saving vitals IS triage completing for this visit: stamp the live queue row.
+  // Fire-and-forget would hide failures; awaited, but a failure here must not
+  // undo a saved vitals record, so it's caught and logged rather than surfaced.
+  await stampTriageOnQueue(req).catch((err) =>
+    console.error('PatientVital.recordVitals stampTriageOnQueue error:', err));
+
+  return success(res, formatVitals(await withRecordedBy(vital)), 201);
 };
 
 // ------------------------------------
@@ -718,12 +778,15 @@ const recordVitalsDoctor = async (req, res) => {
 
   const vital = await PatientVital.create({
     ...req.body,
-    PatientId: req.patient.id,
+    PatientId:        req.patient.id,
+    recordedById:     req.user.id,   // from the JWT — after the spread so the body can't set it
     bmi:              bmi              ?? req.body.bmi              ?? null,
     waistHeightRatio: waistHeightRatio ?? req.body.waistHeightRatio ?? null,
   });
 
-  return success(res, formatVitals(vital), 201);
+  // No queue stamping here: a doctor completing missed vitals mid-consultation
+  // is not triage.
+  return success(res, formatVitals(await withRecordedBy(vital)), 201);
 };
 
 // ------------------------------------
@@ -732,6 +795,7 @@ const recordVitalsDoctor = async (req, res) => {
 const getVitals = async (req, res) => {
   const latestVital = await PatientVital.findOne({
     where: { PatientId: { [Op.in]: req.patientIds } },
+    include: [recordedByInclude],
     order: [['recordedAt', 'DESC']],
   });
 
@@ -744,6 +808,7 @@ const getVitals = async (req, res) => {
 const getVitalsHistory = async (req, res) => {
   const vitals = await PatientVital.findAll({
     where: { PatientId: { [Op.in]: req.patientIds } },
+    include: [recordedByInclude],
     order: [['recordedAt', 'DESC']],
   });
 

@@ -57,14 +57,14 @@ router.post('/dispense', authenticate, authorizeStock, [
 ], movements.dispense);
 
 // Point-of-care use — clinical roles, NOT authorizeStock (see header note).
-router.post('/use', authenticate, authorize('doctor', 'staff', 'admin'), [
+router.post('/use', authenticate, authorize('doctor', 'nurse', 'staff', 'admin'), [
   body('locationId').isInt().withMessage('locationId is required'),
   qty(),
   validate,
 ], movements.use);
 
 // FEFO suggestion for the checkout nudge — clinical/reception roles.
-router.get('/fefo-suggestion', authenticate, authorize('doctor', 'staff', 'admin'), movements.fefoSuggestion);
+router.get('/fefo-suggestion', authenticate, authorize('doctor', 'nurse', 'staff', 'admin'), movements.fefoSuggestion);
 
 // A patient's dispensing history — patient-care context, every internal role
 // (exposes only this patient's own rows), not authorizeStock. It renders inside
@@ -130,7 +130,7 @@ router.get('/dashboard', authenticate, authorizeStock, movements.dashboard);
 
 // Record-Use options — clinical roles, NOT authorizeStock (matches POST /use):
 // only what point-of-care recording needs, nothing more.
-router.get('/use-options', authenticate, authorize('doctor', 'staff', 'admin'), movements.useOptions);
+router.get('/use-options', authenticate, authorize('doctor', 'nurse', 'staff', 'admin'), movements.useOptions);
 
 // ---------- Room balancing (par levels, RAG grid, restock, stocktake) ----------
 router.get('/par-levels',       authenticate, authorizeStock, rooms.listParLevels);

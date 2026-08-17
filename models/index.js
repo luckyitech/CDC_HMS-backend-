@@ -23,6 +23,7 @@ const TreatmentPlan       = require('./TreatmentPlan');
 const PhysicalExamination = require('./PhysicalExamination');
 const InitialAssessment   = require('./InitialAssessment');
 const ConsultationNote    = require('./ConsultationNote');
+const NursingNote         = require('./NursingNote');
 const MedicalDocument     = require('./MedicalDocument');
 const Appointment         = require('./Appointment');
 const MedicalEquipment    = require('./MedicalEquipment');
@@ -92,7 +93,8 @@ LeaveBalance.belongsTo(User);
 
 User.hasMany(StaffDocument);
 StaffDocument.belongsTo(User);
-StaffDocument.belongsTo(User, { as: 'uploader', foreignKey: 'uploadedById' });
+StaffDocument.belongsTo(User, { as: 'uploader',    foreignKey: 'uploadedById' });
+StaffDocument.belongsTo(User, { as: 'lastEditor',  foreignKey: 'updatedById'  });
 
 // --- Patient ↔ User (two links, aliases required) ---
 User.hasOne(Patient);                                                          // patient's own login
@@ -106,6 +108,9 @@ Patient.hasMany  (Patient, { as: 'mergedPatients', foreignKey: 'mergedIntoId' })
 // --- Patient children (one-to-many) ---
 Patient.hasMany(PatientVital);
 PatientVital.belongsTo(Patient);
+// Who took the vitals — from the JWT at write time (see recordVitals). Aliased
+// camelCase key, ID not name, so the display name follows the user record.
+PatientVital.belongsTo(User, { as: 'recordedByUser', foreignKey: 'recordedById' });
 
 // Patient diagnoses — tracked list on the consultation summary panel
 Patient.hasMany(PatientDiagnosis);
@@ -143,6 +148,11 @@ InitialAssessment.belongsTo(User, { as: 'doctor', foreignKey: 'doctorId' });
 Patient.hasMany(ConsultationNote);
 ConsultationNote.belongsTo(Patient);
 ConsultationNote.belongsTo(User, { as: 'doctor', foreignKey: 'doctorId' });
+
+Patient.hasMany(NursingNote);
+NursingNote.belongsTo(Patient);
+NursingNote.belongsTo(User, { as: 'author',        foreignKey: 'authorId'  });
+NursingNote.belongsTo(User, { as: 'deletedByUser', foreignKey: 'deletedBy' });
 
 Patient.hasMany(MedicalDocument);
 MedicalDocument.belongsTo(Patient);
@@ -385,6 +395,7 @@ const db = {
   PhysicalExamination,
   InitialAssessment,
   ConsultationNote,
+  NursingNote,
   MedicalDocument,
   Appointment,
   MedicalEquipment,

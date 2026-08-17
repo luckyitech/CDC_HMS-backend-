@@ -95,7 +95,7 @@ router.get(
 router.get(
   '/',
   authenticate,
-  authorize('lab', 'doctor', 'staff', 'admin'),
+  authorize('lab', 'nurse', 'doctor', 'staff', 'admin'),
   labTestController.list
 );
 
@@ -106,7 +106,7 @@ router.get(
 router.get(
   '/:id',
   authenticate,
-  authorize('lab', 'doctor', 'staff', 'admin'),
+  authorize('lab', 'nurse', 'doctor', 'staff', 'admin'),
   labTestController.getOne
 );
 

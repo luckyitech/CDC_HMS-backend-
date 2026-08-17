@@ -203,6 +203,9 @@ const update = async (req, res) => {
 
     if (!Object.keys(updates).length) return error(res, 'No changes supplied', 400);
 
+    // Attribution comes from the JWT, never the request body.
+    updates.updatedById = req.user.id;
+
     await document.update(updates);
     await document.reload({ include: [{ model: User, as: 'uploader', attributes: ['firstName', 'lastName'] }] });
 

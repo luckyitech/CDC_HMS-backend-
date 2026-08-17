@@ -24,7 +24,7 @@ const glp1TherapyController = require('../controllers/glp1TherapyController');
 router.get(
   '/',
   authenticate,
-  authorize('doctor', 'staff'),
+  authorize('doctor', 'nurse', 'staff'),
   glp1TherapyController.list
 );
 
@@ -36,7 +36,7 @@ router.get(
 router.get(
   '/:id/full',
   authenticate,
-  authorize('doctor', 'staff'),
+  authorize('doctor', 'nurse', 'staff'),
   glp1TherapyController.getFull
 );
 
