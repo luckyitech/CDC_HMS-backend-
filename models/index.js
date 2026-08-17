@@ -87,6 +87,9 @@ Patient.hasMany  (Patient, { as: 'mergedPatients', foreignKey: 'mergedIntoId' })
 // --- Patient children (one-to-many) ---
 Patient.hasMany(PatientVital);
 PatientVital.belongsTo(Patient);
+// Who took the vitals — from the JWT at write time (see recordVitals). Aliased
+// camelCase key, ID not name, so the display name follows the user record.
+PatientVital.belongsTo(User, { as: 'recordedByUser', foreignKey: 'recordedById' });
 
 // Patient diagnoses — tracked list on the consultation summary panel
 Patient.hasMany(PatientDiagnosis);

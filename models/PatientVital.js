@@ -1,7 +1,9 @@
 const { defineModel, DataTypes } = require('../utils/defineModel');
 
 const PatientVital = defineModel('PatientVital', {
-  // patientId is added automatically by the association in index.js
+  // PatientId    — added by Patient.hasMany(PatientVital) in index.js
+  // recordedById — added by PatientVital.belongsTo(User, { as: 'recordedByUser' });
+  //                stamped from the JWT by the controller, never from the client
 
   bp: {
     type: DataTypes.STRING,     // "120/80" — stored without units
