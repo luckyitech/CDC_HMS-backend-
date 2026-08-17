@@ -3,16 +3,18 @@ const router = express.Router();
 const { body } = require('express-validator');
 const validate = require('../middleware/validate');
 const { authenticate, authorize } = require('../middleware/auth');
+const { CLINICAL_READ_ROLES } = require('../constants/permissions');
 const assessmentController = require('../controllers/assessmentController');
 
 // ====================================
 // UNDERSTANDING AUTHORIZATION
 // ====================================
-// Initial Assessment routes are doctor-only:
+// Initial Assessment writes are doctor-only; reads are open to every internal
+// role (renders in the patient file's Visit History):
 //
 // CREATE (POST):     Only DOCTORS can create initial assessments
-// LIST (GET):        DOCTORS and ADMINS can view assessments
-// SINGLE (GET):      DOCTORS and ADMINS can view a single assessment
+// LIST (GET):        Every internal role can view assessments
+// SINGLE (GET):      Every internal role can view a single assessment
 // UPDATE (PUT):      Only DOCTORS can update assessments
 // DELETE (DELETE):   DOCTORS and ADMINS can delete assessments
 
@@ -47,24 +49,24 @@ router.post(
 // ------------------------------------
 // GET /api/assessments — List initial assessments
 // ------------------------------------
-// Authorization: Doctor, Admin
+// Authorization: every internal role
 // REQUIRED query parameter: uhid (Patient UHID)
 // Example: GET /api/assessments?uhid=CDC001&page=1&limit=20
 router.get(
   '/',
   authenticate,
-  authorize('doctor', 'admin'),
+  authorize(...CLINICAL_READ_ROLES),
   assessmentController.list
 );
 
 // ------------------------------------
 // GET /api/assessments/:id — Single initial assessment
 // ------------------------------------
-// Authorization: Doctor, Admin
+// Authorization: every internal role
 router.get(
   '/:id',
   authenticate,
-  authorize('doctor', 'admin'),
+  authorize(...CLINICAL_READ_ROLES),
   assessmentController.getOne
 );
 

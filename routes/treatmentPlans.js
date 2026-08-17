@@ -3,18 +3,20 @@ const router = express.Router();
 const { body } = require('express-validator');
 const validate = require('../middleware/validate');
 const { authenticate, authorize } = require('../middleware/auth');
+const { CLINICAL_READ_ROLES } = require('../constants/permissions');
 const treatmentPlanController = require('../controllers/treatmentPlanController');
 
 // ====================================
 // UNDERSTANDING AUTHORIZATION
 // ====================================
-// Treatment Plan routes have specific role requirements:
+// Treatment Plan writes are doctor-only; reads are open to every internal
+// role (renders in the patient file's Visit History):
 //
 // CREATE (POST):     Only DOCTORS can create treatment plans
-// LIST (GET):        DOCTORS and STAFF can view treatment plans
+// LIST (GET):        Every internal role can view treatment plans
 // UPDATE (PUT):      Only DOCTORS can update treatment plan status
 // DELETE (DELETE):   Only DOCTORS and ADMINS can delete treatment plans
-// STATS (GET):       DOCTORS need dashboard statistics
+// STATS (GET):       Every internal role needs dashboard statistics
 
 // ------------------------------------
 // POST /api/treatment-plans — Create new treatment plan
@@ -50,31 +52,31 @@ router.post(
 router.get(
   '/stats',
   authenticate,
-  authorize('doctor', 'admin'),
+  authorize(...CLINICAL_READ_ROLES),
   treatmentPlanController.stats
 );
 
 // ------------------------------------
 // GET /api/treatment-plans — List treatment plans
 // ------------------------------------
-// Authorization: Doctor, Staff
+// Authorization: every internal role
 // REQUIRED query parameter: uhid (Patient UHID)
 // Example: GET /api/treatment-plans?uhid=CDC001
 router.get(
   '/',
   authenticate,
-  authorize('doctor', 'staff', 'admin'),
+  authorize(...CLINICAL_READ_ROLES),
   treatmentPlanController.list
 );
 
 // ------------------------------------
 // GET /api/treatment-plans/:id — Single treatment plan
 // ------------------------------------
-// Authorization: Doctor, Staff
+// Authorization: every internal role
 router.get(
   '/:id',
   authenticate,
-  authorize('doctor', 'staff', 'admin'),
+  authorize(...CLINICAL_READ_ROLES),
   treatmentPlanController.getOne
 );
 
