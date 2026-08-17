@@ -61,6 +61,16 @@ const queueIncludes = [
   { model: User,    as: 'assignedDoctor', attributes: ['firstName', 'lastName'] },
 ];
 
+// JSON-array columns come back parsed on MySQL 8 but as raw strings on MariaDB
+// (mysql2 leaves LONGTEXT-backed JSON alone). Downstream code spreads these
+// arrays to merge charges — spreading a string splits it into characters and
+// writes a corrupted bill back. Normalise once, here, whatever the driver did.
+const jsonArray = (v) => {
+  if (Array.isArray(v)) return v;
+  if (typeof v === 'string') { try { const p = JSON.parse(v); return Array.isArray(p) ? p : []; } catch { return []; } }
+  return [];
+};
+
 // Shape one queue row into the API response.
 // position = 1-based index among Awaiting Triage items (null for all other statuses).
 const formatItem = (item, position) => {
@@ -86,13 +96,13 @@ const formatItem = (item, position) => {
     sentToDoctorAt:         q.sentToDoctorAt         || null,
     consultationStartTime:  q.consultationStartTime  || null,
     consultationEndTime:    q.consultationEndTime    || null,
-    consultationSessions:   q.consultationSessions   || [],
-    selectedCharges:       q.selectedCharges       || [],
-    selectedProcedures:    q.selectedProcedures    || [],
+    consultationSessions:   jsonArray(q.consultationSessions),
+    selectedCharges:       jsonArray(q.selectedCharges),
+    selectedProcedures:    jsonArray(q.selectedProcedures),
     doctorNotes:           q.doctorNotes           || null,
-    finalCharges:          q.finalCharges          || [],
-    finalProcedures:       q.finalProcedures       || [],
-    finalSupplies:         q.finalSupplies         || [],
+    finalCharges:          jsonArray(q.finalCharges),
+    finalProcedures:       jsonArray(q.finalProcedures),
+    finalSupplies:         jsonArray(q.finalSupplies),
     dischargeComment:      q.dischargeComment      || null,
     addedBy:               q.addedBy               || null,
     triagedBy:             q.triagedBy             || null,
