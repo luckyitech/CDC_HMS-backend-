@@ -3,6 +3,7 @@ const router = express.Router();
 const { body } = require('express-validator');
 const validate = require('../middleware/validate');
 const { authenticate, authorize } = require('../middleware/auth');
+const { RECORD_READERS } = require('../constants/roles');
 const prescriptionController = require('../controllers/prescriptionController');
 
 // ====================================
@@ -76,7 +77,7 @@ router.get(
 // ------------------------------------
 // GET /api/prescriptions — List with filters
 // ------------------------------------
-// Authorization: Doctor, Staff, Patient
+// Authorization: every Patient-File role (doctor, nurse, staff, admin) + patient (own records)
 // How filtering works:
 // - Doctors can see all prescriptions (for their patients)
 // - Staff can see all (for pharmacy/admin tasks)
@@ -84,14 +85,14 @@ router.get(
 router.get(
   '/',
   authenticate,
-  authorize('doctor', 'staff', 'admin', 'patient'),
+  authorize(...RECORD_READERS, 'patient'),
   prescriptionController.list
 );
 
 // ------------------------------------
 // GET /api/prescriptions/:id — Single prescription
 // ------------------------------------
-// Authorization: Doctor, Staff, Patient
+// Authorization: every Patient-File role (doctor, nurse, staff, admin) + patient (own records)
 // Note: In a real system, you'd add middleware to check if:
 // - Patient is viewing their own prescription
 // - Doctor is viewing their patient's prescription
@@ -99,7 +100,7 @@ router.get(
 router.get(
   '/:id',
   authenticate,
-  authorize('doctor', 'staff', 'admin', 'patient'),
+  authorize(...RECORD_READERS, 'patient'),
   prescriptionController.getOne
 );
 

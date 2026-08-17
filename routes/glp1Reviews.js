@@ -3,6 +3,7 @@ const router = express.Router();
 const { body } = require('express-validator');
 const validate = require('../middleware/validate');
 const { authenticate, authorize } = require('../middleware/auth');
+const { RECORD_READERS } = require('../constants/roles');
 const glp1ReviewController = require('../controllers/glp1ReviewController');
 
 // ====================================
@@ -22,23 +23,23 @@ const glp1ReviewController = require('../controllers/glp1ReviewController');
 // ------------------------------------
 // GET /api/glp1-reviews — List reviews
 // ------------------------------------
-// Authorization: Doctor, Staff
+// Authorization: every Patient-File role (doctor, nurse, staff, admin)
 // Query: ?therapyId= or ?uhid= (one is required), ?includeDeleted=true
 router.get(
   '/',
   authenticate,
-  authorize('doctor', 'staff'),
+  authorize(...RECORD_READERS),
   glp1ReviewController.list
 );
 
 // ------------------------------------
 // POST /api/glp1-reviews — Record a monitoring visit
 // ------------------------------------
-// Authorization: Doctor only
+// Authorization: Doctor, Nurse, Staff
 router.post(
   '/',
   authenticate,
-  authorize('doctor', 'staff'),
+  authorize('doctor', 'nurse', 'staff'),
   [
     body('therapyId')
       .isInt({ min: 1 })
@@ -103,12 +104,12 @@ router.post(
 // ------------------------------------
 // PUT /api/glp1-reviews/:id — Amend a review
 // ------------------------------------
-// Authorization: Doctor only
+// Authorization: Doctor, Nurse, Staff
 // A reason is required every time, including on the day the review was written.
 router.put(
   '/:id',
   authenticate,
-  authorize('doctor', 'staff'),
+  authorize('doctor', 'nurse', 'staff'),
   [
     body('amendmentReason')
       .trim()

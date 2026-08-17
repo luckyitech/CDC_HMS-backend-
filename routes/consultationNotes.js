@@ -3,6 +3,7 @@ const router = express.Router();
 const { body } = require('express-validator');
 const validate = require('../middleware/validate');
 const { authenticate, authorize } = require('../middleware/auth');
+const { RECORD_READERS } = require('../constants/roles');
 const consultationNoteController = require('../controllers/consultationNoteController');
 
 // ====================================
@@ -56,22 +57,22 @@ router.post(
 // ------------------------------------
 // GET /api/consultation-notes — List consultation notes
 // ------------------------------------
-// Authorization: Doctor, Staff (staff view is read-only — enforced on frontend)
+// Authorization: every Patient-File role (doctor, nurse, staff, admin)
 router.get(
   '/',
   authenticate,
-  authorize('doctor', 'staff'),
+  authorize(...RECORD_READERS),
   consultationNoteController.list
 );
 
 // ------------------------------------
 // GET /api/consultation-notes/:id — Get single consultation note
 // ------------------------------------
-// Authorization: Doctor, Staff
+// Authorization: every Patient-File role (doctor, nurse, staff, admin)
 router.get(
   '/:id',
   authenticate,
-  authorize('doctor', 'staff'),
+  authorize(...RECORD_READERS),
   consultationNoteController.getById
 );
 

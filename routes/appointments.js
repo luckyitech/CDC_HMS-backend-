@@ -3,6 +3,7 @@ const router = express.Router();
 const { body } = require('express-validator');
 const validate = require('../middleware/validate');
 const { authenticate, authorize } = require('../middleware/auth');
+const { RECORD_READERS } = require('../constants/roles');
 const appointmentController = require('../controllers/appointmentController');
 
 // ====================================
@@ -66,13 +67,13 @@ router.post(
 // ------------------------------------
 // GET /api/appointments — List appointments
 // ------------------------------------
-// Authorization: Patient (own), Doctor, Staff
+// Authorization: every Patient-File role (doctor, nurse, staff, admin) + patient (own records)
 // Patient role: Automatically filtered to their own appointments
 // Optional query parameters: uhid, doctor, date, status
 router.get(
   '/',
   authenticate,
-  authorize('patient', 'doctor', 'staff', 'admin'),
+  authorize('patient', ...RECORD_READERS),
   appointmentController.list
 );
 

@@ -3,6 +3,7 @@ const router = express.Router();
 const { body } = require('express-validator');
 const validate = require('../middleware/validate');
 const { authenticate, authorize } = require('../middleware/auth');
+const { RECORD_READERS } = require('../constants/roles');
 const glp1TherapyController = require('../controllers/glp1TherapyController');
 
 // ====================================
@@ -19,24 +20,24 @@ const glp1TherapyController = require('../controllers/glp1TherapyController');
 // ------------------------------------
 // GET /api/glp1-therapies — List a patient's courses
 // ------------------------------------
-// Authorization: Doctor, Staff
+// Authorization: every Patient-File role (doctor, nurse, staff, admin)
 // Query: ?uhid= (required), ?status=Active
 router.get(
   '/',
   authenticate,
-  authorize('doctor', 'staff'),
+  authorize(...RECORD_READERS),
   glp1TherapyController.list
 );
 
 // ------------------------------------
 // GET /api/glp1-therapies/:id/full — Everything the Tools panel needs, in one request
 // ------------------------------------
-// Authorization: Doctor, Staff
+// Authorization: every Patient-File role (doctor, nurse, staff, admin)
 // Declared before /:id-style routes so 'full' is never read as an id.
 router.get(
   '/:id/full',
   authenticate,
-  authorize('doctor', 'staff'),
+  authorize(...RECORD_READERS),
   glp1TherapyController.getFull
 );
 

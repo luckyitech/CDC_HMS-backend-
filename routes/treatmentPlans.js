@@ -3,6 +3,7 @@ const router = express.Router();
 const { body } = require('express-validator');
 const validate = require('../middleware/validate');
 const { authenticate, authorize } = require('../middleware/auth');
+const { RECORD_READERS } = require('../constants/roles');
 const treatmentPlanController = require('../controllers/treatmentPlanController');
 
 // ====================================
@@ -57,24 +58,24 @@ router.get(
 // ------------------------------------
 // GET /api/treatment-plans — List treatment plans
 // ------------------------------------
-// Authorization: Doctor, Staff
+// Authorization: every Patient-File role (doctor, nurse, staff, admin)
 // REQUIRED query parameter: uhid (Patient UHID)
 // Example: GET /api/treatment-plans?uhid=CDC001
 router.get(
   '/',
   authenticate,
-  authorize('doctor', 'staff', 'admin'),
+  authorize(...RECORD_READERS),
   treatmentPlanController.list
 );
 
 // ------------------------------------
 // GET /api/treatment-plans/:id — Single treatment plan
 // ------------------------------------
-// Authorization: Doctor, Staff
+// Authorization: every Patient-File role (doctor, nurse, staff, admin)
 router.get(
   '/:id',
   authenticate,
-  authorize('doctor', 'staff', 'admin'),
+  authorize(...RECORD_READERS),
   treatmentPlanController.getOne
 );
 

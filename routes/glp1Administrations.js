@@ -3,6 +3,7 @@ const router = express.Router();
 const { body } = require('express-validator');
 const validate = require('../middleware/validate');
 const { authenticate, authorize } = require('../middleware/auth');
+const { RECORD_READERS } = require('../constants/roles');
 const glp1AdministrationController = require('../controllers/glp1AdministrationController');
 
 // ====================================
@@ -21,7 +22,7 @@ const glp1AdministrationController = require('../controllers/glp1AdministrationC
 router.get(
   '/',
   authenticate,
-  authorize('doctor', 'staff'),
+  authorize(...RECORD_READERS),
   glp1AdministrationController.list
 );
 
@@ -32,7 +33,7 @@ router.get(
 router.post(
   '/',
   authenticate,
-  authorize('doctor', 'staff'),
+  authorize('doctor', 'nurse', 'staff'),
   [
     body('therapyId')
       .isInt({ min: 1 })
@@ -70,7 +71,7 @@ router.post(
 router.delete(
   '/:id',
   authenticate,
-  authorize('doctor', 'staff'),
+  authorize('doctor', 'nurse', 'staff'),
   glp1AdministrationController.remove
 );
 

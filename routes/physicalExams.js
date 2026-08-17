@@ -3,6 +3,7 @@ const router = express.Router();
 const { body } = require('express-validator');
 const validate = require('../middleware/validate');
 const { authenticate, authorize } = require('../middleware/auth');
+const { RECORD_READERS } = require('../constants/roles');
 const physicalExamController = require('../controllers/physicalExamController');
 
 // ====================================
@@ -51,25 +52,25 @@ router.post(
 // ------------------------------------
 // GET /api/physical-exams — List physical examinations
 // ------------------------------------
-// Authorization: Doctor
+// Authorization: every Patient-File role (doctor, nurse, staff, admin)
 // REQUIRED query parameter: uhid (Patient UHID)
 // OPTIONAL query parameter: search (searches across all fields)
 // Example: GET /api/physical-exams?uhid=CDC001&search=cardiovascular
 router.get(
   '/',
   authenticate,
-  authorize('doctor', 'admin'),
+  authorize(...RECORD_READERS),
   physicalExamController.list
 );
 
 // ------------------------------------
 // GET /api/physical-exams/:id — Single physical examination
 // ------------------------------------
-// Authorization: Doctor
+// Authorization: every Patient-File role (doctor, nurse, staff, admin)
 router.get(
   '/:id',
   authenticate,
-  authorize('doctor', 'admin'),
+  authorize(...RECORD_READERS),
   physicalExamController.getOne
 );
 
