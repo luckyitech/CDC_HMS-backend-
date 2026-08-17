@@ -93,7 +93,8 @@ LeaveBalance.belongsTo(User);
 
 User.hasMany(StaffDocument);
 StaffDocument.belongsTo(User);
-StaffDocument.belongsTo(User, { as: 'uploader', foreignKey: 'uploadedById' });
+StaffDocument.belongsTo(User, { as: 'uploader',    foreignKey: 'uploadedById' });
+StaffDocument.belongsTo(User, { as: 'lastEditor',  foreignKey: 'updatedById'  });
 
 // --- Patient ↔ User (two links, aliases required) ---
 User.hasOne(Patient);                                                          // patient's own login

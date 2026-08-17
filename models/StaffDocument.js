@@ -76,6 +76,12 @@ const StaffDocument = defineModel('StaffDocument', {
     type: DataTypes.INTEGER,
     defaultValue: null,
   },
+  // Who last edited the record (category, visibility, expiry or notes).
+  // updatedAt comes from the model's timestamps; this is the missing actor.
+  updatedById: {
+    type: DataTypes.INTEGER,
+    defaultValue: null,
+  },
   archivedAt: {
     type: DataTypes.DATE,
     defaultValue: null,
