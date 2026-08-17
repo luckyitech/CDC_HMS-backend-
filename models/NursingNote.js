@@ -14,6 +14,12 @@ const NursingNote = defineModel('NursingNote', {
   action:     { type: DataTypes.TEXT, defaultValue: null },   // A — what the nurse did
   response:   { type: DataTypes.TEXT, defaultValue: null },   // R — the patient's response
   status:     { type: DataTypes.ENUM('active', 'deleted'), defaultValue: 'active' },
+  // Delete attribution — who removed the note and when. Same naming as
+  // Glp1WeekNote. There is deliberately no updatedBy/updatedAt attribution: the
+  // Kardex is append-only and exposes no update endpoint, so nothing can change
+  // a note in place. Add it here if that ever changes.
+  deletedBy:  { type: DataTypes.INTEGER, defaultValue: null },
+  deletedAt:  { type: DataTypes.DATE, defaultValue: null },
 });
 
 module.exports = NursingNote;

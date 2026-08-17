@@ -150,7 +150,8 @@ ConsultationNote.belongsTo(User, { as: 'doctor', foreignKey: 'doctorId' });
 
 Patient.hasMany(NursingNote);
 NursingNote.belongsTo(Patient);
-NursingNote.belongsTo(User, { as: 'author', foreignKey: 'authorId' });
+NursingNote.belongsTo(User, { as: 'author',        foreignKey: 'authorId'  });
+NursingNote.belongsTo(User, { as: 'deletedByUser', foreignKey: 'deletedBy' });
 
 Patient.hasMany(MedicalDocument);
 MedicalDocument.belongsTo(Patient);
