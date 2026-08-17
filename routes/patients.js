@@ -112,15 +112,17 @@ router.put('/:uhid', authenticate, authorize('staff', 'admin', 'nurse'), findPat
 // ------------------------------------
 // Patient diagnoses — tracked list (summary panel). Clinical record: retire, never delete.
 const patientDiagnosisController = require('../controllers/patientDiagnosisController');
-// Reading the tracked diagnoses is open to every internal role (it renders in
-// the patient file summary panel); writing them stays with the doctor.
-router.get('/:uhid/diagnoses', authenticate, authorize(...CLINICAL_READ_ROLES), findPatient, patientDiagnosisController.list);
+// Doctor-only, both reading and writing — reverted back to this after briefly
+// widening it to every role; the doctor's diagnosis list is not meant for
+// staff to see.
+router.get('/:uhid/diagnoses', authenticate, authorize('doctor'), findPatient, patientDiagnosisController.list);
 router.post('/:uhid/diagnoses', authenticate, authorize('doctor'), findPatient, patientDiagnosisController.create);
 router.patch('/:uhid/diagnoses/:id/resolve', authenticate, authorize('doctor'), findPatient, patientDiagnosisController.resolve);
 router.patch('/:uhid/diagnoses/:id/reactivate', authenticate, authorize('doctor'), findPatient, patientDiagnosisController.reactivate);
 
 // GET/PATCH /api/patients/:uhid/chart-metrics — doctor's followed chart metrics (summary panel)
-router.get('/:uhid/chart-metrics', authenticate, authorize(...CLINICAL_READ_ROLES), findPatient, patientController.getChartMetrics);
+// Doctor-only — reverted back to this after briefly widening it to every role.
+router.get('/:uhid/chart-metrics', authenticate, authorize('doctor'), findPatient, patientController.getChartMetrics);
 router.patch('/:uhid/chart-metrics', authenticate, authorize('doctor'), findPatient, patientController.updateChartMetrics);
 
 // PATCH /api/patients/:uhid/summary — doctor writes/edits patient summary

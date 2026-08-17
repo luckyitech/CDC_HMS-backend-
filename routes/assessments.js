@@ -3,18 +3,18 @@ const router = express.Router();
 const { body } = require('express-validator');
 const validate = require('../middleware/validate');
 const { authenticate, authorize } = require('../middleware/auth');
-const { CLINICAL_READ_ROLES } = require('../constants/permissions');
 const assessmentController = require('../controllers/assessmentController');
 
 // ====================================
 // UNDERSTANDING AUTHORIZATION
 // ====================================
-// Initial Assessment writes are doctor-only; reads are open to every internal
-// role (renders in the patient file's Visit History):
+// Initial Assessment routes are doctor/admin only — reverted back to this
+// after briefly widening reads to every internal role; staff should not see
+// a patient's full initial assessment (HPI, ROS, history):
 //
 // CREATE (POST):     Only DOCTORS can create initial assessments
-// LIST (GET):        Every internal role can view assessments
-// SINGLE (GET):      Every internal role can view a single assessment
+// LIST (GET):        DOCTORS and ADMINS can view assessments
+// SINGLE (GET):      DOCTORS and ADMINS can view a single assessment
 // UPDATE (PUT):      Only DOCTORS can update assessments
 // DELETE (DELETE):   DOCTORS and ADMINS can delete assessments
 
@@ -49,24 +49,24 @@ router.post(
 // ------------------------------------
 // GET /api/assessments — List initial assessments
 // ------------------------------------
-// Authorization: every internal role
+// Authorization: Doctor, Admin
 // REQUIRED query parameter: uhid (Patient UHID)
 // Example: GET /api/assessments?uhid=CDC001&page=1&limit=20
 router.get(
   '/',
   authenticate,
-  authorize(...CLINICAL_READ_ROLES),
+  authorize('doctor', 'admin'),
   assessmentController.list
 );
 
 // ------------------------------------
 // GET /api/assessments/:id — Single initial assessment
 // ------------------------------------
-// Authorization: every internal role
+// Authorization: Doctor, Admin
 router.get(
   '/:id',
   authenticate,
-  authorize(...CLINICAL_READ_ROLES),
+  authorize('doctor', 'admin'),
   assessmentController.getOne
 );
 

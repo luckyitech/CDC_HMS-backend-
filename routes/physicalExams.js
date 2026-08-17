@@ -3,18 +3,18 @@ const router = express.Router();
 const { body } = require('express-validator');
 const validate = require('../middleware/validate');
 const { authenticate, authorize } = require('../middleware/auth');
-const { CLINICAL_READ_ROLES } = require('../constants/permissions');
 const physicalExamController = require('../controllers/physicalExamController');
 
 // ====================================
 // UNDERSTANDING AUTHORIZATION
 // ====================================
-// Physical Examination writes are doctor-only; reads are open to every
-// internal role (renders in the patient file's Visit History):
+// Physical Examination routes are doctor/admin only — reverted back to this
+// after briefly widening reads to every internal role; staff should not see
+// a patient's exam findings:
 //
 // CREATE (POST):     Only DOCTORS can create physical exams
-// LIST (GET):        Every internal role can view physical exams
-// SINGLE (GET):      Every internal role can view a single exam
+// LIST (GET):        DOCTORS and ADMINS can view physical exams
+// SINGLE (GET):      DOCTORS and ADMINS can view a single exam
 // UPDATE (PUT):      Only DOCTORS can update exams
 // DELETE (DELETE):   Only DOCTORS and ADMINS can delete exams
 
@@ -53,25 +53,25 @@ router.post(
 // ------------------------------------
 // GET /api/physical-exams — List physical examinations
 // ------------------------------------
-// Authorization: every internal role
+// Authorization: Doctor, Admin
 // REQUIRED query parameter: uhid (Patient UHID)
 // OPTIONAL query parameter: search (searches across all fields)
 // Example: GET /api/physical-exams?uhid=CDC001&search=cardiovascular
 router.get(
   '/',
   authenticate,
-  authorize(...CLINICAL_READ_ROLES),
+  authorize('doctor', 'admin'),
   physicalExamController.list
 );
 
 // ------------------------------------
 // GET /api/physical-exams/:id — Single physical examination
 // ------------------------------------
-// Authorization: every internal role
+// Authorization: Doctor, Admin
 router.get(
   '/:id',
   authenticate,
-  authorize(...CLINICAL_READ_ROLES),
+  authorize('doctor', 'admin'),
   physicalExamController.getOne
 );
 

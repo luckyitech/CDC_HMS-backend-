@@ -288,3 +288,22 @@ Frontend:
 **Write access is unchanged throughout** — who may create a note, prescribe, upload a
 document, or manage equipment is exactly as it was before this branch. See the two write-
 access items in "Flagged, not fixed" above for what's still open there.
+
+**Correction (2026-08-17, after merge to main):** the user flagged that staff should not
+have gained read access to certain admin/doctor-only clinical data as a side effect of this
+work — "some important things" staff shouldn't be viewing. Four endpoints reverted to their
+exact pre-branch role lists, all on `main` directly since this branch was already merged:
+- `GET /patients/:uhid/diagnoses` — back to `doctor` only (was briefly every internal role)
+- `GET /patients/:uhid/chart-metrics` — back to `doctor` only (was briefly every internal role)
+- `GET /assessments` (Initial Assessments) — back to `doctor, admin` (was briefly every role)
+- `GET /physical-exams` — back to `doctor, admin` (was briefly every role)
+
+Everything else this branch widened stays as merged — consultation notes, prescriptions,
+documents, vitals, equipment, GLP-1, appointments, treatment plans, etc. — since staff
+already had access to those before this branch in every case but these four. Net effect:
+staff's Visit History tab silently loses the Initial Assessments and Physical Examinations
+sections again (the context getters swallow the 403 into `[]`, same as before this branch
+ever touched them) — this is the original, pre-existing behaviour, not a new gap. The
+frontend admin-portal gate (`ProtectedRoute.jsx`, `requiredRole="admin"`) was never touched
+by this branch and was not part of this correction — staff could not and still cannot
+navigate to `/admin/*`.
