@@ -1,4 +1,5 @@
 .env
+venv/
 incoming/
 queue/
 bridge.log
