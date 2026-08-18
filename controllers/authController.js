@@ -4,7 +4,9 @@ const crypto = require('crypto');
 const { Op } = require('sequelize');
 const { success, error } = require('../utils/response');
 const { sendPasswordResetEmail } = require('../utils/emailService');
-const { PERMISSIONS, hasPermission, canOpenPortal, effectivePermissions } = require('../constants/permissions');
+const {
+  PERMISSIONS, hasPermission, canOpenPortal, effectivePermissions, deniedPermissions,
+} = require('../constants/permissions');
 const { getRotationStatus } = require('../utils/passwordRotation');
 const db = require('../models');
 
@@ -47,6 +49,12 @@ const buildUserResponse = async (user) => {
     portals: Object.values(PERMISSIONS)
       .filter((p) => p.startsWith('portal.'))
       .filter((p) => canOpenPortal(user, p)),
+    // What has been explicitly WITHDRAWN. `permissions` above is already
+    // resolved, so most screens never need this — but a menu entry behind an
+    // authorize('admin', <cap>) gate is reachable by admin.access alone, and the
+    // frontend cannot tell "never granted, but admin.access covers it" from
+    // "withdrawn, so admin.access must not cover it" without seeing this list.
+    deniedPermissions: [...deniedPermissions(user)],
   };
 
   // Scheduled password rotation. mustChangePassword sends the frontend straight

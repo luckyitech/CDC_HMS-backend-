@@ -82,10 +82,47 @@ Frontend:
   deliberately; re-opening them from an admin screen would quietly reverse a clinical
   decision.
 
+#### Follow-ups done on this branch (2026-08-18, overnight)
+
+- **`listUsers` now selects `permissions`.** It was omitted from the explicit
+  column list, so `formatUserResponse` read `undefined` and reported
+  `permissions: []`, `hasAdminAccess: false` and `canManageStock: false` for
+  every row — an API disagreeing with what the server enforces. Pinned by
+  `tests/userListPermissions.test.js`, because nothing about this fails loudly.
+  *(The destructive half originally flagged here — Manage Users silently wiping
+  other capabilities — no longer exists: neither `ManageUsers.jsx` nor
+  `EditUserModal.jsx` edits permissions any more.)*
+- **`toList()` in `constants/permissions.js`.** Sequelize returns a JSON column
+  parsed on MySQL but as a raw string on MariaDB and some drivers. Treating a
+  string as "not an array" resolved to NO capabilities — every check failing
+  closed, the user locked out of everything, and nothing logged.
+- **The admin menu is gated.** Entering the admin portal is a separate grant from
+  being able to run a screen inside it, so a user with `portal.admin` plus one
+  narrow capability saw the whole menu and 403'd on most of it. Sidebar entries
+  and tab groups now carry the capability that opens them, and a group whose tabs
+  are all hidden no longer renders an empty switcher bar.
+- **`passesAdminGate()` mirrors `authorize('admin', <cap>)`.** The first cut of
+  the menu gating regressed `admin.access` holders — the API admits them via the
+  admin bypass, but the menu only checked the narrow capability and hid nearly
+  everything. The session now also carries `deniedPermissions`, because the
+  frontend cannot otherwise tell "never granted, but admin.access covers it" from
+  "withdrawn, so admin.access must not cover it".
+- **The broad-grant card no longer overstates itself.** "Full administrator
+  access" claimed "everything below" while something below was Withdrawn. The
+  behaviour was right — a withdrawal beats a grant — but the copy read as a
+  contradiction; the tab now names the exceptions.
+
+Staff and doctor sidebars are deliberately **not** gated: those areas only have
+act-capabilities (`queue.write`, `patients.write`) and no matching view
+capability, so hiding links there would hide screens from people allowed to look.
+
 #### Outstanding before this can be marked Completed
 
 - [ ] Open the Permissions tab as a real admin and set each of the three states on a
       staff account; confirm the tab reflects what the API stored
+- [ ] Sign in as a user holding only `monitoring.view` and confirm the admin
+      sidebar shows Monitoring and nothing they cannot use
+- [ ] Confirm an existing `admin.access` holder still sees the full admin menu
 - [ ] Sign in as that staff member and confirm the sidebar, portal switcher and the
       inpatient/stock screens match what was granted and withdrawn
 - [ ] Confirm the Activity tab shows the grant and the withdrawal, with who and when

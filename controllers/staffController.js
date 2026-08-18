@@ -16,7 +16,7 @@ const sequelize = require('../config/database');
 const { STAFF_ROLES } = require('../constants/staffRoles');
 const {
   PERMISSIONS, ALL_PERMISSIONS, PERMISSION_GROUPS, PERMISSIBLE_ROLES,
-  hasPermission, isTrueAdmin, sanitizePermissions, sanitizeDeniedPermissions,
+  hasPermission, isTrueAdmin, sanitizePermissions, sanitizeDeniedPermissions, toList,
 } = require('../constants/permissions');
 
 const { User, StaffProfile, UserEditLog, UserLoginLog } = db;
@@ -110,11 +110,11 @@ const formatStaff = (profile, user) => {
     // Read from the live user row rather than a JWT, so a revoke shows here
     // immediately. A real admin holds every permission implicitly and stores
     // none, which is why the list can be empty while the flags are true.
-    permissions:     Array.isArray(user.permissions) ? user.permissions : [],
+    permissions:     toList(user.permissions),
     // What has been explicitly WITHDRAWN, sent alongside the grants so the
     // Permissions tab can show a section as denied rather than merely
     // not-granted — two states that look identical without this.
-    deniedPermissions: Array.isArray(user.deniedPermissions) ? user.deniedPermissions : [],
+    deniedPermissions: toList(user.deniedPermissions),
     canManageStock:  hasPermission(user, PERMISSIONS.STOCK_ACCESS),
     hasAdminAccess:  hasPermission(user, PERMISSIONS.ADMIN_ACCESS),
     canHoldPermissions: PERMISSIBLE_ROLES.includes(user.role),

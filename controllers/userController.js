@@ -1,6 +1,6 @@
 const { success, error } = require('../utils/response');
 const {
-  PERMISSIONS, PERMISSIBLE_ROLES, isTrueAdmin, sanitizePermissions, hasPermission,
+  PERMISSIONS, PERMISSIBLE_ROLES, isTrueAdmin, sanitizePermissions, hasPermission, toList,
 } = require('../constants/permissions');
 const db = require('../models');
 const sequelize = require('../config/database');
@@ -47,7 +47,8 @@ const formatUserResponse = (user, profile) => {
     // Derived from `permissions`, NOT from the superseded canManageStock
     // column: writes go to `permissions`, so reading the old column here would
     // show a toggle that disagrees with what the server actually enforces.
-    permissions: Array.isArray(user.permissions) ? user.permissions : [],
+    permissions: toList(user.permissions),
+    deniedPermissions: toList(user.deniedPermissions),
     canManageStock: hasPermission(user, PERMISSIONS.STOCK_ACCESS),
     hasAdminAccess: hasPermission(user, PERMISSIONS.ADMIN_ACCESS),
   };
@@ -344,7 +345,15 @@ const listUsers = async (req, res) => {
     const [users, unlinkedPatients] = await Promise.all([
       User.findAll({
         where,
-        attributes: ['id', 'firstName', 'lastName', 'email', 'phone', 'role', 'isActive', 'createdAt', 'canManageStock'],
+        // `permissions` and `deniedPermissions` are in this list because
+        // formatUserResponse derives permissions / hasAdminAccess /
+        // canManageStock from them. Leaving them out did not fail loudly — it
+        // reported permissions: [] and every capability false for every row,
+        // so the API quietly disagreed with what the server actually enforces.
+        attributes: [
+          'id', 'firstName', 'lastName', 'email', 'phone', 'role', 'isActive',
+          'createdAt', 'canManageStock', 'permissions', 'deniedPermissions',
+        ],
         // Two joins instead of four — every staff cadre shares StaffProfile now.
         include: [
           { model: StaffProfile, required: false },

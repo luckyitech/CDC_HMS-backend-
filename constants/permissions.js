@@ -243,12 +243,32 @@ const CLINICAL_READ_ROLES = ['doctor', 'staff', 'nurse', 'lab', 'admin'];
 const isTrueAdmin = (user) => user?.role === 'admin';
 
 /**
+ * A JSON-array column, as a real array.
+ *
+ * Sequelize hands a JSON column back already parsed on MySQL, but as a raw
+ * string on some drivers and on MariaDB (where JSON is longtext plus a
+ * json_valid() CHECK). Treating a string as "not an array" would silently
+ * resolve to NO capabilities — every check failing closed, the user locked out
+ * of everything, and nothing logged. Tolerating both shapes costs one branch.
+ */
+const toList = (value) => {
+  if (Array.isArray(value)) return value;
+  if (typeof value === 'string') {
+    try {
+      const parsed = JSON.parse(value);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch { return []; }
+  }
+  return [];
+};
+
+/**
  * A stored list of capability strings, as a Set of current names: legacy names
  * expanded to what they mean now, unknown names dropped.
  */
 const expand = (list) => {
   const out = new Set();
-  (Array.isArray(list) ? list : []).forEach((name) => {
+  toList(list).forEach((name) => {
     if (LEGACY_PERMISSIONS[name]) LEGACY_PERMISSIONS[name].forEach((p) => out.add(p));
     else if (ALL_PERMISSIONS.includes(name)) out.add(name);
   });
@@ -340,6 +360,7 @@ const sanitizeDeniedPermissions = (input) => {
 
 module.exports = {
   PERMISSIONS,
+  toList,
   ALL_PERMISSIONS,
   LEGACY_PERMISSIONS,
   PERMISSION_GROUPS,
