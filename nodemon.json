@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json.schemastore.org/nodemon.json",
+  "watch": ["."],
+  "ext": "js,mjs,cjs,json",
+  "ignore": [
+    "bridge/**",
+    "uploads/**",
+    "logs/**",
+    "*.log",
+    "node_modules/**"
+  ]
+}
