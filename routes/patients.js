@@ -34,7 +34,7 @@ router.post('/quick', authenticate, authorize('staff', 'admin', 'doctor', 'patie
 // ------------------------------------
 // GET /api/patients/stats — MUST be before /:uhid so Express doesn't treat "stats" as a uhid
 // ------------------------------------
-router.get('/stats', authenticate, authorize('doctor', 'staff', 'admin', 'patients.write'), patientController.stats);
+router.get('/stats', authenticate, authorize('doctor', 'staff', 'admin'), patientController.stats);
 
 // ------------------------------------
 // GET /api/patients/check-id — MUST be before /:uhid
@@ -107,7 +107,7 @@ router.post('/:uhid/complete-registration', authenticate, authorize('staff', 'ad
 // patient-update route, so without it the whole triage submit 403s. That grants
 // nurses the full patient-record edit, which is wider than triage needs — worth
 // narrowing to a dedicated allergies endpoint when the RBAC work lands.
-router.put('/:uhid', authenticate, authorize('staff', 'admin', 'nurse'), findPatient, patientController.update);
+router.put('/:uhid', authenticate, authorize('staff', 'admin', 'nurse', 'patients.write'), findPatient, patientController.update);
 
 // ------------------------------------
 // Patient diagnoses — tracked list (summary panel). Clinical record: retire, never delete.

@@ -116,6 +116,51 @@ Staff and doctor sidebars are deliberately **not** gated: those areas only have
 act-capabilities (`queue.write`, `patients.write`) and no matching view
 capability, so hiding links there would hide screens from people allowed to look.
 
+#### Gate audit — four capabilities were barely wired (fixed)
+
+Appending capabilities in bulk left real holes, found by scanning every route
+method-by-method rather than by clicking around:
+
+| Was | Now |
+|---|---|
+| `POST /appointments` — booking, the main write — had **no** capability | `appointments.write` |
+| `GET /appointments` — the diary — had **no** view capability | `appointments.view` |
+| `GET /lab-tests/pending` gated on `lab.write` (a **read** behind a write) | `lab.view` |
+| `PUT /patients/:uhid` — editing a patient — had **no** capability | `patients.write` |
+| `documents.write` could upload but not list (worked only because every
+  permission-holding role is in `CLINICAL_READ_ROLES` — a list that has been
+  deliberately narrowed before) | reads carry it too |
+| `GET /patients/stats` unlocked by `patients.write` | back to roles only |
+
+`tests/permissionVocabulary.test.js` now scans the route tree and fails if a
+capability gates nothing, a toggle offers a capability that does not exist, a
+route names one that does not exist, a `.view` capability sits on a mutation, or
+a write capability has no way to see what it acts on. It reads the files rather
+than a hand-kept list, so it stays true as routes are added.
+
+A write capability deliberately DOES carry the reads it needs — you cannot move a
+patient through a queue you are not allowed to list, or change a setting you
+cannot read. Those are the only reads under a `.write`.
+
+#### Verified end to end against a running stack
+
+API on a live database, real HTTP, real browser:
+
+- A staff account granted `portal.lab` + `lab.view` reads lab tests and pending
+  tests (200), and is refused entering results, users, activity log and ward
+  creation (403).
+- Granting `admin.access` opens users **and** activity; withdrawing
+  `monitoring.view` while keeping `admin.access` leaves users at 200 and turns
+  activity and analytics into 403 — the exact case that looked contradictory on
+  the tab.
+- Withdrawing `queue.write`, which the `staff` role grants by default, refuses
+  the queue read: a withdrawal beats a role default.
+- Session for that user resolves `portals: ["portal.staff","portal.lab"]` — own
+  role's portal plus the grant.
+- The tab renders four collapsed groups with a state summary on each header, the
+  tri-state controls work, and the refusal shows exactly one toast with the
+  reason (screenshots taken).
+
 #### Outstanding before this can be marked Completed
 
 - [ ] Open the Permissions tab as a real admin and set each of the three states on a

@@ -29,7 +29,7 @@ router.post('/', authenticate, authorize('patient', 'doctor', 'staff', 'admin', 
 // ------------------------------------
 // GET /api/documents — list documents
 // ------------------------------------
-router.get('/', authenticate, authorize(...CLINICAL_READ_ROLES, 'patient'), documentController.list);
+router.get('/', authenticate, authorize(...CLINICAL_READ_ROLES, 'patient', 'documents.write'), documentController.list);
 
 // ------------------------------------
 // PUT /api/documents/:id/status — review/archive document
@@ -44,16 +44,16 @@ router.put('/:id/status', authenticate, authorize('doctor', 'staff', 'admin', 'd
 // (hidden from all views, never deleted — medical documents must be kept)
 // Doctors and admins; switch to a permission check when granular roles land.
 // ------------------------------------
-router.put('/:id/archive', authenticate, authorize('doctor', 'admin'), documentController.archive);
+router.put('/:id/archive', authenticate, authorize('doctor', 'admin', 'documents.write'), documentController.archive);
 
 // ------------------------------------
 // PUT /api/documents/:id/restore — restore an archived document
 // ------------------------------------
-router.put('/:id/restore', authenticate, authorize('admin'), documentController.restore);
+router.put('/:id/restore', authenticate, authorize('admin', 'documents.write'), documentController.restore);
 
 // ------------------------------------
 // GET /api/documents/file/:filename — serve file (authenticated)
 // ------------------------------------
-router.get('/file/:filename', authenticate, authorize(...CLINICAL_READ_ROLES, 'patient'), documentController.serveFile);
+router.get('/file/:filename', authenticate, authorize(...CLINICAL_READ_ROLES, 'patient', 'documents.write'), documentController.serveFile);
 
 module.exports = router;

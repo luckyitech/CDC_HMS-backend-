@@ -68,7 +68,7 @@ router.get(
 router.get(
   '/pending',
   authenticate,
-  authorize('lab', 'lab.write'),
+  authorize('lab', 'lab.view'),
   labTestController.pending
 );
 
@@ -80,7 +80,7 @@ router.get(
 router.get(
   '/critical',
   authenticate,
-  authorize('lab', 'doctor', 'lab.write'),
+  authorize('lab', 'doctor', 'lab.view'),
   labTestController.critical
 );
 

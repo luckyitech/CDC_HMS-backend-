@@ -113,12 +113,12 @@ const authorize = (...allow) => (req, res, next) => {
   const roles = allow.filter((a) => !a.includes('.'));
   const perms = allow.filter((a) => a.includes('.'));
   if (perms.some((p) => isDenied(req.user, p))) {
-    return error(res, 'Access denied — this has been withdrawn from your account', 403);
+    return error(res, 'You do not have permission to do that — an administrator has withdrawn this from your account.', 403);
   }
   if (roles.includes(req.user.role)) return next();
   if (roles.includes('admin') && hasPermission(req.user, PERMISSIONS.ADMIN_ACCESS)) return next();
   if (perms.some((p) => hasPermission(req.user, p))) return next();
-  return error(res, 'Access denied', 403);
+  return error(res, 'You do not have permission to do that.', 403);
 };
 
 // Requires a specific capability. One middleware for every permission, rather
@@ -126,7 +126,7 @@ const authorize = (...allow) => (req, res, next) => {
 // Usage: requirePermission(PERMISSIONS.STOCK_WRITE)
 const requirePermission = (permission) => (req, res, next) => {
   if (hasPermission(req.user, permission)) return next();
-  return error(res, 'Access denied — this has not been granted to your account', 403);
+  return error(res, 'You do not have permission to do that — this has not been granted to your account.', 403);
 };
 
 // Requires the actual admin ACCOUNT, not merely admin capabilities. Reserved
