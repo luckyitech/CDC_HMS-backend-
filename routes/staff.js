@@ -73,6 +73,9 @@ router.patch('/:employeeId/status', authenticate, authorize('admin'), findStaff,
 // be reliably revoked. See middleware/auth.js.
 router.patch('/:employeeId/permissions', authenticate, requireTrueAdmin, findStaff, [
   body('permissions').isArray().withMessage('Permissions must be a list'),
+  // Optional so a caller that only grants leaves existing withdrawals alone;
+  // see staffController.updatePermissions.
+  body('deniedPermissions').optional().isArray().withMessage('Withdrawn permissions must be a list'),
   validate,
 ], staffController.updatePermissions);
 

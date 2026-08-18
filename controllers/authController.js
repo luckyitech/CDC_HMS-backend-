@@ -30,14 +30,16 @@ const buildUserResponse = async (user) => {
     role: user.role,
     status: user.isActive ? 'Active' : 'Inactive',
     // Everything this account can do, resolved: a real admin holds every
-    // permission implicitly, everyone else holds what was granted. Drives which
-    // portals and sidebar entries appear — the API is still guarded server-side,
-    // so this is UX, never the security boundary.
+    // permission implicitly, everyone else holds what was granted MINUS what
+    // has been explicitly withdrawn. Resolving it here means the frontend never
+    // has to reason about withdrawals — it receives the answer, not the inputs.
+    // Drives which portals and sidebar entries appear; the API is still guarded
+    // server-side, so this is UX, never the security boundary.
     permissions: [...effectivePermissions(user)],
     // Derived, and kept for the stock screens that already read it. The stored
-    // column is superseded by the 'stock.manage' permission; nothing should read
+    // column is superseded by the 'stock.access' permission; nothing should read
     // user.canManageStock directly any more.
-    canManageStock: hasPermission(user, PERMISSIONS.STOCK_MANAGE),
+    canManageStock: hasPermission(user, PERMISSIONS.STOCK_ACCESS),
   };
 
   // Scheduled password rotation. mustChangePassword sends the frontend straight

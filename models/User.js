@@ -78,6 +78,17 @@ const User = defineModel('User', {
     allowNull: false,
     defaultValue: [],
   },
+  // Capabilities explicitly WITHDRAWN from this user, e.g. ['inpatient.access'].
+  // The restrictive half of the model: `permissions` adds to what the role
+  // allows, this subtracts from it, and a denial beats a grant. Empty for
+  // almost everyone — a role's defaults are the norm and this is the exception
+  // an admin records deliberately. Never populated for a real admin account;
+  // see constants/permissions.js for why.
+  deniedPermissions: {
+    type: DataTypes.JSON,
+    allowNull: false,
+    defaultValue: [],
+  },
 }, {
   indexes: [
     { unique: true, fields: ['email'], name: 'unique_email', where: { email: { [require('sequelize').Op.ne]: null } } },

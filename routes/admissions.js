@@ -5,16 +5,21 @@ const { CLINICAL_READ_ROLES } = require('../constants/permissions');
 const admission = require('../controllers/admissionController');
 
 const READ = ['doctor', 'nurse', 'staff', 'admin', 'inpatient.access'];
+// Acting on an admission — moving a patient in, along or out. Open to the roles
+// that have always done it, OR anyone granted inpatient.write. Deliberately
+// excludes /note, /request and /:id/attending: those are the doctor's clinical
+// decision, not a front-desk action, and stay role-only.
+const ACT = ['doctor', 'nurse', 'staff', 'admin', 'inpatient.write'];
 
 // Step 1 — doctor advises (from OPD consultation)
 // Save & Print the admission note (documented per protocol, no billing move).
 router.post('/note', authenticate, authorize('doctor'), admission.saveNote);
 router.post('/request', authenticate, authorize('doctor'), admission.requestAdmission);
-router.post('/cancel-request', authenticate, authorize('doctor', 'staff', 'admin'), admission.cancelAdmissionRequest);
+router.post('/cancel-request', authenticate, authorize('doctor', 'staff', 'admin', 'inpatient.write'), admission.cancelAdmissionRequest);
 
 // Step 2 — front desk (staff) converts / direct admit
-router.post('/convert', authenticate, authorize('staff', 'admin'), admission.convert);
-router.post('/direct', authenticate, authorize('staff', 'admin'), admission.directAdmit);
+router.post('/convert', authenticate, authorize('staff', 'admin', 'inpatient.write'), admission.convert);
+router.post('/direct', authenticate, authorize('staff', 'admin', 'inpatient.write'), admission.directAdmit);
 
 // Reads
 router.get('/', authenticate, authorize(...READ), admission.list);
@@ -26,8 +31,8 @@ router.get('/advised', authenticate, authorize(...CLINICAL_READ_ROLES, 'inpatien
 router.get('/:id', authenticate, authorize(...READ), admission.getById);
 
 // Mutations
-router.put('/:id/transfer', authenticate, authorize('doctor', 'nurse', 'staff', 'admin'), admission.transfer);
+router.put('/:id/transfer', authenticate, authorize(...ACT), admission.transfer);
 router.put('/:id/attending', authenticate, authorize('doctor', 'admin'), admission.reassignAttending);
-router.put('/:id/discharge', authenticate, authorize('doctor', 'staff', 'admin'), admission.discharge);
+router.put('/:id/discharge', authenticate, authorize('doctor', 'staff', 'admin', 'inpatient.write'), admission.discharge);
 
 module.exports = router;

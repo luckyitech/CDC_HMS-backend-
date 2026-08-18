@@ -48,7 +48,7 @@ const formatUserResponse = (user, profile) => {
     // column: writes go to `permissions`, so reading the old column here would
     // show a toggle that disagrees with what the server actually enforces.
     permissions: Array.isArray(user.permissions) ? user.permissions : [],
-    canManageStock: hasPermission(user, PERMISSIONS.STOCK_MANAGE),
+    canManageStock: hasPermission(user, PERMISSIONS.STOCK_ACCESS),
     hasAdminAccess: hasPermission(user, PERMISSIONS.ADMIN_ACCESS),
   };
 
@@ -477,11 +477,16 @@ const updateUser = async (req, res) => {
       if (!isTrueAdmin(req.user)) {
         return error(res, 'Only an administrator account can change permissions', 403);
       }
+      // The screen's single boolean predates the access/write split and still
+      // means what it always meant: full stock management. Setting it grants
+      // both halves; clearing it removes both. Finer control is the Staff
+      // File's Permissions tab.
       const next = new Set(user.permissions || []);
-      if (updates.canManageStock) next.add(PERMISSIONS.STOCK_MANAGE);
-      else next.delete(PERMISSIONS.STOCK_MANAGE);
+      const BOTH = [PERMISSIONS.STOCK_ACCESS, PERMISSIONS.STOCK_WRITE];
+      if (updates.canManageStock) BOTH.forEach((p) => next.add(p));
+      else BOTH.forEach((p) => next.delete(p));
       userFields.push('permissions');
-      userUpdates.permissions = [...next];
+      userUpdates.permissions = sanitizePermissions([...next]);
     }
 
     const userBefore = {};

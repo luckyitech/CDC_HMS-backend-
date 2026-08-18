@@ -3,7 +3,7 @@ const { error } = require('../utils/response');
 const { isTokenBlacklisted } = require('../controllers/authController');
 const { getRotationStatus } = require('../utils/passwordRotation');
 const db = require('../models');
-const { PERMISSIONS, hasPermission, isTrueAdmin } = require('../constants/permissions');
+const { PERMISSIONS, hasPermission, isDenied, isTrueAdmin } = require('../constants/permissions');
 const { User } = db;
 
 // Endpoints a staff member with an expired password may still reach. Enough to
@@ -47,7 +47,7 @@ const authenticate = async (req, res, next) => {
   let user;
   try {
     user = await User.findByPk(decoded.id, {
-      attributes: ['id', 'isActive', 'role', 'permissions', 'passwordChangedAt'],
+      attributes: ['id', 'isActive', 'role', 'permissions', 'deniedPermissions', 'passwordChangedAt'],
     });
   } catch {
     return error(res, 'Authentication service unavailable. Please try again.', 503);
@@ -79,6 +79,7 @@ const authenticate = async (req, res, next) => {
     ...decoded,
     role: user.role,                      // live, not as signed at login
     permissions: user.permissions || [],
+    deniedPermissions: user.deniedPermissions || [],
   };
   next();
 };
@@ -97,9 +98,23 @@ const authenticate = async (req, res, next) => {
 // (e.g. 'inpatient.access') is treated as a permission, so a route can allow
 // "these roles, OR anyone granted this capability" — e.g. authorize(...READ)
 // where READ carries 'inpatient.access'. Role-only calls are unaffected.
+//
+// A capability named in the gate can also be WITHDRAWN from one person, which
+// is checked first: an admin may hold a particular user out of a section their
+// role would otherwise open. Checking it before the role match is the whole
+// point — testing it afterwards would make a withdrawal do nothing for exactly
+// the people it is meant to apply to.
+//
+// Only sections whose capability appears in the gate can be withdrawn. That is
+// deliberate: a route that names no capability is role-only by design, and
+// silently making every gate deniable would turn every hardcoded clinical role
+// list into something an admin could quietly switch off.
 const authorize = (...allow) => (req, res, next) => {
   const roles = allow.filter((a) => !a.includes('.'));
   const perms = allow.filter((a) => a.includes('.'));
+  if (perms.some((p) => isDenied(req.user, p))) {
+    return error(res, 'Access denied — this has been withdrawn from your account', 403);
+  }
   if (roles.includes(req.user.role)) return next();
   if (roles.includes('admin') && hasPermission(req.user, PERMISSIONS.ADMIN_ACCESS)) return next();
   if (perms.some((p) => hasPermission(req.user, p))) return next();
@@ -108,7 +123,7 @@ const authorize = (...allow) => (req, res, next) => {
 
 // Requires a specific capability. One middleware for every permission, rather
 // than a bespoke one per capability.
-// Usage: requirePermission(PERMISSIONS.STOCK_MANAGE)
+// Usage: requirePermission(PERMISSIONS.STOCK_WRITE)
 const requirePermission = (permission) => (req, res, next) => {
   if (hasPermission(req.user, permission)) return next();
   return error(res, 'Access denied — this has not been granted to your account', 403);

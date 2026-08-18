@@ -7,6 +7,76 @@ Running record of features, fixes and significant changes. A task is only marked
 
 ## In Progress
 
+### Per-staff portal permissions tab (admin-managed)
+
+- **Branch:** `feature/staff-portal-permissions` (both repos)
+- **Status:** Implemented and tested against a real MySQL/MariaDB dev database —
+  **awaiting the admin UI walkthrough in a browser**
+- **Started:** 2026-08-18
+- **Description:** The Staff File's Permissions tab becomes a per-section grid: for each
+  part of the portal an admin sets **Granted**, **Default** (whatever the role allows) or
+  **Withdrawn**. Sections with meaningful write actions carry a second toggle; sections
+  that are all-or-nothing do not, per the project's "don't add a field where it means
+  nothing" rule.
+
+  This grows the existing role + capability model rather than replacing it — one
+  vocabulary in `constants/permissions.js`, mirrored in `utils/permissions.js`, checked
+  through the one `authorize()` seam. No parallel `constants/roles.js`.
+
+**Sections and capabilities**
+
+| Section | Access | Write |
+|---|---|---|
+| Admin portal | `admin.access` | — (all-or-nothing by nature) |
+| Stock / Pharmacy | `stock.access` | `stock.write` |
+| Inpatient | `inpatient.access` | `inpatient.write` |
+
+Backend:
+- `constants/permissions.js` — the capabilities above, `PERMISSION_SECTIONS` (the shape
+  the tab renders, served from the catalog endpoint so the screen cannot drift from what
+  the routes enforce), and the grant/withdraw resolution
+- `middleware/auth.js` — `authorize()` refuses a capability that has been **withdrawn**,
+  checked before the role match. Only capabilities named in a gate are deniable, so
+  hardcoded clinical role lists cannot be switched off from the UI
+- `models/User.js` + `migrations/20260818000001-…` — `deniedPermissions` JSON column, and
+  `stock.manage` → `stock.access` + `stock.write` (every current holder keeps both halves)
+- `routes/admissions.js`, `beds.js`, `inpatientBilling.js` — `inpatient.write` added to
+  the front-desk actions (convert, direct admit, transfer, discharge, cancel request,
+  release bed, add charge). Doctor-authored clinical entries are deliberately untouched
+- `routes/stock.js` — `authorizeStock` split into `stockRead` / `stockWrite`
+- `controllers/staffController.js` — the catalog serves the sections; `updatePermissions`
+  takes both lists and audits both to `UserEditLog`, which the Activity tab already reads
+
+Frontend:
+- `components/admin/staff/AccessTab.jsx` — rebuilt as section cards with a three-way
+  control per capability. A switch cannot express the third state: "off" would have to
+  mean both "their role decides" and "refused even though their role allows it"
+- `utils/permissions.js` — mirrored capability names
+- `services/staffService.js` — `updatePermissions` carries the withdrawal list
+
+**Decisions**
+- Additive **and** restrictive. A withdrawal beats a grant, and a real `admin` account can
+  never be withdrawn from — otherwise the last administrator could lock themselves out of
+  the screen that grants permissions.
+- A write always carries the access it acts within; withdrawing access withdraws the
+  write. Enforced in the sanitizers so no unrepresentable state can be stored.
+- Assessments and physical exams are **not** exposed as toggles. `3cfe768` restricted them
+  deliberately; re-opening them from an admin screen would quietly reverse a clinical
+  decision.
+
+#### Outstanding before this can be marked Completed
+
+- [ ] Open the Permissions tab as a real admin and set each of the three states on a
+      staff account; confirm the tab reflects what the API stored
+- [ ] Sign in as that staff member and confirm the sidebar, portal switcher and the
+      inpatient/stock screens match what was granted and withdrawn
+- [ ] Confirm the Activity tab shows the grant and the withdrawal, with who and when
+- [ ] Run `npm run migrate` against a copy of the real dev DB. **The migration could not
+      be reached through `sequelize-cli` here** — an earlier unguarded migration fails
+      first (see Flagged); the new one was verified by running its `up()`/`down()`
+      directly against a live database
+- [ ] Confirm existing `stock.manage` holders still reach the Stocks pages after deploy
+
 ### HMS-improvements integration
 
 - **Branch:** `integration/hms-improvements-safe`
@@ -274,6 +344,20 @@ Documents and Leave only. Two decisions still open:
 
 Issues found while working on the above. Each needs its own branch.
 
+- **`migrations/…-add-referral-type-to-queues` is unguarded and aborts a full migrate run.**
+  Running `npx sequelize-cli db:migrate` against a schema created by `sequelize.sync()`
+  (which is how `server.js` boots) fails with `Duplicate column name 'referralType'`, and
+  every later migration — including new ones — never runs. Found while verifying the
+  per-staff permissions migration, which had to be executed directly instead. Every other
+  migration in the tree is `describeTable`-guarded; this one needs the same treatment
+  before the migration history can be trusted end to end.
+- **`POST /api/inpatient/mar/administer` is gated `authorize('nurse')` — nurse only.**
+  No other role can administer a medication, and because `'admin'` is absent from that
+  gate the implicit-admin bypass does not fire either, so an administrator is refused too.
+  If the nurse portal is not in use, medication administration is unreachable by anyone.
+  `inpatientObservations` and `fluidBalance` are `nurse`/`doctor`, so those still work for
+  doctors; MAR does not. Left alone deliberately — widening who may administer a drug is a
+  clinical decision, not a permissions-branch call.
 - **`listUsers` does not select the `permissions` column** — `controllers/userController.js`
   line ~345. `formatUserResponse` therefore reports `permissions: []`, `canManageStock: false`
   and `hasAdminAccess: false` for every row in Manage Users, whatever is actually stored.
