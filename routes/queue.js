@@ -13,7 +13,7 @@ const queueController = require('../controllers/queueController');
 // and Triage pages are the same screens the front desk uses. V3 added the role
 // to every route it authored but not to these pre-existing ones, so both pages
 // rendered and then 403'd.
-router.get('/stats', authenticate, authorize('staff', 'doctor', 'nurse'), queueController.stats);
+router.get('/stats', authenticate, authorize('staff', 'doctor', 'nurse', 'queue.write'), queueController.stats);
 
 // ------------------------------------
 // POST /api/queue/call-next — MUST be before /:id
@@ -23,7 +23,7 @@ router.post('/call-next', authenticate, authorize('doctor'), queueController.cal
 // ------------------------------------
 // GET /api/queue — list all queue items
 // ------------------------------------
-router.get('/', authenticate, authorize('staff', 'doctor', 'nurse'), queueController.list);
+router.get('/', authenticate, authorize('staff', 'doctor', 'nurse', 'queue.write'), queueController.list);
 
 // ------------------------------------
 // GET /api/queue/advised-referrals — referral notes for one patient (Visit
@@ -43,12 +43,12 @@ router.get('/advised-referrals', authenticate, authorize(...CLINICAL_READ_ROLES)
 // GET /api/queue/patient/:uhid — a patient's visit workflow history (check-in
 // and milestone timestamps). MUST be before /:id so "patient" isn't read as an id.
 // ------------------------------------
-router.get('/patient/:uhid', authenticate, authorize('staff', 'doctor', 'nurse', 'admin'), queueController.patientHistory);
+router.get('/patient/:uhid', authenticate, authorize('staff', 'doctor', 'nurse', 'admin', 'queue.write'), queueController.patientHistory);
 
 // ------------------------------------
 // POST /api/queue — add patient to queue
 // ------------------------------------
-router.post('/', authenticate, authorize('staff'), [
+router.post('/', authenticate, authorize('staff', 'queue.write'), [
   body('uhid').notEmpty().withMessage('Patient UHID is required'),
   validate,
 ], queueController.add);
@@ -56,7 +56,7 @@ router.post('/', authenticate, authorize('staff'), [
 // ------------------------------------
 // PUT /api/queue/:id — update status or assign doctor
 // ------------------------------------
-router.put('/:id', authenticate, authorize('staff', 'doctor', 'nurse'), queueController.update);
+router.put('/:id', authenticate, authorize('staff', 'doctor', 'nurse', 'queue.write'), queueController.update);
 
 // ------------------------------------
 // POST /api/queue/:id/refer — doctor refers a patient (internal or external)
@@ -73,6 +73,6 @@ router.post('/:id/refer-note', authenticate, authorize('doctor'), queueControlle
 // ------------------------------------
 // DELETE /api/queue/:id — remove from queue
 // ------------------------------------
-router.delete('/:id', authenticate, authorize('staff'), queueController.remove);
+router.delete('/:id', authenticate, authorize('staff', 'queue.write'), queueController.remove);
 
 module.exports = router;

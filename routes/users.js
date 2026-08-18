@@ -38,7 +38,7 @@ router.get('/doctors', authenticate, userController.listDoctors);
 // ------------------------------------
 // POST /api/users/doctors — create doctor
 // ------------------------------------
-router.post('/doctors', authenticate, authorize('admin'), [
+router.post('/doctors', authenticate, authorize('admin', 'users.write'), [
   body('firstName').notEmpty().withMessage('First name is required'),
   body('lastName').notEmpty().withMessage('Last name is required'),
   body('email').isEmail().withMessage('Valid email is required'),
@@ -58,7 +58,7 @@ router.post('/doctors', authenticate, authorize('admin'), [
 // ------------------------------------
 // POST /api/users/staff — create staff
 // ------------------------------------
-router.post('/staff', authenticate, authorize('admin'), [
+router.post('/staff', authenticate, authorize('admin', 'users.write'), [
   body('firstName').notEmpty().withMessage('First name is required'),
   body('lastName').notEmpty().withMessage('Last name is required'),
   body('email').isEmail().withMessage('Valid email is required'),
@@ -77,7 +77,7 @@ router.post('/staff', authenticate, authorize('admin'), [
 // ------------------------------------
 // POST /api/users/nurses — create nurse (HMIS V3)
 // ------------------------------------
-router.post('/nurses', authenticate, authorize('admin'), [
+router.post('/nurses', authenticate, authorize('admin', 'users.write'), [
   body('firstName').notEmpty().withMessage('First name is required'),
   body('lastName').notEmpty().withMessage('Last name is required'),
   body('email').isEmail().withMessage('Valid email is required'),
@@ -98,7 +98,7 @@ router.post('/nurses', authenticate, authorize('admin'), [
 // ------------------------------------
 // POST /api/users/lab-techs — create lab tech
 // ------------------------------------
-router.post('/lab-techs', authenticate, authorize('admin'), [
+router.post('/lab-techs', authenticate, authorize('admin', 'users.write'), [
   body('firstName').notEmpty().withMessage('First name is required'),
   body('lastName').notEmpty().withMessage('Last name is required'),
   body('email').isEmail().withMessage('Valid email is required'),
@@ -117,17 +117,17 @@ router.post('/lab-techs', authenticate, authorize('admin'), [
 // ------------------------------------
 // GET /api/users — list all users
 // ------------------------------------
-router.get('/', authenticate, authorize('admin'), userController.listUsers);
+router.get('/', authenticate, authorize('admin', 'users.view'), userController.listUsers);
 
 // ------------------------------------
 // PUT /api/users/:id — update user
 // ------------------------------------
-router.put('/:id', authenticate, authorize('admin'), userController.updateUser);
+router.put('/:id', authenticate, authorize('admin', 'users.write'), userController.updateUser);
 
 // ------------------------------------
 // PUT /api/users/:id/status — toggle status
 // ------------------------------------
-router.put('/:id/status', authenticate, authorize('admin'), [
+router.put('/:id/status', authenticate, authorize('admin', 'users.write'), [
   body('isActive').isBoolean().withMessage('isActive must be a boolean'),
   validate,
 ], userController.updateStatus);
@@ -135,16 +135,16 @@ router.put('/:id/status', authenticate, authorize('admin'), [
 // ------------------------------------
 // GET /api/users/:id — get single user
 // ------------------------------------
-router.get('/:id', authenticate, authorize('admin'), userController.getById);
+router.get('/:id', authenticate, authorize('admin', 'users.view'), userController.getById);
 
 // ------------------------------------
 // GET /api/users/:id/edit-logs — get edit history for a user
 // ------------------------------------
-router.get('/:id/edit-logs', authenticate, authorize('admin'), userController.getEditLogs);
+router.get('/:id/edit-logs', authenticate, authorize('admin', 'users.view'), userController.getEditLogs);
 
 // ------------------------------------
 // DELETE /api/users/:id — delete user
 // ------------------------------------
-router.delete('/:id', authenticate, authorize('admin'), userController.deleteUser);
+router.delete('/:id', authenticate, authorize('admin', 'users.write'), userController.deleteUser);
 
 module.exports = router;

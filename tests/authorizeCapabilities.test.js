@@ -2,7 +2,8 @@ const { test, describe } = require('node:test');
 const assert = require('node:assert/strict');
 
 const {
-  PERMISSIONS, hasPermission, sanitizePermissions, sanitizeDeniedPermissions,
+  PERMISSIONS, hasPermission, canOpenPortal,
+  sanitizePermissions, sanitizeDeniedPermissions,
 } = require('../constants/permissions');
 const { authorize } = require('../middleware/auth');
 
@@ -165,5 +166,94 @@ describe('the stock split keeps every existing holder whole', () => {
       [PERMISSIONS.INPATIENT_ACCESS, PERMISSIONS.INPATIENT_WRITE],
       'or a withdrawn user would still reach the write routes'
     );
+  });
+});
+
+// =====================================================================
+// Portal entry.
+//
+// 'admin.access' used to open every portal at once. Each portal is now granted
+// separately, so someone can be trusted with the lab without being trusted with
+// user management. A role still opens its own portal with nothing granted.
+// =====================================================================
+
+describe('portal entry is granted per portal', () => {
+  const at = (role, perms = [], deniedPermissions = []) =>
+    ({ role, permissions: perms, deniedPermissions });
+
+  test("a role opens its own portal with nothing granted", () => {
+    assert.equal(canOpenPortal(at('doctor'), PERMISSIONS.PORTAL_DOCTOR), true);
+    assert.equal(canOpenPortal(at('lab'), PERMISSIONS.PORTAL_LAB), true);
+    assert.equal(canOpenPortal(at('staff'), PERMISSIONS.PORTAL_STAFF), true);
+  });
+
+  test('and not somebody else\'s', () => {
+    assert.equal(canOpenPortal(at('doctor'), PERMISSIONS.PORTAL_LAB), false);
+    assert.equal(canOpenPortal(at('lab'), PERMISSIONS.PORTAL_ADMIN), false);
+  });
+
+  test('a grant opens exactly one portal, not all of them', () => {
+    const doctorWithLab = at('doctor', [PERMISSIONS.PORTAL_LAB]);
+    assert.equal(canOpenPortal(doctorWithLab, PERMISSIONS.PORTAL_LAB), true);
+    assert.equal(canOpenPortal(doctorWithLab, PERMISSIONS.PORTAL_ADMIN), false,
+      'this is the whole point of the change — one grant must not open the rest');
+    assert.equal(canOpenPortal(doctorWithLab, PERMISSIONS.PORTAL_STAFF), false);
+  });
+
+  test('admin.access alone no longer opens every portal', () => {
+    // Before this feature it did. The migration grants the portals explicitly to
+    // everyone who held it, so nobody loses access at deploy — but the
+    // capability itself must not carry them any more.
+    const granted = at('doctor', [PERMISSIONS.ADMIN_ACCESS]);
+    assert.equal(canOpenPortal(granted, PERMISSIONS.PORTAL_LAB), false);
+    assert.equal(canOpenPortal(granted, PERMISSIONS.PORTAL_STAFF), false);
+  });
+
+  test('a withdrawal beats the role default — even for their own portal', () => {
+    const shutOut = at('doctor', [], [PERMISSIONS.PORTAL_DOCTOR]);
+    assert.equal(canOpenPortal(shutOut, PERMISSIONS.PORTAL_DOCTOR), false);
+  });
+
+  test('a real admin account opens every portal and cannot be shut out', () => {
+    const admin = at('admin', [], [PERMISSIONS.PORTAL_LAB, PERMISSIONS.PORTAL_ADMIN]);
+    assert.equal(canOpenPortal(admin, PERMISSIONS.PORTAL_LAB), true);
+    assert.equal(canOpenPortal(admin, PERMISSIONS.PORTAL_ADMIN), true);
+  });
+
+  test('opening the admin portal carries the ability to use it', () => {
+    assert.ok(
+      sanitizePermissions([PERMISSIONS.PORTAL_ADMIN]).includes(PERMISSIONS.ADMIN_ACCESS),
+      'an admin portal whose endpoints all 403 is not a grant, it is a trap'
+    );
+  });
+});
+
+describe('area capabilities widen a gate without narrowing it', () => {
+  test('the roles already on a gate still pass', async () => {
+    // Every gate was widened by appending a capability, never by replacing the
+    // role list — so no existing user can lose access at deploy.
+    const GATE = ['admin', 'users.view'];
+    assert.equal((await run(authorize(...GATE), user('admin'))).allowed, true);
+  });
+
+  test('and the capability admits somebody the roles do not', async () => {
+    const GATE = ['admin', 'users.view'];
+    assert.equal((await run(authorize(...GATE), user('staff', [PERMISSIONS.USERS_VIEW]))).allowed, true);
+    assert.equal((await run(authorize(...GATE), user('staff'))).allowed, false);
+  });
+
+  test('editing implies viewing', () => {
+    assert.ok(sanitizePermissions([PERMISSIONS.USERS_WRITE]).includes(PERMISSIONS.USERS_VIEW));
+    assert.ok(sanitizePermissions([PERMISSIONS.LAB_WRITE]).includes(PERMISSIONS.LAB_VIEW));
+    assert.ok(sanitizePermissions([PERMISSIONS.APPOINTMENTS_WRITE]).includes(PERMISSIONS.APPOINTMENTS_VIEW));
+  });
+
+  test('withdrawing an area holds out someone whose role would allow it', async () => {
+    const GATE = ['admin', 'users.view'];
+    const shutOut = { role: 'admin', permissions: [], deniedPermissions: [PERMISSIONS.USERS_VIEW] };
+    // …except a real admin, who can never be withdrawn from.
+    assert.equal((await run(authorize(...GATE), shutOut)).allowed, true);
+    const staffShutOut = { role: 'staff', permissions: [PERMISSIONS.USERS_VIEW], deniedPermissions: [PERMISSIONS.USERS_VIEW] };
+    assert.equal((await run(authorize(...GATE), staffShutOut)).allowed, false);
   });
 });

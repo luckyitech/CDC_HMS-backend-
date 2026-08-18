@@ -10,7 +10,7 @@ const documentController = require('../controllers/documentController');
 // ------------------------------------
 // POST /api/documents — upload document
 // ------------------------------------
-router.post('/', authenticate, authorize('patient', 'doctor', 'staff', 'admin'), (req, res, next) => {
+router.post('/', authenticate, authorize('patient', 'doctor', 'staff', 'admin', 'documents.write'), (req, res, next) => {
   upload.single('file')(req, res, (err) => {
     if (err) {
       if (err.code === 'LIMIT_FILE_SIZE') {
@@ -34,7 +34,7 @@ router.get('/', authenticate, authorize(...CLINICAL_READ_ROLES, 'patient'), docu
 // ------------------------------------
 // PUT /api/documents/:id/status — review/archive document
 // ------------------------------------
-router.put('/:id/status', authenticate, authorize('doctor', 'staff', 'admin'), [
+router.put('/:id/status', authenticate, authorize('doctor', 'staff', 'admin', 'documents.write'), [
   body('status').isIn(['Pending Review', 'Reviewed', 'Archived']).withMessage('Invalid status'),
   validate,
 ], documentController.updateStatus);

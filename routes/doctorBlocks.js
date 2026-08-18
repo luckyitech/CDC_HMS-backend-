@@ -35,7 +35,7 @@ router.delete(
 router.get(
   '/',
   authenticate,
-  authorize('doctor', 'staff', 'admin', 'patient'),
+  authorize('doctor', 'staff', 'admin', 'patient', 'appointments.view'),
   getBlocks
 );
 

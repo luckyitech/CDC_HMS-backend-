@@ -23,13 +23,31 @@ Running record of features, fixes and significant changes. A task is only marked
   vocabulary in `constants/permissions.js`, mirrored in `utils/permissions.js`, checked
   through the one `authorize()` seam. No parallel `constants/roles.js`.
 
-**Sections and capabilities**
+**Two kinds of capability**
 
-| Section | Access | Write |
-|---|---|---|
-| Admin portal | `admin.access` | — (all-or-nothing by nature) |
-| Stock / Pharmacy | `stock.access` | `stock.write` |
-| Inpatient | `inpatient.access` | `inpatient.write` |
+`portal.*` decides which portal SHELL a person may open — frontend only, since a
+portal is a set of screens, not an API concept. `<area>.*` decides what they may
+DO, and is **global**: holding `queue.write` means holding it wherever the queue
+appears. Actions are deliberately not scoped per portal — the server only ever
+sees a token, never a portal, so a per-portal right could not be enforced and
+would be a boundary in appearance only.
+
+| Group | Capabilities |
+|---|---|
+| Portals | `portal.admin`, `portal.doctor`, `portal.staff`, `portal.lab`, `portal.inpatient` |
+| Patient administration | `patients.write`, `queue.write`, `appointments.view/.write`, `documents.write` |
+| Modules | `inpatient.access/.write`, `stock.access/.write`, `lab.view/.write` |
+| Administration | `admin.access`, `users.view/.write`, `config.write`, `monitoring.view` |
+
+Portal entry replaces the old rule where `admin.access` opened **every** portal —
+`ProtectedRoute` short-circuited on it before it looked at the route at all. A
+person can now be given the Lab portal without being given the Admin portal.
+Migration `20260818000002` grants all five portals to every existing
+`admin.access` holder, so nobody loses access at deploy; the change is that it is
+now written down and can be narrowed.
+
+Every area capability was **appended** to its existing gate rather than replacing
+the role list, so a grant only ever adds people and no current user loses access.
 
 Backend:
 - `constants/permissions.js` — the capabilities above, `PERMISSION_SECTIONS` (the shape

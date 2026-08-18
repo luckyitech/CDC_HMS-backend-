@@ -56,7 +56,7 @@ router.post(
 router.get(
   '/stats',
   authenticate,
-  authorize('lab', 'doctor', 'admin'),
+  authorize('lab', 'doctor', 'admin', 'lab.view'),
   labTestController.stats
 );
 
@@ -68,7 +68,7 @@ router.get(
 router.get(
   '/pending',
   authenticate,
-  authorize('lab'),
+  authorize('lab', 'lab.write'),
   labTestController.pending
 );
 
@@ -80,7 +80,7 @@ router.get(
 router.get(
   '/critical',
   authenticate,
-  authorize('lab', 'doctor'),
+  authorize('lab', 'doctor', 'lab.write'),
   labTestController.critical
 );
 
@@ -95,7 +95,7 @@ router.get(
 router.get(
   '/',
   authenticate,
-  authorize('lab', 'nurse', 'doctor', 'staff', 'admin'),
+  authorize('lab', 'nurse', 'doctor', 'staff', 'admin', 'lab.view'),
   labTestController.list
 );
 
@@ -106,7 +106,7 @@ router.get(
 router.get(
   '/:id',
   authenticate,
-  authorize('lab', 'nurse', 'doctor', 'staff', 'admin'),
+  authorize('lab', 'nurse', 'doctor', 'staff', 'admin', 'lab.view'),
   labTestController.getOne
 );
 
@@ -119,7 +119,7 @@ router.get(
 router.put(
   '/:id',
   authenticate,
-  authorize('lab'),
+  authorize('lab', 'lab.write'),
   [
     // Optional validation - status must be valid if provided
     body('status')

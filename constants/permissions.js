@@ -1,11 +1,11 @@
 // =====================================================================
 // Per-user permissions — capabilities granted on top of a user's role.
 //
-// A permission does NOT change who someone is. A nurse granted ADMIN_ACCESS is
-// still role 'staff': they keep their StaffProfile, their staff portal and
-// their identity, and gain the admin portal as well. That separation is what
-// keeps this cheap — profile loading, portal routing and the five-portal model
-// are untouched.
+// A permission does NOT change who someone is. A doctor granted ADMIN_ACCESS is
+// still role 'doctor': they keep their StaffProfile, their portal and their
+// identity, and gain the admin portal as well. That separation is what keeps
+// this cheap — profile loading, portal routing and the portal model are
+// untouched.
 //
 // Adding a capability later costs a string here, not a migration: permissions
 // live in one JSON column and are checked through one middleware. This replaced
@@ -14,32 +14,60 @@
 // every time and had already started to duplicate logic.
 //
 // Roles are NOT permissions. `role` stays the source of truth for identity, and
-// two things are deliberately reserved to a real role: 'admin' account:
+// two things are deliberately reserved to a real 'admin' account:
 //   - granting or revoking permissions
 //   - anything else that could make a grant irrevocable
 // See middleware/auth.js and controllers/userController.js.
+//
+// ---------------------------------------------------------------------
+// TWO KINDS OF CAPABILITY
+//
+// portal.*  — which portal SHELL a person may enter. Frontend only: a portal is
+//             a set of screens, not an API concept, so the server has no portal
+//             to check against. Every endpoint behind those screens is still
+//             gated by the functional capabilities below, which is where the
+//             actual boundary lives.
+//
+// <area>.*  — what a person may DO. These are global: holding 'queue.write'
+//             means holding it wherever the queue appears. They are deliberately
+//             NOT scoped per portal — the server only ever sees a token, never a
+//             portal, so a per-portal right could not be enforced and would be a
+//             boundary in appearance only.
+//
+// An area with meaningful write actions carries both '.view'/'.access' and
+// '.write'; an all-or-nothing area carries one. A write toggle is NOT added
+// where it would mean nothing — the same rule the project applies to audit
+// fields.
 // =====================================================================
 
-// Capabilities are named <section>.<verb>. A section that has meaningful write
-// actions carries both '.access' (reach it, read it) and '.write' (act in it);
-// a section that is all-or-nothing carries only '.access'. A write toggle is
-// NOT added where it would mean nothing — the same rule the project applies to
-// audit fields.
 const PERMISSIONS = {
-  // Reach the admin portal and every endpoint gated by authorize('admin').
-  // All-or-nothing by nature: "everything an administrator can do" has no
-  // coherent read-only half, so there is deliberately no admin.write.
-  ADMIN_ACCESS: 'admin.access',
+  // --- Portal entry (see note above: frontend shell only) ---
+  PORTAL_ADMIN:     'portal.admin',
+  PORTAL_DOCTOR:    'portal.doctor',
+  PORTAL_STAFF:     'portal.staff',
+  PORTAL_LAB:       'portal.lab',
+  PORTAL_INPATIENT: 'portal.inpatient',
 
-  // Stock / Pharmacy. Split from the old all-or-nothing 'stock.manage' so a
-  // person can be given visibility (levels, batches, movements, reports)
-  // without the ability to move the ledger.
-  STOCK_ACCESS: 'stock.access',
-  STOCK_WRITE:  'stock.write',
+  // --- Administration ---
+  // Passes any endpoint gated by authorize('admin'). Kept as the broad grant it
+  // has always been; the three below carve out narrower slices for someone who
+  // should run one admin screen without holding the lot.
+  ADMIN_ACCESS:    'admin.access',
+  USERS_VIEW:      'users.view',
+  USERS_WRITE:     'users.write',
+  CONFIG_WRITE:    'config.write',
+  MONITORING_VIEW: 'monitoring.view',
 
+  // --- Patient administration ---
+  PATIENTS_WRITE:     'patients.write',
+  QUEUE_WRITE:        'queue.write',
+  APPOINTMENTS_VIEW:  'appointments.view',
+  APPOINTMENTS_WRITE: 'appointments.write',
+  DOCUMENTS_WRITE:    'documents.write',
+
+  // --- Modules ---
   // Reach the inpatient module (ward board + inpatient records) regardless of
-  // role. Doctors and nurses reach it by role; this opens it to a granted user
-  // (e.g. staff). Grantable from the Staff File's Permissions tab.
+  // role. Doctors reach it by role; this opens it to a granted user.
   INPATIENT_ACCESS: 'inpatient.access',
   // Act on an admission: convert / direct admit, transfer, discharge, cancel a
   // request, release a bed, add an inpatient charge. Deliberately NOT the
@@ -47,6 +75,16 @@ const PERMISSIONS = {
   // radiology and medication orders) — authoring a clinical entry is clinical
   // authority, not module access, and stays gated by role.
   INPATIENT_WRITE: 'inpatient.write',
+
+  // Stock / Pharmacy. Split from the old all-or-nothing 'stock.manage' so a
+  // person can be given visibility without the ability to move the ledger.
+  STOCK_ACCESS: 'stock.access',
+  STOCK_WRITE:  'stock.write',
+
+  // Lab results. LAB_WRITE is entering and amending results; ordering a test
+  // stays with the doctor role, since ordering is a clinical decision.
+  LAB_VIEW:  'lab.view',
+  LAB_WRITE: 'lab.write',
 };
 
 const ALL_PERMISSIONS = Object.values(PERMISSIONS);
@@ -59,53 +97,123 @@ const LEGACY_PERMISSIONS = {
   'stock.manage': [PERMISSIONS.STOCK_ACCESS, PERMISSIONS.STOCK_WRITE],
 };
 
-// Granting a write implies the access it is meaningless without, so the two can
-// never be stored in a state the UI cannot represent.
+// Granting a capability implies the one it is meaningless without, so the two
+// can never be stored in a state the UI cannot represent. Entering the admin
+// portal implies being able to use it, for the same reason.
 const IMPLIED_BY = {
-  [PERMISSIONS.STOCK_WRITE]:     PERMISSIONS.STOCK_ACCESS,
-  [PERMISSIONS.INPATIENT_WRITE]: PERMISSIONS.INPATIENT_ACCESS,
+  [PERMISSIONS.STOCK_WRITE]:        PERMISSIONS.STOCK_ACCESS,
+  [PERMISSIONS.INPATIENT_WRITE]:    PERMISSIONS.INPATIENT_ACCESS,
+  [PERMISSIONS.LAB_WRITE]:          PERMISSIONS.LAB_VIEW,
+  [PERMISSIONS.USERS_WRITE]:        PERMISSIONS.USERS_VIEW,
+  [PERMISSIONS.APPOINTMENTS_WRITE]: PERMISSIONS.APPOINTMENTS_VIEW,
+  [PERMISSIONS.PORTAL_ADMIN]:       PERMISSIONS.ADMIN_ACCESS,
+};
+
+// Which portal each role reaches without anything being granted. Used for the
+// "By role" hint on the Permissions tab and by the frontend's portal guard, so
+// the two cannot disagree about what a role already allows.
+const ROLE_HOME_PORTAL = {
+  admin:  PERMISSIONS.PORTAL_ADMIN,
+  doctor: PERMISSIONS.PORTAL_DOCTOR,
+  staff:  PERMISSIONS.PORTAL_STAFF,
+  lab:    PERMISSIONS.PORTAL_LAB,
+  nurse:  PERMISSIONS.PORTAL_INPATIENT,
 };
 
 /**
- * The portal sections the Staff File's Permissions tab renders, in order.
+ * The Permissions tab, in render order.
  *
- * Lives here rather than in the frontend so the tab cannot drift from what the
- * routes actually enforce: the catalog endpoint serves this shape, and the tab
- * renders whatever it is given.
+ * Lives here rather than in the frontend so the tab cannot drift from the
+ * vocabulary the routes enforce: the catalog endpoint serves this shape and the
+ * tab renders whatever it is given.
+ *
+ * Areas are grouped by what they ARE, not by which portal shows them. Several
+ * appear in more than one portal, and because a capability is global, nesting
+ * them under portals would suggest a per-portal setting that does not exist —
+ * `appliesIn` names the portals instead.
  */
-const PERMISSION_SECTIONS = [
+const PERMISSION_GROUPS = [
   {
-    key: 'admin',
-    name: 'Admin portal',
-    description: 'User management, clinical catalog, ward config, monitoring and settings.',
-    access: PERMISSIONS.ADMIN_ACCESS,
-    write: null,
-    // What the ROLE already allows, in plain words. Without it the tab cannot
-    // say whether granting or withdrawing is the meaningful action for this
-    // person — "no toggle set" means something different in each section.
-    roleDefault: 'Administrators only',
-    accessLabel: 'Can access',
-    warning: 'They will be able to do everything an administrator can, except grant permissions to others.',
+    key: 'portals',
+    name: 'Portals',
+    description: 'Which parts of the system this person can open. Their own role always '
+      + 'opens their own portal.',
+    areas: [
+      { key: 'p-admin',     name: 'Admin portal',        access: PERMISSIONS.PORTAL_ADMIN,     accessLabel: 'Can open', roleDefault: 'Administrators',
+        warning: 'The admin portal includes user management. They will be able to do everything an administrator can, except grant permissions to others.' },
+      { key: 'p-doctor',    name: 'Doctor portal',       access: PERMISSIONS.PORTAL_DOCTOR,    accessLabel: 'Can open', roleDefault: 'Doctors' },
+      { key: 'p-staff',     name: 'Staff portal',        access: PERMISSIONS.PORTAL_STAFF,     accessLabel: 'Can open', roleDefault: 'Front desk' },
+      { key: 'p-lab',       name: 'Lab portal',          access: PERMISSIONS.PORTAL_LAB,       accessLabel: 'Can open', roleDefault: 'Lab technicians' },
+      { key: 'p-inpatient', name: 'Inpatient workspace', access: PERMISSIONS.PORTAL_INPATIENT, accessLabel: 'Can open', roleDefault: 'Doctors and nurses' },
+    ],
   },
   {
-    key: 'stock',
-    name: 'Stock / Pharmacy',
-    description: 'Stock levels, batches, movements and reports.',
-    access: PERMISSIONS.STOCK_ACCESS,
-    write: PERMISSIONS.STOCK_WRITE,
-    roleDefault: 'Nobody by role — must be granted',
-    accessLabel: 'Can view',
-    writeLabel: 'Can receive, dispense, transfer and adjust',
+    key: 'patient-admin',
+    name: 'Patient administration',
+    description: 'Day-to-day front-desk work. Reading a patient record is not listed here — '
+      + 'that follows the clinical role rules and is not set per person.',
+    areas: [
+      { key: 'patients', name: 'Patient records', appliesIn: 'Staff, Doctor, Admin',
+        description: 'Registering a patient and editing their details.',
+        access: null, write: PERMISSIONS.PATIENTS_WRITE,
+        writeLabel: 'Can register and edit patients', roleDefault: 'Front desk, doctors' },
+      { key: 'queue', name: 'Queue and triage', appliesIn: 'Staff, Doctor',
+        access: null, write: PERMISSIONS.QUEUE_WRITE,
+        writeLabel: 'Can move patients through the queue', roleDefault: 'Front desk, doctors' },
+      { key: 'appointments', name: 'Appointments', appliesIn: 'Staff, Doctor, Admin',
+        access: PERMISSIONS.APPOINTMENTS_VIEW, write: PERMISSIONS.APPOINTMENTS_WRITE,
+        accessLabel: 'Can view the diary', writeLabel: 'Can book, reschedule and cancel',
+        roleDefault: 'Front desk, doctors' },
+      { key: 'documents', name: 'Medical documents', appliesIn: 'Staff, Doctor, Admin',
+        access: null, write: PERMISSIONS.DOCUMENTS_WRITE,
+        writeLabel: 'Can upload and edit documents', roleDefault: 'Front desk, doctors' },
+    ],
   },
   {
-    key: 'inpatient',
-    name: 'Inpatient',
-    description: 'Ward board, admissions and the inpatient record.',
-    access: PERMISSIONS.INPATIENT_ACCESS,
-    write: PERMISSIONS.INPATIENT_WRITE,
-    roleDefault: 'Clinical and front-desk roles',
-    accessLabel: 'Can view',
-    writeLabel: 'Can admit, transfer, discharge and bill',
+    key: 'modules',
+    name: 'Modules',
+    areas: [
+      { key: 'inpatient', name: 'Inpatient', appliesIn: 'Inpatient workspace, Staff, Doctor',
+        description: 'Ward board, admissions and the inpatient record.',
+        access: PERMISSIONS.INPATIENT_ACCESS, write: PERMISSIONS.INPATIENT_WRITE,
+        accessLabel: 'Can view', writeLabel: 'Can admit, transfer, discharge and bill',
+        roleDefault: 'Clinical and front-desk roles' },
+      { key: 'stock', name: 'Stock / Pharmacy', appliesIn: 'Staff, Doctor, Admin',
+        description: 'Stock levels, batches, movements and reports.',
+        access: PERMISSIONS.STOCK_ACCESS, write: PERMISSIONS.STOCK_WRITE,
+        accessLabel: 'Can view', writeLabel: 'Can receive, dispense, transfer and adjust',
+        roleDefault: 'Nobody by role — must be granted' },
+      { key: 'lab', name: 'Lab results', appliesIn: 'Lab, Doctor',
+        description: 'Pending tests, results, history and critical alerts. Ordering a test '
+          + 'stays with the doctor role.',
+        access: PERMISSIONS.LAB_VIEW, write: PERMISSIONS.LAB_WRITE,
+        accessLabel: 'Can view results', writeLabel: 'Can enter and amend results',
+        roleDefault: 'Lab technicians, doctors' },
+    ],
+  },
+  {
+    key: 'administration',
+    name: 'Administration',
+    description: 'Slices of the admin portal, for someone who should run one screen without '
+      + 'holding everything an administrator can do.',
+    areas: [
+      { key: 'admin-all', name: 'Full administrator access', appliesIn: 'Admin',
+        description: 'Everything below, plus every other admin-only endpoint.',
+        access: PERMISSIONS.ADMIN_ACCESS, accessLabel: 'Can do everything an admin can',
+        roleDefault: 'Administrators',
+        warning: 'They will be able to do everything an administrator can, except grant permissions to others.' },
+      { key: 'users', name: 'Users and staff files', appliesIn: 'Admin',
+        access: PERMISSIONS.USERS_VIEW, write: PERMISSIONS.USERS_WRITE,
+        accessLabel: 'Can view users', writeLabel: 'Can create and edit users',
+        roleDefault: 'Administrators' },
+      { key: 'config', name: 'Catalog, wards and settings', appliesIn: 'Admin',
+        access: null, write: PERMISSIONS.CONFIG_WRITE,
+        writeLabel: 'Can change clinical catalog, wards and system settings',
+        roleDefault: 'Administrators' },
+      { key: 'monitoring', name: 'Monitoring and analytics', appliesIn: 'Admin',
+        access: PERMISSIONS.MONITORING_VIEW, accessLabel: 'Can view activity log, analytics and reports',
+        roleDefault: 'Administrators' },
+    ],
   },
 ];
 
@@ -145,7 +253,7 @@ const expand = (list) => {
 /**
  * Capabilities explicitly WITHDRAWN from this user — the restrictive half of
  * the model. A grant adds to what a role allows; a denial subtracts from it,
- * so an admin can hold one person out of a section their role would otherwise
+ * so an admin can hold one person out of an area their role would otherwise
  * open.
  *
  * A real admin account can never be denied anything. Allowing it would let an
@@ -179,6 +287,21 @@ const hasPermission = (user, permission) => effectivePermissions(user).has(permi
 const isDenied = (user, permission) => deniedPermissions(user).has(permission);
 
 /**
+ * May this user open this portal shell?
+ *
+ * Their own role's portal always, plus anything granted, minus anything
+ * withdrawn. Shared with the frontend through the session payload so
+ * ProtectedRoute and this agree on one answer.
+ */
+const canOpenPortal = (user, portalPermission) => {
+  if (!user) return false;
+  if (isTrueAdmin(user)) return true;
+  if (isDenied(user, portalPermission)) return false;
+  if (ROLE_HOME_PORTAL[user.role] === portalPermission) return true;
+  return hasPermission(user, portalPermission);
+};
+
+/**
  * Normalise a capability list coming from a client: legacy names translated,
  * unknown names dropped, duplicates removed, order stable. Returning only known
  * permissions means a typo silently grants nothing rather than storing a string
@@ -190,22 +313,22 @@ const sanitizePermissions = (input) => {
   // A write is meaningless without the access it acts within, so granting one
   // carries the other. Without this the tab could store "can dispense but
   // cannot open Stock", which no screen can represent and no gate expects.
-  Object.entries(IMPLIED_BY).forEach(([write, access]) => {
-    if (set.has(write)) set.add(access);
+  Object.entries(IMPLIED_BY).forEach(([held, implied]) => {
+    if (set.has(held)) set.add(implied);
   });
   return ALL_PERMISSIONS.filter((p) => set.has(p));
 };
 
 /**
  * Normalise a denial list. Same rules, with the implication inverted:
- * withdrawing a section's access necessarily withdraws the ability to act in
- * it, or a denied user would still reach the write routes.
+ * withdrawing an area's access necessarily withdraws the ability to act in it,
+ * or a denied user would still reach the write routes.
  */
 const sanitizeDeniedPermissions = (input) => {
   if (!Array.isArray(input)) return [];
   const set = expand(input);
-  Object.entries(IMPLIED_BY).forEach(([write, access]) => {
-    if (set.has(access)) set.add(write);
+  Object.entries(IMPLIED_BY).forEach(([held, implied]) => {
+    if (set.has(implied)) set.add(held);
   });
   return ALL_PERMISSIONS.filter((p) => set.has(p));
 };
@@ -214,13 +337,15 @@ module.exports = {
   PERMISSIONS,
   ALL_PERMISSIONS,
   LEGACY_PERMISSIONS,
-  PERMISSION_SECTIONS,
+  PERMISSION_GROUPS,
+  ROLE_HOME_PORTAL,
   PERMISSIBLE_ROLES,
   CLINICAL_READ_ROLES,
   effectivePermissions,
   deniedPermissions,
   hasPermission,
   isDenied,
+  canOpenPortal,
   isTrueAdmin,
   sanitizePermissions,
   sanitizeDeniedPermissions,

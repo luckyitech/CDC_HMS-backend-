@@ -15,7 +15,7 @@ const db = require('../models');
 const sequelize = require('../config/database');
 const { STAFF_ROLES } = require('../constants/staffRoles');
 const {
-  PERMISSIONS, ALL_PERMISSIONS, PERMISSION_SECTIONS, PERMISSIBLE_ROLES,
+  PERMISSIONS, ALL_PERMISSIONS, PERMISSION_GROUPS, PERMISSIBLE_ROLES,
   hasPermission, isTrueAdmin, sanitizePermissions, sanitizeDeniedPermissions,
 } = require('../constants/permissions');
 
@@ -496,9 +496,9 @@ const updatePermissions = async (req, res) => {
 const permissionCatalog = async (_req, res) =>
   success(res, {
     permissions: ALL_PERMISSIONS,
-    // The section/toggle shape the tab renders. Served from the backend so the
-    // screen cannot drift from the vocabulary the routes actually enforce.
-    sections: PERMISSION_SECTIONS,
+    // The group/area/toggle shape the tab renders. Served from the backend so
+    // the screen cannot drift from the vocabulary the routes actually enforce.
+    groups: PERMISSION_GROUPS,
     permissibleRoles: PERMISSIBLE_ROLES,
   });
 

@@ -33,7 +33,7 @@ router.get(
 router.get(
   '/slots',
   authenticate,
-  authorize('staff', 'doctor', 'admin'),
+  authorize('staff', 'doctor', 'admin', 'appointments.write'),
   appointmentController.getSlots
 );
 
@@ -85,7 +85,7 @@ router.get(
 router.put(
   '/:id/status',
   authenticate,
-  authorize('staff', 'doctor', 'patient', 'admin'),
+  authorize('staff', 'doctor', 'patient', 'admin', 'appointments.write'),
   [
     body('status')
       .isIn(['scheduled', 'checked-in', 'completed', 'cancelled'])

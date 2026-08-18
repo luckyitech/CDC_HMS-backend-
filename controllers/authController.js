@@ -4,7 +4,7 @@ const crypto = require('crypto');
 const { Op } = require('sequelize');
 const { success, error } = require('../utils/response');
 const { sendPasswordResetEmail } = require('../utils/emailService');
-const { PERMISSIONS, hasPermission, effectivePermissions } = require('../constants/permissions');
+const { PERMISSIONS, hasPermission, canOpenPortal, effectivePermissions } = require('../constants/permissions');
 const { getRotationStatus } = require('../utils/passwordRotation');
 const db = require('../models');
 
@@ -40,6 +40,13 @@ const buildUserResponse = async (user) => {
     // column is superseded by the 'stock.access' permission; nothing should read
     // user.canManageStock directly any more.
     canManageStock: hasPermission(user, PERMISSIONS.STOCK_ACCESS),
+    // Which portal shells this account may open, resolved here: their role's own
+    // portal, plus anything granted, minus anything withdrawn. Sent as an answer
+    // rather than as inputs so ProtectedRoute and the sidebar cannot each derive
+    // a slightly different one.
+    portals: Object.values(PERMISSIONS)
+      .filter((p) => p.startsWith('portal.'))
+      .filter((p) => canOpenPortal(user, p)),
   };
 
   // Scheduled password rotation. mustChangePassword sends the frontend straight
