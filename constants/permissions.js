@@ -198,7 +198,12 @@ const PERMISSION_GROUPS = [
       + 'holding everything an administrator can do.',
     areas: [
       { key: 'admin-all', name: 'Full administrator access', appliesIn: 'Admin',
-        description: 'Everything below, plus every other admin-only endpoint.',
+        description: 'Every admin-only endpoint, including the three below. Anything set to '
+          + 'Withdrawn still overrides this — a withdrawal always beats a grant.',
+        // Marks a grant broad enough that a withdrawal elsewhere carves a hole in
+        // it. The tab spells out the exceptions rather than leaving the card
+        // claiming "everything" while something below is switched off.
+        broad: true,
         access: PERMISSIONS.ADMIN_ACCESS, accessLabel: 'Can do everything an admin can',
         roleDefault: 'Administrators',
         warning: 'They will be able to do everything an administrator can, except grant permissions to others.' },
