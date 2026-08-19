@@ -47,6 +47,7 @@ const PERMISSIONS = {
   PORTAL_STAFF:     'portal.staff',
   PORTAL_LAB:       'portal.lab',
   PORTAL_INPATIENT: 'portal.inpatient',
+  PORTAL_RADIOLOGY: 'portal.radiology',
 
   // --- Administration ---
   // Passes any endpoint gated by authorize('admin'). Kept as the broad grant it
@@ -116,15 +117,22 @@ const IMPLIED_BY = {
   [PERMISSIONS.APPOINTMENTS_WRITE]: PERMISSIONS.APPOINTMENTS_VIEW,
 };
 
-// Which portal each role reaches without anything being granted. Used for the
-// "By role" hint on the Permissions tab and by the frontend's portal guard, so
-// the two cannot disagree about what a role already allows.
-const ROLE_HOME_PORTAL = {
-  admin:  PERMISSIONS.PORTAL_ADMIN,
-  doctor: PERMISSIONS.PORTAL_DOCTOR,
-  staff:  PERMISSIONS.PORTAL_STAFF,
-  lab:    PERMISSIONS.PORTAL_LAB,
-  nurse:  PERMISSIONS.PORTAL_INPATIENT,
+// Which portals each role reaches without anything being granted.
+//
+// A LIST per role, not one "home" portal. The single-portal version was wrong:
+// a doctor has always reached both their own portal and the inpatient
+// workspace, so mapping doctor -> portal.doctor alone silently shut doctors out
+// of the ward. The Radiology Suite has the same shape — doctors and front desk
+// both reach it by role — which is what made the assumption visible.
+//
+// Grants add to this list and withdrawals subtract from it, so a portal here is
+// a default rather than a guarantee.
+const ROLE_DEFAULT_PORTALS = {
+  admin:  [PERMISSIONS.PORTAL_ADMIN],   // a real admin short-circuits below anyway
+  doctor: [PERMISSIONS.PORTAL_DOCTOR, PERMISSIONS.PORTAL_INPATIENT, PERMISSIONS.PORTAL_RADIOLOGY],
+  staff:  [PERMISSIONS.PORTAL_STAFF,  PERMISSIONS.PORTAL_RADIOLOGY],
+  lab:    [PERMISSIONS.PORTAL_LAB],
+  nurse:  [PERMISSIONS.PORTAL_INPATIENT],
 };
 
 /**
@@ -152,6 +160,7 @@ const PERMISSION_GROUPS = [
       { key: 'p-staff',     name: 'Staff portal',        access: PERMISSIONS.PORTAL_STAFF,     accessLabel: 'Can open', roleDefault: 'Front desk' },
       { key: 'p-lab',       name: 'Lab portal',          access: PERMISSIONS.PORTAL_LAB,       accessLabel: 'Can open', roleDefault: 'Lab technicians' },
       { key: 'p-inpatient', name: 'Inpatient workspace', access: PERMISSIONS.PORTAL_INPATIENT, accessLabel: 'Can open', roleDefault: 'Doctors and nurses' },
+      { key: 'p-radiology', name: 'Radiology Suite',    access: PERMISSIONS.PORTAL_RADIOLOGY, accessLabel: 'Can open', roleDefault: 'Doctors and front desk' },
     ],
   },
   {
@@ -329,7 +338,7 @@ const canOpenPortal = (user, portalPermission) => {
   if (!user) return false;
   if (isTrueAdmin(user)) return true;
   if (isDenied(user, portalPermission)) return false;
-  if (ROLE_HOME_PORTAL[user.role] === portalPermission) return true;
+  if ((ROLE_DEFAULT_PORTALS[user.role] || []).includes(portalPermission)) return true;
   // Full administrator access carries the door with it. The reverse implication
   // was removed (see IMPLIED_BY), but this direction still holds: every admin
   // power and no way to reach the portal would be the same trap mirrored.
@@ -376,7 +385,7 @@ module.exports = {
   ALL_PERMISSIONS,
   LEGACY_PERMISSIONS,
   PERMISSION_GROUPS,
-  ROLE_HOME_PORTAL,
+  ROLE_DEFAULT_PORTALS,
   PERMISSIBLE_ROLES,
   CLINICAL_READ_ROLES,
   effectivePermissions,
