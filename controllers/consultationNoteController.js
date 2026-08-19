@@ -25,6 +25,11 @@ const formatConsultationNote = (note) => {
     doctorName: n.doctor
       ? `Dr. ${n.doctor.firstName} ${n.doctor.lastName}`
       : null,
+    // doctorId + createdAt let the consultation editor find THIS doctor's note
+    // for THIS visit (created after the queue check-in), instead of any note
+    // dated today — two check-ins on one day must not overwrite each other.
+    doctorId: n.doctorId,
+    createdAt: n.createdAt,
     date: n.date,
     time: n.time,
     notes: n.notes,
