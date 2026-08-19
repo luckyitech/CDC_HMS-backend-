@@ -4,9 +4,23 @@
 // We must create a regular index on the same columns first, then drop the unique one.
 module.exports = {
   async up(queryInterface) {
+    // Guarded so this migration is safe to re-run, and safe on a database
+    // built by sequelize.sync() — which is what server.js does on boot, so it
+    // is the normal state of every dev machine here. Without this the migration
+    // throws on an existing column and sequelize-cli stops, taking every later
+    // migration with it.
+    const addIndexIfMissing = async (...args) => {
+      try {
+        await queryInterface.addIndex(...args);
+      } catch (err) {
+        // Duplicate index names / duplicate key names are the re-run case.
+        if (!/duplicate|exists/i.test(err.message || '')) throw err;
+      }
+    };
+
     // 1. Add a non-unique index (MySQL needs it to back the FK on doctorId)
     try {
-      await queryInterface.addIndex('Appointments', {
+      await addIndexIfMissing('Appointments', {
         fields: ['doctorId', 'date', 'timeSlot'],
         name: 'idx_appointments_doctor_date_timeslot',
       });
@@ -26,7 +40,7 @@ module.exports = {
 
   async down(queryInterface) {
     try {
-      await queryInterface.addIndex('Appointments', {
+      await addIndexIfMissing('Appointments', {
         fields: ['doctorId', 'date', 'timeSlot'],
         unique: true,
         name: 'unique_doctor_date_timeslot',
