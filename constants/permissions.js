@@ -98,15 +98,22 @@ const LEGACY_PERMISSIONS = {
 };
 
 // Granting a capability implies the one it is meaningless without, so the two
-// can never be stored in a state the UI cannot represent. Entering the admin
-// portal implies being able to use it, for the same reason.
+// can never be stored in a state the UI cannot represent.
+//
+// PORTAL_ADMIN deliberately does NOT imply ADMIN_ACCESS. It used to, on the
+// reasoning that an admin portal you cannot use is pointless — but that was only
+// true before the narrow admin capabilities existed. With users.view,
+// config.write and monitoring.view available, an admin portal holding just one
+// of them is a perfectly useful thing to grant, and the implication made it
+// impossible to express: opening the portal quietly handed over every
+// administrator power. Full administrator access is its own toggle now, and
+// granting it is a separate, deliberate act.
 const IMPLIED_BY = {
   [PERMISSIONS.STOCK_WRITE]:        PERMISSIONS.STOCK_ACCESS,
   [PERMISSIONS.INPATIENT_WRITE]:    PERMISSIONS.INPATIENT_ACCESS,
   [PERMISSIONS.LAB_WRITE]:          PERMISSIONS.LAB_VIEW,
   [PERMISSIONS.USERS_WRITE]:        PERMISSIONS.USERS_VIEW,
   [PERMISSIONS.APPOINTMENTS_WRITE]: PERMISSIONS.APPOINTMENTS_VIEW,
-  [PERMISSIONS.PORTAL_ADMIN]:       PERMISSIONS.ADMIN_ACCESS,
 };
 
 // Which portal each role reaches without anything being granted. Used for the
@@ -140,7 +147,7 @@ const PERMISSION_GROUPS = [
       + 'opens their own portal.',
     areas: [
       { key: 'p-admin',     name: 'Admin portal',        access: PERMISSIONS.PORTAL_ADMIN,     accessLabel: 'Can open', roleDefault: 'Administrators',
-        warning: 'The admin portal includes user management. They will be able to do everything an administrator can, except grant permissions to others.' },
+        warning: 'This opens the admin portal. What they can actually do inside it is set by the Administration group below — on its own, this grants no administrator powers.' },
       { key: 'p-doctor',    name: 'Doctor portal',       access: PERMISSIONS.PORTAL_DOCTOR,    accessLabel: 'Can open', roleDefault: 'Doctors' },
       { key: 'p-staff',     name: 'Staff portal',        access: PERMISSIONS.PORTAL_STAFF,     accessLabel: 'Can open', roleDefault: 'Front desk' },
       { key: 'p-lab',       name: 'Lab portal',          access: PERMISSIONS.PORTAL_LAB,       accessLabel: 'Can open', roleDefault: 'Lab technicians' },
@@ -323,6 +330,11 @@ const canOpenPortal = (user, portalPermission) => {
   if (isTrueAdmin(user)) return true;
   if (isDenied(user, portalPermission)) return false;
   if (ROLE_HOME_PORTAL[user.role] === portalPermission) return true;
+  // Full administrator access carries the door with it. The reverse implication
+  // was removed (see IMPLIED_BY), but this direction still holds: every admin
+  // power and no way to reach the portal would be the same trap mirrored.
+  if (portalPermission === PERMISSIONS.PORTAL_ADMIN
+      && hasPermission(user, PERMISSIONS.ADMIN_ACCESS)) return true;
   return hasPermission(user, portalPermission);
 };
 

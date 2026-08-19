@@ -220,11 +220,29 @@ describe('portal entry is granted per portal', () => {
     assert.equal(canOpenPortal(admin, PERMISSIONS.PORTAL_ADMIN), true);
   });
 
-  test('opening the admin portal carries the ability to use it', () => {
+  test('opening the admin portal does NOT hand over administrator powers', () => {
+    // This implication used to exist, on the reasoning that an admin portal you
+    // cannot use is pointless. It was wrong once the narrow admin capabilities
+    // arrived: it made "the admin portal, but only Monitoring" impossible to
+    // express, because opening the door quietly granted everything behind it.
     assert.ok(
-      sanitizePermissions([PERMISSIONS.PORTAL_ADMIN]).includes(PERMISSIONS.ADMIN_ACCESS),
-      'an admin portal whose endpoints all 403 is not a grant, it is a trap'
+      !sanitizePermissions([PERMISSIONS.PORTAL_ADMIN]).includes(PERMISSIONS.ADMIN_ACCESS),
+      'granting a portal must not grant the powers inside it'
     );
+  });
+
+  test('but full administrator access still carries the door', () => {
+    // The mirror image would be its own trap: every admin power and no way in.
+    const holder = { role: 'staff', permissions: [PERMISSIONS.ADMIN_ACCESS], deniedPermissions: [] };
+    assert.equal(canOpenPortal(holder, PERMISSIONS.PORTAL_ADMIN), true);
+  });
+
+  test('a narrow admin grant opens the portal and nothing more', async () => {
+    const narrow = { role: 'staff', permissions: [PERMISSIONS.PORTAL_ADMIN, PERMISSIONS.MONITORING_VIEW], deniedPermissions: [] };
+    assert.equal(canOpenPortal(narrow, PERMISSIONS.PORTAL_ADMIN), true);
+    assert.equal((await run(authorize('admin', 'monitoring.view'), narrow)).allowed, true);
+    assert.equal((await run(authorize('admin', 'users.view'), narrow)).allowed, false,
+      'the rest of the admin portal must stay shut');
   });
 });
 
