@@ -22,7 +22,7 @@ const appointmentController = require('../controllers/appointmentController');
 router.get(
   '/stats',
   authenticate,
-  authorize('doctor', 'admin'),
+  authorize('doctor', 'admin', 'appointments.view'),
   appointmentController.stats
 );
 
@@ -33,7 +33,7 @@ router.get(
 router.get(
   '/slots',
   authenticate,
-  authorize('staff', 'doctor', 'admin'),
+  authorize('staff', 'doctor', 'admin', 'appointments.view'),
   appointmentController.getSlots
 );
 
@@ -45,7 +45,7 @@ router.get(
 router.post(
   '/',
   authenticate,
-  authorize('patient', 'doctor', 'staff', 'admin'),
+  authorize('patient', 'doctor', 'staff', 'admin', 'appointments.write'),
   [
     body('doctorId').isInt().withMessage('Doctor ID is required'),
     body('date').isDate().withMessage('Valid appointment date is required (YYYY-MM-DD)'),
@@ -73,7 +73,7 @@ router.post(
 router.get(
   '/',
   authenticate,
-  authorize(...CLINICAL_READ_ROLES, 'patient'),
+  authorize(...CLINICAL_READ_ROLES, 'patient', 'appointments.view'),
   appointmentController.list
 );
 
@@ -85,7 +85,7 @@ router.get(
 router.put(
   '/:id/status',
   authenticate,
-  authorize('staff', 'doctor', 'patient', 'admin'),
+  authorize('staff', 'doctor', 'patient', 'admin', 'appointments.write'),
   [
     body('status')
       .isIn(['scheduled', 'checked-in', 'completed', 'cancelled'])

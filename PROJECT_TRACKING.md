@@ -7,6 +7,176 @@ Running record of features, fixes and significant changes. A task is only marked
 
 ## In Progress
 
+### Per-staff portal permissions tab (admin-managed)
+
+- **Branch:** `feature/staff-portal-permissions` (both repos)
+- **Status:** Implemented and tested against a real MySQL/MariaDB dev database —
+  **awaiting the admin UI walkthrough in a browser**
+- **Started:** 2026-08-18
+- **Description:** The Staff File's Permissions tab becomes a per-section grid: for each
+  part of the portal an admin sets **Granted**, **Default** (whatever the role allows) or
+  **Withdrawn**. Sections with meaningful write actions carry a second toggle; sections
+  that are all-or-nothing do not, per the project's "don't add a field where it means
+  nothing" rule.
+
+  This grows the existing role + capability model rather than replacing it — one
+  vocabulary in `constants/permissions.js`, mirrored in `utils/permissions.js`, checked
+  through the one `authorize()` seam. No parallel `constants/roles.js`.
+
+**Two kinds of capability**
+
+`portal.*` decides which portal SHELL a person may open — frontend only, since a
+portal is a set of screens, not an API concept. `<area>.*` decides what they may
+DO, and is **global**: holding `queue.write` means holding it wherever the queue
+appears. Actions are deliberately not scoped per portal — the server only ever
+sees a token, never a portal, so a per-portal right could not be enforced and
+would be a boundary in appearance only.
+
+| Group | Capabilities |
+|---|---|
+| Portals | `portal.admin`, `portal.doctor`, `portal.staff`, `portal.lab`, `portal.inpatient` |
+| Patient administration | `patients.write`, `queue.write`, `appointments.view/.write`, `documents.write` |
+| Modules | `inpatient.access/.write`, `stock.access/.write`, `lab.view/.write` |
+| Administration | `admin.access`, `users.view/.write`, `config.write`, `monitoring.view` |
+
+Portal entry replaces the old rule where `admin.access` opened **every** portal —
+`ProtectedRoute` short-circuited on it before it looked at the route at all. A
+person can now be given the Lab portal without being given the Admin portal.
+Migration `20260818000002` grants all five portals to every existing
+`admin.access` holder, so nobody loses access at deploy; the change is that it is
+now written down and can be narrowed.
+
+Every area capability was **appended** to its existing gate rather than replacing
+the role list, so a grant only ever adds people and no current user loses access.
+
+Backend:
+- `constants/permissions.js` — the capabilities above, `PERMISSION_SECTIONS` (the shape
+  the tab renders, served from the catalog endpoint so the screen cannot drift from what
+  the routes enforce), and the grant/withdraw resolution
+- `middleware/auth.js` — `authorize()` refuses a capability that has been **withdrawn**,
+  checked before the role match. Only capabilities named in a gate are deniable, so
+  hardcoded clinical role lists cannot be switched off from the UI
+- `models/User.js` + `migrations/20260818000001-…` — `deniedPermissions` JSON column, and
+  `stock.manage` → `stock.access` + `stock.write` (every current holder keeps both halves)
+- `routes/admissions.js`, `beds.js`, `inpatientBilling.js` — `inpatient.write` added to
+  the front-desk actions (convert, direct admit, transfer, discharge, cancel request,
+  release bed, add charge). Doctor-authored clinical entries are deliberately untouched
+- `routes/stock.js` — `authorizeStock` split into `stockRead` / `stockWrite`
+- `controllers/staffController.js` — the catalog serves the sections; `updatePermissions`
+  takes both lists and audits both to `UserEditLog`, which the Activity tab already reads
+
+Frontend:
+- `components/admin/staff/AccessTab.jsx` — rebuilt as section cards with a three-way
+  control per capability. A switch cannot express the third state: "off" would have to
+  mean both "their role decides" and "refused even though their role allows it"
+- `utils/permissions.js` — mirrored capability names
+- `services/staffService.js` — `updatePermissions` carries the withdrawal list
+
+**Decisions**
+- Additive **and** restrictive. A withdrawal beats a grant, and a real `admin` account can
+  never be withdrawn from — otherwise the last administrator could lock themselves out of
+  the screen that grants permissions.
+- A write always carries the access it acts within; withdrawing access withdraws the
+  write. Enforced in the sanitizers so no unrepresentable state can be stored.
+- Assessments and physical exams are **not** exposed as toggles. `3cfe768` restricted them
+  deliberately; re-opening them from an admin screen would quietly reverse a clinical
+  decision.
+
+#### Follow-ups done on this branch (2026-08-18, overnight)
+
+- **`listUsers` now selects `permissions`.** It was omitted from the explicit
+  column list, so `formatUserResponse` read `undefined` and reported
+  `permissions: []`, `hasAdminAccess: false` and `canManageStock: false` for
+  every row — an API disagreeing with what the server enforces. Pinned by
+  `tests/userListPermissions.test.js`, because nothing about this fails loudly.
+  *(The destructive half originally flagged here — Manage Users silently wiping
+  other capabilities — no longer exists: neither `ManageUsers.jsx` nor
+  `EditUserModal.jsx` edits permissions any more.)*
+- **`toList()` in `constants/permissions.js`.** Sequelize returns a JSON column
+  parsed on MySQL but as a raw string on MariaDB and some drivers. Treating a
+  string as "not an array" resolved to NO capabilities — every check failing
+  closed, the user locked out of everything, and nothing logged.
+- **The admin menu is gated.** Entering the admin portal is a separate grant from
+  being able to run a screen inside it, so a user with `portal.admin` plus one
+  narrow capability saw the whole menu and 403'd on most of it. Sidebar entries
+  and tab groups now carry the capability that opens them, and a group whose tabs
+  are all hidden no longer renders an empty switcher bar.
+- **`passesAdminGate()` mirrors `authorize('admin', <cap>)`.** The first cut of
+  the menu gating regressed `admin.access` holders — the API admits them via the
+  admin bypass, but the menu only checked the narrow capability and hid nearly
+  everything. The session now also carries `deniedPermissions`, because the
+  frontend cannot otherwise tell "never granted, but admin.access covers it" from
+  "withdrawn, so admin.access must not cover it".
+- **The broad-grant card no longer overstates itself.** "Full administrator
+  access" claimed "everything below" while something below was Withdrawn. The
+  behaviour was right — a withdrawal beats a grant — but the copy read as a
+  contradiction; the tab now names the exceptions.
+
+Staff and doctor sidebars are deliberately **not** gated: those areas only have
+act-capabilities (`queue.write`, `patients.write`) and no matching view
+capability, so hiding links there would hide screens from people allowed to look.
+
+#### Gate audit — four capabilities were barely wired (fixed)
+
+Appending capabilities in bulk left real holes, found by scanning every route
+method-by-method rather than by clicking around:
+
+| Was | Now |
+|---|---|
+| `POST /appointments` — booking, the main write — had **no** capability | `appointments.write` |
+| `GET /appointments` — the diary — had **no** view capability | `appointments.view` |
+| `GET /lab-tests/pending` gated on `lab.write` (a **read** behind a write) | `lab.view` |
+| `PUT /patients/:uhid` — editing a patient — had **no** capability | `patients.write` |
+| `documents.write` could upload but not list (worked only because every
+  permission-holding role is in `CLINICAL_READ_ROLES` — a list that has been
+  deliberately narrowed before) | reads carry it too |
+| `GET /patients/stats` unlocked by `patients.write` | back to roles only |
+
+`tests/permissionVocabulary.test.js` now scans the route tree and fails if a
+capability gates nothing, a toggle offers a capability that does not exist, a
+route names one that does not exist, a `.view` capability sits on a mutation, or
+a write capability has no way to see what it acts on. It reads the files rather
+than a hand-kept list, so it stays true as routes are added.
+
+A write capability deliberately DOES carry the reads it needs — you cannot move a
+patient through a queue you are not allowed to list, or change a setting you
+cannot read. Those are the only reads under a `.write`.
+
+#### Verified end to end against a running stack
+
+API on a live database, real HTTP, real browser:
+
+- A staff account granted `portal.lab` + `lab.view` reads lab tests and pending
+  tests (200), and is refused entering results, users, activity log and ward
+  creation (403).
+- Granting `admin.access` opens users **and** activity; withdrawing
+  `monitoring.view` while keeping `admin.access` leaves users at 200 and turns
+  activity and analytics into 403 — the exact case that looked contradictory on
+  the tab.
+- Withdrawing `queue.write`, which the `staff` role grants by default, refuses
+  the queue read: a withdrawal beats a role default.
+- Session for that user resolves `portals: ["portal.staff","portal.lab"]` — own
+  role's portal plus the grant.
+- The tab renders four collapsed groups with a state summary on each header, the
+  tri-state controls work, and the refusal shows exactly one toast with the
+  reason (screenshots taken).
+
+#### Outstanding before this can be marked Completed
+
+- [ ] Open the Permissions tab as a real admin and set each of the three states on a
+      staff account; confirm the tab reflects what the API stored
+- [ ] Sign in as a user holding only `monitoring.view` and confirm the admin
+      sidebar shows Monitoring and nothing they cannot use
+- [ ] Confirm an existing `admin.access` holder still sees the full admin menu
+- [ ] Sign in as that staff member and confirm the sidebar, portal switcher and the
+      inpatient/stock screens match what was granted and withdrawn
+- [ ] Confirm the Activity tab shows the grant and the withdrawal, with who and when
+- [ ] Run `npm run migrate` against a copy of the real dev DB. **The migration could not
+      be reached through `sequelize-cli` here** — an earlier unguarded migration fails
+      first (see Flagged); the new one was verified by running its `up()`/`down()`
+      directly against a live database
+- [ ] Confirm existing `stock.manage` holders still reach the Stocks pages after deploy
+
 ### HMS-improvements integration
 
 - **Branch:** `integration/hms-improvements-safe`
@@ -274,6 +444,20 @@ Documents and Leave only. Two decisions still open:
 
 Issues found while working on the above. Each needs its own branch.
 
+- **`migrations/…-add-referral-type-to-queues` is unguarded and aborts a full migrate run.**
+  Running `npx sequelize-cli db:migrate` against a schema created by `sequelize.sync()`
+  (which is how `server.js` boots) fails with `Duplicate column name 'referralType'`, and
+  every later migration — including new ones — never runs. Found while verifying the
+  per-staff permissions migration, which had to be executed directly instead. Every other
+  migration in the tree is `describeTable`-guarded; this one needs the same treatment
+  before the migration history can be trusted end to end.
+- **`POST /api/inpatient/mar/administer` is gated `authorize('nurse')` — nurse only.**
+  No other role can administer a medication, and because `'admin'` is absent from that
+  gate the implicit-admin bypass does not fire either, so an administrator is refused too.
+  If the nurse portal is not in use, medication administration is unreachable by anyone.
+  `inpatientObservations` and `fluidBalance` are `nurse`/`doctor`, so those still work for
+  doctors; MAR does not. Left alone deliberately — widening who may administer a drug is a
+  clinical decision, not a permissions-branch call.
 - **`listUsers` does not select the `permissions` column** — `controllers/userController.js`
   line ~345. `formatUserResponse` therefore reports `permissions: []`, `canManageStock: false`
   and `hasAdminAccess: false` for every row in Manage Users, whatever is actually stored.

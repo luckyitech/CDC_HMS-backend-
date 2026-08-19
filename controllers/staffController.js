@@ -15,8 +15,8 @@ const db = require('../models');
 const sequelize = require('../config/database');
 const { STAFF_ROLES } = require('../constants/staffRoles');
 const {
-  PERMISSIONS, ALL_PERMISSIONS, PERMISSIBLE_ROLES,
-  hasPermission, isTrueAdmin, sanitizePermissions,
+  PERMISSIONS, ALL_PERMISSIONS, PERMISSION_GROUPS, PERMISSIBLE_ROLES,
+  hasPermission, isTrueAdmin, sanitizePermissions, sanitizeDeniedPermissions, toList,
 } = require('../constants/permissions');
 
 const { User, StaffProfile, UserEditLog, UserLoginLog } = db;
@@ -110,8 +110,12 @@ const formatStaff = (profile, user) => {
     // Read from the live user row rather than a JWT, so a revoke shows here
     // immediately. A real admin holds every permission implicitly and stores
     // none, which is why the list can be empty while the flags are true.
-    permissions:     Array.isArray(user.permissions) ? user.permissions : [],
-    canManageStock:  hasPermission(user, PERMISSIONS.STOCK_MANAGE),
+    permissions:     toList(user.permissions),
+    // What has been explicitly WITHDRAWN, sent alongside the grants so the
+    // Permissions tab can show a section as denied rather than merely
+    // not-granted — two states that look identical without this.
+    deniedPermissions: toList(user.deniedPermissions),
+    canManageStock:  hasPermission(user, PERMISSIONS.STOCK_ACCESS),
     hasAdminAccess:  hasPermission(user, PERMISSIONS.ADMIN_ACCESS),
     canHoldPermissions: PERMISSIBLE_ROLES.includes(user.role),
     isTrueAdmin:     isTrueAdmin(user),
@@ -424,7 +428,7 @@ const restore = async (req, res) => {
  */
 const updatePermissions = async (req, res) => {
   const user = req.staffUser;
-  const { permissions } = req.body;
+  const { permissions, deniedPermissions } = req.body;
 
   if (!PERMISSIBLE_ROLES.includes(user.role)) {
     return error(res, `Permissions cannot be granted to a ${user.role} account`, 400);
@@ -433,18 +437,46 @@ const updatePermissions = async (req, res) => {
   try {
     // Unknown names are dropped rather than stored, so a typo grants nothing
     // instead of persisting a string that is never checked.
-    const next = sanitizePermissions(permissions);
-    const before = { permissions: user.permissions || [] };
+    const nextGranted = sanitizePermissions(permissions);
 
-    await user.update({ permissions: next });
+    // Denials are optional in the payload: a caller that sends only
+    // `permissions` (the pre-split API, and the Manage Users screen) leaves the
+    // withdrawals untouched rather than silently clearing them.
+    const nextDenied = deniedPermissions === undefined
+      ? (user.deniedPermissions || [])
+      : sanitizeDeniedPermissions(deniedPermissions);
 
+    // A capability cannot be granted and withdrawn at once. The withdrawal
+    // wins — it is the more restrictive statement, and it is what
+    // effectivePermissions() would conclude anyway, so storing anything else
+    // would leave a row that reads differently from how it behaves.
+    const conflicting = nextGranted.filter((p) => nextDenied.includes(p));
+    const granted = nextGranted.filter((p) => !nextDenied.includes(p));
+
+    const before = {
+      permissions:       user.permissions || [],
+      deniedPermissions: user.deniedPermissions || [],
+    };
+    const after = { permissions: granted, deniedPermissions: nextDenied };
+
+    await user.update(after);
+
+    // Granting and withdrawing are both auditable admin actions, so both sides
+    // go into the same UserEditLog row the Activity tab already reads — who,
+    // when, and the before/after of each list.
     await UserEditLog.create({
       targetUserId: user.id,
       editedBy:     req.user.id,
       editedByName: `${req.user.firstName} ${req.user.lastName}`,
-      changes:      buildChanges(before, { permissions: next }),
+      changes:      buildChanges(before, after),
       editedAt:     new Date(),
     });
+
+    if (conflicting.length) {
+      console.warn(
+        `Permissions for user ${user.id}: ${conflicting.join(', ')} sent as both granted and withdrawn — withdrawal applied.`
+      );
+    }
 
     await user.reload();
     return success(res, formatStaff(req.staffProfile, user));
@@ -464,6 +496,9 @@ const updatePermissions = async (req, res) => {
 const permissionCatalog = async (_req, res) =>
   success(res, {
     permissions: ALL_PERMISSIONS,
+    // The group/area/toggle shape the tab renders. Served from the backend so
+    // the screen cannot drift from the vocabulary the routes actually enforce.
+    groups: PERMISSION_GROUPS,
     permissibleRoles: PERMISSIBLE_ROLES,
   });
 

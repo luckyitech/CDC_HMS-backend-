@@ -86,11 +86,11 @@ describe('granted admin access reaches admin-only routes', () => {
   });
 
   test('a grant does not widen anything else', async () => {
-    // admin.access must not imply stock.manage: capabilities are independent,
+    // admin.access must not imply stock.write: capabilities are independent,
     // or the whole point of separating them is lost.
     const staff = { role: 'staff', permissions: [PERMISSIONS.ADMIN_ACCESS] };
-    const res = await run(requirePermission(PERMISSIONS.STOCK_MANAGE), staff);
-    assert.equal(res.allowed, false, 'admin.access must not imply stock.manage');
+    const res = await run(requirePermission(PERMISSIONS.STOCK_WRITE), staff);
+    assert.equal(res.allowed, false, 'admin.access must not imply stock.write');
   });
 
   test('authorize with unrelated roles is unaffected by admin.access', async () => {

@@ -10,9 +10,9 @@ const settings = require('../controllers/settingsController');
 // Scheduled staff password rotation — read state / flip on or off / set how
 // often. Both body fields are optional; the controller rejects an empty body
 // and validates the interval against the known set.
-router.get('/password-rotation', authenticate, authorize('admin'), settings.getPasswordRotation);
+router.get('/password-rotation', authenticate, authorize('admin', 'config.write'), settings.getPasswordRotation);
 
-// Writing is restricted to a REAL admin account. authorize('admin') also admits
+// Writing is restricted to a REAL admin account. authorize('admin', 'config.write') also admits
 // anyone holding admin.access — and those users are clinical staff who are
 // themselves subject to rotation, so that would let someone switch off the
 // policy that binds them. Same reasoning as permission-granting: see

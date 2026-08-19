@@ -4,7 +4,9 @@ const crypto = require('crypto');
 const { Op } = require('sequelize');
 const { success, error } = require('../utils/response');
 const { sendPasswordResetEmail } = require('../utils/emailService');
-const { PERMISSIONS, hasPermission, effectivePermissions } = require('../constants/permissions');
+const {
+  PERMISSIONS, hasPermission, canOpenPortal, effectivePermissions, deniedPermissions,
+} = require('../constants/permissions');
 const { getRotationStatus } = require('../utils/passwordRotation');
 const db = require('../models');
 
@@ -30,14 +32,29 @@ const buildUserResponse = async (user) => {
     role: user.role,
     status: user.isActive ? 'Active' : 'Inactive',
     // Everything this account can do, resolved: a real admin holds every
-    // permission implicitly, everyone else holds what was granted. Drives which
-    // portals and sidebar entries appear — the API is still guarded server-side,
-    // so this is UX, never the security boundary.
+    // permission implicitly, everyone else holds what was granted MINUS what
+    // has been explicitly withdrawn. Resolving it here means the frontend never
+    // has to reason about withdrawals — it receives the answer, not the inputs.
+    // Drives which portals and sidebar entries appear; the API is still guarded
+    // server-side, so this is UX, never the security boundary.
     permissions: [...effectivePermissions(user)],
     // Derived, and kept for the stock screens that already read it. The stored
-    // column is superseded by the 'stock.manage' permission; nothing should read
+    // column is superseded by the 'stock.access' permission; nothing should read
     // user.canManageStock directly any more.
-    canManageStock: hasPermission(user, PERMISSIONS.STOCK_MANAGE),
+    canManageStock: hasPermission(user, PERMISSIONS.STOCK_ACCESS),
+    // Which portal shells this account may open, resolved here: their role's own
+    // portal, plus anything granted, minus anything withdrawn. Sent as an answer
+    // rather than as inputs so ProtectedRoute and the sidebar cannot each derive
+    // a slightly different one.
+    portals: Object.values(PERMISSIONS)
+      .filter((p) => p.startsWith('portal.'))
+      .filter((p) => canOpenPortal(user, p)),
+    // What has been explicitly WITHDRAWN. `permissions` above is already
+    // resolved, so most screens never need this — but a menu entry behind an
+    // authorize('admin', <cap>) gate is reachable by admin.access alone, and the
+    // frontend cannot tell "never granted, but admin.access covers it" from
+    // "withdrawn, so admin.access must not cover it" without seeing this list.
+    deniedPermissions: [...deniedPermissions(user)],
   };
 
   // Scheduled password rotation. mustChangePassword sends the frontend straight

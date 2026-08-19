@@ -41,9 +41,9 @@ const handleUpload = (req, res, next) =>
 // as an employee ID and findStaff returns 404.
 // ============================================================
 
-router.get('/expiring-licences', authenticate, authorize('admin'), staffController.expiringLicences);
-router.get('/permissions/catalog', authenticate, authorize('admin'), staffController.permissionCatalog);
-router.get('/', authenticate, authorize('admin'), staffController.list);
+router.get('/expiring-licences', authenticate, authorize('admin', 'users.view'), staffController.expiringLicences);
+router.get('/permissions/catalog', authenticate, authorize('admin', 'users.view'), staffController.permissionCatalog);
+router.get('/', authenticate, authorize('admin', 'users.view'), staffController.list);
 
 // ============================================================
 // Profile
@@ -51,7 +51,7 @@ router.get('/', authenticate, authorize('admin'), staffController.list);
 
 router.get('/:employeeId', authenticate, findStaff, adminOrSelf, staffController.getOne);
 
-router.put('/:employeeId', authenticate, authorize('admin'), findStaff, [
+router.put('/:employeeId', authenticate, authorize('admin', 'users.write'), findStaff, [
   body('firstName').optional().notEmpty().withMessage('First name cannot be empty'),
   body('lastName').optional().notEmpty().withMessage('Last name cannot be empty'),
   body('email').optional({ nullable: true }).isEmail().withMessage('Valid email is required'),
@@ -63,7 +63,7 @@ router.put('/:employeeId', authenticate, authorize('admin'), findStaff, [
   validate,
 ], staffController.update);
 
-router.patch('/:employeeId/status', authenticate, authorize('admin'), findStaff, [
+router.patch('/:employeeId/status', authenticate, authorize('admin', 'users.write'), findStaff, [
   body('employmentStatus').isIn(EMPLOYMENT_STATUSES).withMessage('Invalid employment status'),
   validate,
 ], staffController.updateStatus);
@@ -73,13 +73,16 @@ router.patch('/:employeeId/status', authenticate, authorize('admin'), findStaff,
 // be reliably revoked. See middleware/auth.js.
 router.patch('/:employeeId/permissions', authenticate, requireTrueAdmin, findStaff, [
   body('permissions').isArray().withMessage('Permissions must be a list'),
+  // Optional so a caller that only grants leaves existing withdrawals alone;
+  // see staffController.updatePermissions.
+  body('deniedPermissions').optional().isArray().withMessage('Withdrawn permissions must be a list'),
   validate,
 ], staffController.updatePermissions);
 
-router.delete('/:employeeId', authenticate, authorize('admin'), findStaff, staffController.archive);
-router.patch('/:employeeId/restore', authenticate, authorize('admin'), findStaff, staffController.restore);
+router.delete('/:employeeId', authenticate, authorize('admin', 'users.write'), findStaff, staffController.archive);
+router.patch('/:employeeId/restore', authenticate, authorize('admin', 'users.write'), findStaff, staffController.restore);
 
-router.get('/:employeeId/activity', authenticate, authorize('admin'), findStaff, [
+router.get('/:employeeId/activity', authenticate, authorize('admin', 'users.view'), findStaff, [
   param('employeeId').notEmpty(),
   validate,
 ], staffController.activity);
@@ -101,13 +104,13 @@ router.post('/:employeeId/leaves', authenticate, findStaff, adminOrSelf, [
   validate,
 ], leaveController.create);
 
-router.patch('/:employeeId/leaves/:id', authenticate, authorize('admin'), findStaff, [
+router.patch('/:employeeId/leaves/:id', authenticate, authorize('admin', 'users.write'), findStaff, [
   body('status').isIn(LEAVE_DECISIONS).withMessage('Invalid decision'),
   body('decisionNote').optional({ nullable: true }).isString(),
   validate,
 ], leaveController.decide);
 
-router.put('/:employeeId/leave-balances', authenticate, authorize('admin'), findStaff, [
+router.put('/:employeeId/leave-balances', authenticate, authorize('admin', 'users.write'), findStaff, [
   body('year').isInt({ min: 2000, max: 2100 }).withMessage('Invalid year'),
   body('balances').isArray({ min: 1 }).withMessage('Balances must be a non-empty list'),
   body('balances.*.leaveType').isIn(LEAVE_TYPES).withMessage('Invalid leave type'),
@@ -130,14 +133,14 @@ router.post('/:employeeId/documents', authenticate, findStaff, adminOrSelf,
 router.get('/:employeeId/documents/:id/file', authenticate, findStaff, adminOrSelf,
   staffDocumentController.serveFile);
 
-router.patch('/:employeeId/documents/:id', authenticate, authorize('admin'), findStaff,
+router.patch('/:employeeId/documents/:id', authenticate, authorize('admin', 'users.write'), findStaff,
   staffDocumentController.update);
 
 // Archives rather than deletes — the file and the row both survive.
-router.delete('/:employeeId/documents/:id', authenticate, authorize('admin'), findStaff,
+router.delete('/:employeeId/documents/:id', authenticate, authorize('admin', 'users.write'), findStaff,
   staffDocumentController.archive);
 
-router.patch('/:employeeId/documents/:id/restore', authenticate, authorize('admin'), findStaff,
+router.patch('/:employeeId/documents/:id/restore', authenticate, authorize('admin', 'users.write'), findStaff,
   staffDocumentController.restore);
 
 module.exports = router;

@@ -14,7 +14,7 @@ const barcodeController          = require('../controllers/barcodeController');
 // ------------------------------------
 // POST /api/patients — create patient (full registration)
 // ------------------------------------
-router.post('/', authenticate, authorize('staff', 'admin'), [
+router.post('/', authenticate, authorize('staff', 'admin', 'patients.write'), [
   body('firstName').notEmpty().withMessage('First name is required'),
   body('lastName').notEmpty().withMessage('Last name is required'),
   validate,
@@ -24,7 +24,7 @@ router.post('/', authenticate, authorize('staff', 'admin'), [
 // POST /api/patients/quick — minimal placeholder for phone bookings
 // Only firstName + lastName required; no User login account created.
 // ------------------------------------
-router.post('/quick', authenticate, authorize('staff', 'admin', 'doctor'), [
+router.post('/quick', authenticate, authorize('staff', 'admin', 'doctor', 'patients.write'), [
   body('firstName').notEmpty().withMessage('First name is required'),
   body('lastName').notEmpty().withMessage('Last name is required'),
   body('phone').notEmpty().withMessage('Phone number is required'),
@@ -40,7 +40,7 @@ router.get('/stats', authenticate, authorize('doctor', 'staff', 'admin'), patien
 // GET /api/patients/check-id — MUST be before /:uhid
 // Real-time duplicate check as staff types an ID number during registration.
 // ------------------------------------
-router.get('/check-id', authenticate, authorize('staff', 'admin'), patientController.checkIdNumber);
+router.get('/check-id', authenticate, authorize('staff', 'admin', 'patients.write'), patientController.checkIdNumber);
 
 // ------------------------------------
 // GET /api/patients/duplicates — admin: active patient pairs sharing same idNumber
@@ -68,12 +68,12 @@ router.get('/scan/:payload', authenticate, authorize('staff', 'admin', 'doctor',
 // ------------------------------------
 // POST /api/patients/:uhid/barcode-email — email the patient their barcode card
 // ------------------------------------
-router.post('/:uhid/barcode-email', authenticate, authorize('staff', 'admin', 'doctor'), findPatient, barcodeController.emailBarcode);
+router.post('/:uhid/barcode-email', authenticate, authorize('staff', 'admin', 'doctor', 'patients.write'), findPatient, barcodeController.emailBarcode);
 
 // ------------------------------------
 // POST /api/patients/:uhid/barcode-event — log a barcode print for the activity log
 // ------------------------------------
-router.post('/:uhid/barcode-event', authenticate, authorize('staff', 'admin', 'doctor'), findPatient, barcodeController.logBarcodeGenerated);
+router.post('/:uhid/barcode-event', authenticate, authorize('staff', 'admin', 'doctor', 'patients.write'), findPatient, barcodeController.logBarcodeGenerated);
 
 // ------------------------------------
 // PATCH /api/patients/:uhid/reactivate — admin: undo a merge and restore an inactive patient
@@ -98,7 +98,7 @@ router.get('/:uhid', authenticate, findPatient, patientController.getOne);
 // POST /api/patients/:uhid/complete-registration
 // Completes a quick-registered patient's profile and creates portal account.
 // ------------------------------------
-router.post('/:uhid/complete-registration', authenticate, authorize('staff', 'admin'), findPatient, patientController.completeRegistration);
+router.post('/:uhid/complete-registration', authenticate, authorize('staff', 'admin', 'patients.write'), findPatient, patientController.completeRegistration);
 
 // ------------------------------------
 // PUT /api/patients/:uhid — update patient
@@ -107,7 +107,7 @@ router.post('/:uhid/complete-registration', authenticate, authorize('staff', 'ad
 // patient-update route, so without it the whole triage submit 403s. That grants
 // nurses the full patient-record edit, which is wider than triage needs — worth
 // narrowing to a dedicated allergies endpoint when the RBAC work lands.
-router.put('/:uhid', authenticate, authorize('staff', 'admin', 'nurse'), findPatient, patientController.update);
+router.put('/:uhid', authenticate, authorize('staff', 'admin', 'nurse', 'patients.write'), findPatient, patientController.update);
 
 // ------------------------------------
 // Patient diagnoses — tracked list (summary panel). Clinical record: retire, never delete.
