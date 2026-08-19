@@ -177,7 +177,7 @@ const REPORT_WRITABLE = new Set([
   'rightLength', 'rightHeight', 'rightWidth', 'rightVolume', 'rightVolumeSource',
   'leftLength', 'leftHeight', 'leftWidth', 'leftVolume', 'leftVolumeSource', 'isthmusThickness', 'totalVolume',
   'noNodules', 'lymphNodeAssessment', 'lymphNodes', 'technique', 'equipment',
-  'conclusion', 'plan', 'planOther',
+  'conclusion', 'plan', 'planOther', 'imageLayout',
 ]);
 
 exports.patch = async (req, res) => {
@@ -332,14 +332,16 @@ exports.sign = async (req, res) => {
     const nodules = await ThyroidNodule.findAll({ where: { ThyroidUltrasoundId: report.id, status: 'active' }, include: [ThyroidNoduleFollicularAssessment], order: [['noduleNumber', 'ASC']], transaction: t });
     const nodulesJson = nodules.map((n) => n.toJSON());
 
-    const { conclusion, plan, planOther, confirmWarnings, ablationWarningAcknowledged } = req.body;
+    const { conclusion, plan, planOther, confirmWarnings, ablationWarningAcknowledged, signDespiteIncomplete } = req.body;
     if (conclusion) report.conclusion = conclusion;
     if (plan) report.plan = plan;
     if (planOther !== undefined) report.planOther = planOther;
 
     const { errors, warnings } = engine.validateReport(report.toJSON(), nodulesJson);
-    if (errors.length) { await t.rollback(); return error(res, 'Report cannot be signed', 422, { errors, warnings }); }
-    if (warnings.length && !confirmWarnings) { await t.rollback(); return error(res, 'Confirm warnings before signing', 422, { errors: [], warnings, needsConfirm: true }); }
+    // Completeness is the reporter's discretion: errors block only until the
+    // reporter explicitly chooses to sign despite them (recorded in the snapshot).
+    if (errors.length && !signDespiteIncomplete) { await t.rollback(); return error(res, 'Report has outstanding items', 422, { errors, warnings, canOverride: true }); }
+    if (warnings.length && !confirmWarnings && !signDespiteIncomplete) { await t.rollback(); return error(res, 'Confirm warnings before signing', 422, { errors: [], warnings, needsConfirm: true }); }
 
     // ablation safety gate
     const gateNeeded = nodulesJson.some((n) => {
@@ -361,6 +363,8 @@ exports.sign = async (req, res) => {
       conclusion: report.conclusion,
       versions: engine.VERSIONS,
       signatory: { name: clinicianName(req.user), role: req.user.role },
+      outstandingItems: errors,          // items outstanding at signing (reporter signed at discretion)
+      signedDespiteIncomplete: !!(errors.length && signDespiteIncomplete),
     };
 
     await report.update({

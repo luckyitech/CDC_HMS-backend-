@@ -44,6 +44,17 @@ router.get('/file/:filename', authenticate, authorize(...READ), us.serveFile);
 router.put('/inbox-dismiss', authenticate, authorize(...READ), us.dismissInbox);
 
 // ------------------------------------
+// POST /api/ultrasound/edited — save a clinician-edited still into a patient's
+// image safe (JWT-authed; reporting tech or clinician). Multipart 'file' + uhid.
+// ------------------------------------
+router.post('/edited', authenticate, authorize('doctor', 'nurse', 'staff', 'admin'), (req, res, next) => {
+  uploadUltrasound.single('file')(req, res, (err) => {
+    if (err) return res.status(400).json({ success: false, message: err.message || 'Image upload failed.' });
+    next();
+  });
+}, us.saveEdited);
+
+// ------------------------------------
 // PUT /api/ultrasound/:id/assign — link image to a patient
 // ------------------------------------
 router.put('/:id/assign', authenticate, authorize(...READ), us.assign);

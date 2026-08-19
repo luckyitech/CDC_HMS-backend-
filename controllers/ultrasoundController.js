@@ -1,12 +1,31 @@
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const { success, error } = require('../utils/response');
 const { resolvePatient } = require('../utils/patientFamily');
 const { PERMISSIONS, hasPermission } = require('../constants/permissions');
 const db = require('../models');
 const { broadcast } = require('../utils/sseManager');
 
-const { UltrasoundImage, Patient } = db;
+const { UltrasoundImage, Patient, ThyroidUltrasound } = db;
+const { Op } = db.Sequelize;
+
+// Mark each image "reported" when its patient has a (non-deleted) thyroid report.
+// Per-patient signal: the machine stills aren't linked to reports directly (the
+// report embeds edited copies), so a study counts as reported once its patient
+// has a thyroid report. Unmatched images (no PatientId) are always unreported.
+const attachReported = async (images) => {
+  const patientIds = [...new Set(images.map((i) => i.PatientId).filter(Boolean))];
+  const reported = new Set();
+  if (patientIds.length) {
+    const reps = await ThyroidUltrasound.findAll({
+      where: { PatientId: { [Op.in]: patientIds }, status: { [Op.ne]: 'deleted' } },
+      attributes: ['PatientId'], group: ['PatientId'],
+    });
+    reps.forEach((r) => reported.add(r.PatientId));
+  }
+  return images.map((img) => ({ ...formatImage(img), reported: img.PatientId ? reported.has(img.PatientId) : false }));
+};
 
 // ====================================
 // HELPERS
@@ -147,7 +166,7 @@ const list = async (req, res) => {
         include: [{ model: Patient, attributes: ['id', 'uhid', 'firstName', 'lastName'] }],
         order: [['receivedAt', 'DESC']],
       });
-      return success(res, images.map(formatImage));
+      return success(res, await attachReported(images));
     }
 
     if (String(unassigned) === '1' || String(unassigned) === 'true') {
@@ -155,7 +174,7 @@ const list = async (req, res) => {
         where: { ...baseWhere, status: 'Unassigned' },
         order: [['receivedAt', 'DESC']],
       });
-      return success(res, images.map(formatImage));
+      return success(res, await attachReported(images));
     }
 
     if (!uhid) {
@@ -176,7 +195,7 @@ const list = async (req, res) => {
       order: [['receivedAt', 'ASC']], // received-order — the PDF export order (v1)
     });
 
-    return success(res, images.map(formatImage));
+    return success(res, await attachReported(images));
   } catch (err) {
     console.error('Ultrasound list error:', err.message);
     return error(res, 'Failed to fetch ultrasound images.', 500);
@@ -375,6 +394,48 @@ const archive = async (req, res) => {
   }
 };
 
+// -------------------------------------------------------------------
+// saveEdited — persist a clinician-edited still (brightness/zoom/crop baked
+// in on the client) into a patient's image safe as a NEW image. JWT-authed,
+// merge-aware; leaves the original machine image untouched. Distinct from
+// /ingest (machine auth) — this is a user action.
+// -------------------------------------------------------------------
+async function saveEdited(req, res) {
+  try {
+    if (!req.file) return error(res, 'No image file received.', 400);
+    const { uhid, caption } = req.body;
+    if (!uhid) { cleanupFile(req.file); return error(res, 'uhid is required.', 400); }
+
+    const resolved = await resolvePatient(String(uhid).trim());
+    if (!resolved) { cleanupFile(req.file); return error(res, 'Patient not found', 404); }
+    if (resolved.isDeactivated) { cleanupFile(req.file); return error(res, 'This patient record is inactive (merged).', 403); }
+
+    const created = await UltrasoundImage.create({
+      PatientId: resolved.patient.id,
+      dicomPatientId: String(uhid).trim(),
+      patientName: `${resolved.patient.firstName} ${resolved.patient.lastName}`,
+      sopInstanceUid: `edited-${crypto.randomBytes(12).toString('hex')}`,
+      studyDate: new Date(),
+      studyDescription: caption ? `Edited — ${caption}` : 'Edited image',
+      isMultiframe: false,
+      fileName: req.file.originalname || req.file.filename,
+      filePath: req.file.path,
+      fileUrl: `/uploads/ultrasound/${req.file.filename}`,
+      status: 'Matched',
+      inInbox: false,
+      receivedAt: new Date(),
+    });
+
+    broadcast('ultrasound_received', { id: created.id, uhid: resolved.patient.uhid });
+    const withPatient = await UltrasoundImage.findByPk(created.id, { include: [Patient] });
+    return success(res, formatImage(withPatient), 201);
+  } catch (err) {
+    if (req.file) cleanupFile(req.file);
+    console.error('Ultrasound saveEdited error:', err.message);
+    return error(res, 'Failed to save edited image.', 500);
+  }
+}
+
 module.exports = {
   ingest,
   list,
@@ -383,4 +444,5 @@ module.exports = {
   assign,
   dismissInbox,
   archive,
+  saveEdited,
 };

@@ -66,6 +66,7 @@ const ThyroidUltrasound = defineModel('ThyroidUltrasound', {
 
   technique:         { type: DataTypes.TEXT, defaultValue: null },
   equipment:         { type: DataTypes.STRING, defaultValue: null },
+  imageLayout:       { type: DataTypes.STRING(8), allowNull: false, defaultValue: 'l32' },   // montage grid for the PDF image holder
   conclusion:        { type: DataTypes.JSON, defaultValue: null },
   plan:              { type: DataTypes.JSON, defaultValue: null },
   planOther:         { type: DataTypes.TEXT, defaultValue: null },

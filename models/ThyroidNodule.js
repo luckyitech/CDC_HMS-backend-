@@ -40,6 +40,7 @@ const ThyroidNodule = defineModel('ThyroidNodule', {
   tiradsPoints:       { type: DataTypes.INTEGER, defaultValue: null },
   tiradsCategory:     { type: DataTypes.ENUM('TR1', 'TR2', 'TR3', 'TR4', 'TR5'), defaultValue: null },
   tiradsInsufficient: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
+  tiradsFinal:        { type: DataTypes.ENUM('TR1', 'TR2', 'TR3', 'TR4', 'TR5'), defaultValue: null },   // reporter's confirmed/overridden TR
   tiradsBreakdown:    { type: DataTypes.JSON, defaultValue: null },
   meetsFnaThreshold:      { type: DataTypes.BOOLEAN, defaultValue: false },
   meetsFollowUpThreshold: { type: DataTypes.BOOLEAN, defaultValue: false },
@@ -47,6 +48,7 @@ const ThyroidNodule = defineModel('ThyroidNodule', {
   btaSuggested: { type: DataTypes.ENUM('U1', 'U2', 'U3', 'U4', 'U5'), defaultValue: null },
   btaCategory:  { type: DataTypes.ENUM('U1', 'U2', 'U3', 'U4', 'U5'), defaultValue: null },
   btaRationale: { type: DataTypes.TEXT, defaultValue: null },
+  btaFeatures:  { type: DataTypes.JSON, defaultValue: null },   // [{ code, text }] ticked BTA descriptors
 
   ablationPlanning: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
   cysticLength: { type: DataTypes.DECIMAL(4, 2), defaultValue: null },
