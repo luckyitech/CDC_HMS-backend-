@@ -1,7 +1,10 @@
 .env
 venv/
+build-venv/
+build/
+dist/
+*.pyc
+__pycache__/
 incoming/
 queue/
 bridge.log
-__pycache__/
-*.pyc

@@ -1,0 +1,28 @@
+#!/bin/bash
+# Runs as root at the end of the .pkg install. Starts the bridge as a system
+# LaunchDaemon (auto-start on boot, restart on crash) and locks down the key.
+set -e
+
+APP_DIR="/usr/local/cdc-bridge"
+BIN="$APP_DIR/cdc-bridge"
+PLIST="/Library/LaunchDaemons/com.cdc.bridge.plist"
+
+# Executable + strip the quarantine flag so Gatekeeper doesn't block the service
+chmod +x "$BIN" 2>/dev/null || true
+xattr -dr com.apple.quarantine "$APP_DIR" 2>/dev/null || true
+
+# The .env holds the ingest secret — root-only
+if [ -f "$APP_DIR/.env" ]; then
+  chown root:wheel "$APP_DIR/.env" 2>/dev/null || true
+  chmod 600 "$APP_DIR/.env" 2>/dev/null || true
+fi
+
+# Daemon ownership as launchd requires
+chown root:wheel "$PLIST" 2>/dev/null || true
+chmod 644 "$PLIST" 2>/dev/null || true
+
+# (Re)load the service. bootstrap is the modern API; fall back to load for older macOS.
+launchctl bootout system "$PLIST" 2>/dev/null || true
+launchctl bootstrap system "$PLIST" 2>/dev/null || launchctl load -w "$PLIST" 2>/dev/null || true
+
+exit 0
