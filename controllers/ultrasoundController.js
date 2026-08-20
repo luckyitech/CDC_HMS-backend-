@@ -7,19 +7,18 @@ const { PERMISSIONS, hasPermission } = require('../constants/permissions');
 const db = require('../models');
 const { broadcast } = require('../utils/sseManager');
 
-const { UltrasoundImage, Patient, ThyroidUltrasound } = db;
+const { UltrasoundImage, Patient, MedicalDocument } = db;
 const { Op } = db.Sequelize;
 
-// Mark each image "reported" when its patient has a (non-deleted) thyroid report.
-// Per-patient signal: the machine stills aren't linked to reports directly (the
-// report embeds edited copies), so a study counts as reported once its patient
-// has a thyroid report. Unmatched images (no PatientId) are always unreported.
+// Mark each image "reported" when its patient has an uploaded imaging-report PDF
+// (a MedicalDocument in the 'Imaging Report' category). Per-patient signal;
+// unmatched images (no PatientId) are always unreported.
 const attachReported = async (images) => {
   const patientIds = [...new Set(images.map((i) => i.PatientId).filter(Boolean))];
   const reported = new Set();
   if (patientIds.length) {
-    const reps = await ThyroidUltrasound.findAll({
-      where: { PatientId: { [Op.in]: patientIds }, status: { [Op.ne]: 'deleted' } },
+    const reps = await MedicalDocument.findAll({
+      where: { PatientId: { [Op.in]: patientIds }, documentCategory: 'Imaging Report', isArchived: false },
       attributes: ['PatientId'], group: ['PatientId'],
     });
     reps.forEach((r) => reported.add(r.PatientId));

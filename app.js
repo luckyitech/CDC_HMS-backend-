@@ -98,7 +98,6 @@ app.use('/api/inpatient/billing',        require('./routes/inpatientBilling'));
 
 // --- HMIS V4 ultrasound (HS70A DICOM bridge ingest + gallery) ---
 app.use('/api/ultrasound',               require('./routes/ultrasound'));
-app.use('/api/thyroid-ultrasounds',      require('./routes/thyroidUltrasounds'));
 
 // Global error handler — must be last
 app.use(errorHandler);
