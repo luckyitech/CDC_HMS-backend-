@@ -70,13 +70,6 @@ const FluidBalanceEntry        = require('./FluidBalanceEntry');
 // --- HMIS V4 ultrasound (DICOM bridge ingest) ---
 const UltrasoundImage          = require('./UltrasoundImage');
 
-// --- Thyroid ultrasound reporting ---
-const ThyroidUltrasound                = require('./ThyroidUltrasound');
-const ThyroidNodule                    = require('./ThyroidNodule');
-const ThyroidNoduleFollicularAssessment= require('./ThyroidNoduleFollicularAssessment');
-const ThyroidUsCatalogItem             = require('./ThyroidUsCatalogItem');
-const ThyroidUltrasoundImage           = require('./ThyroidUltrasoundImage');
-
 // =============================================
 // ASSOCIATIONS
 // =============================================
@@ -384,27 +377,6 @@ RadiologyOrder.belongsTo(User, { as: 'reportedByUser', foreignKey: 'reportedById
 // --- HMIS V4 ultrasound images (machine-ingested; PatientId nullable ⇒ Unassigned) ---
 Patient.hasMany(UltrasoundImage);    UltrasoundImage.belongsTo(Patient);
 
-// --- Thyroid ultrasound reporting ---
-Patient.hasMany(ThyroidUltrasound);  ThyroidUltrasound.belongsTo(Patient);
-ThyroidUltrasound.belongsTo(User, { as: 'reportedByUser', foreignKey: 'reportedById' }); // author from JWT
-ThyroidUltrasound.belongsTo(User, { as: 'signedByUser',   foreignKey: 'signedById'   });
-ThyroidUltrasound.belongsTo(User, { as: 'reopenedByUser', foreignKey: 'reopenedById' });
-ThyroidUltrasound.belongsTo(User, { as: 'deletedByUser',  foreignKey: 'deletedBy'    });
-ThyroidUltrasound.belongsTo(User, { as: 'ablationAckByUser', foreignKey: 'ablationWarningAcknowledgedById' });
-
-ThyroidUltrasound.hasMany(ThyroidNodule);   ThyroidNodule.belongsTo(ThyroidUltrasound);
-Patient.hasMany(ThyroidNodule);             ThyroidNodule.belongsTo(Patient);            // denormalised, merge-aware
-
-ThyroidNodule.hasOne(ThyroidNoduleFollicularAssessment);
-ThyroidNoduleFollicularAssessment.belongsTo(ThyroidNodule);
-
-ThyroidUltrasound.hasMany(ThyroidUltrasoundImage); ThyroidUltrasoundImage.belongsTo(ThyroidUltrasound);
-ThyroidNodule.hasMany(ThyroidUltrasoundImage);     ThyroidUltrasoundImage.belongsTo(ThyroidNodule);
-UltrasoundImage.hasMany(ThyroidUltrasoundImage);   ThyroidUltrasoundImage.belongsTo(UltrasoundImage);
-
-User.hasMany(ThyroidUsCatalogItem, { foreignKey: 'addedBy', as: 'addedThyroidCatalogItems' });
-ThyroidUsCatalogItem.belongsTo(User, { foreignKey: 'addedBy', as: 'addedByUser' });
-
 Admission.hasMany(FluidBalanceEntry);   FluidBalanceEntry.belongsTo(Admission);
 Patient.hasMany(FluidBalanceEntry);     FluidBalanceEntry.belongsTo(Patient);
 FluidBalanceEntry.belongsTo(User, { as: 'recordedByUser', foreignKey: 'recordedById' });
@@ -473,12 +445,6 @@ const db = {
   FluidBalanceEntry,
   // --- HMIS V4 ultrasound ---
   UltrasoundImage,
-  // --- Thyroid ultrasound reporting ---
-  ThyroidUltrasound,
-  ThyroidNodule,
-  ThyroidNoduleFollicularAssessment,
-  ThyroidUsCatalogItem,
-  ThyroidUltrasoundImage,
 };
 
 module.exports = db;
