@@ -256,6 +256,21 @@ const TYPE_DEFAULT_PERMISSIONS = {
   [STAFF_TYPES.NON_CLINICAL]: [],
 };
 
+// Roles that do hands-on patient care.
+//
+// A lab technician is clinical — they handle specimens and results, and they
+// could always read a patient's clinical record for context. But they do not
+// take vitals, write nursing notes, give GLP-1 injections or fit equipment, and
+// before this branch the gates on all of those named 'doctor', 'staff' and
+// 'nurse' and never 'lab'.
+//
+// Without this, marking the lab technician clinical would hand them the whole
+// bundle and quietly WIDEN their access — the opposite of what this branch is
+// for. The rule throughout is that capabilities are appended to gates so nobody
+// loses anything; a default that silently grants somebody something new breaks
+// that just as badly in the other direction.
+const PATIENT_CARE_ROLES = ['doctor', 'staff', 'nurse'];
+
 /**
  * Does this person do clinical work?
  *
@@ -282,7 +297,11 @@ const isClinical = (user) => isInternal(user) && user.staffType !== STAFF_TYPES.
  */
 const typeDefaultPermissions = (user) => {
   if (!isInternal(user)) return [];
-  return TYPE_DEFAULT_PERMISSIONS[isClinical(user) ? STAFF_TYPES.CLINICAL : STAFF_TYPES.NON_CLINICAL];
+  if (!isClinical(user)) return TYPE_DEFAULT_PERMISSIONS[STAFF_TYPES.NON_CLINICAL];
+  // Clinical, but not a patient-care role: reading the clinical record only,
+  // which is exactly what they could do before. See PATIENT_CARE_ROLES.
+  if (!PATIENT_CARE_ROLES.includes(user.role)) return [PERMISSIONS.CLINICAL_VIEW];
+  return TYPE_DEFAULT_PERMISSIONS[STAFF_TYPES.CLINICAL];
 };
 
 /**

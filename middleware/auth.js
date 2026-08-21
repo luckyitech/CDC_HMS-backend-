@@ -47,7 +47,7 @@ const authenticate = async (req, res, next) => {
   let user;
   try {
     user = await User.findByPk(decoded.id, {
-      attributes: ['id', 'isActive', 'role', 'permissions', 'deniedPermissions', 'passwordChangedAt'],
+      attributes: ['id', 'isActive', 'role', 'permissions', 'deniedPermissions', 'staffType', 'passwordChangedAt'],
     });
   } catch {
     return error(res, 'Authentication service unavailable. Please try again.', 503);
@@ -80,6 +80,11 @@ const authenticate = async (req, res, next) => {
     role: user.role,                      // live, not as signed at login
     permissions: user.permissions || [],
     deniedPermissions: user.deniedPermissions || [],
+    // Read live, like role above. Reclassifying someone clinical or
+    // non-clinical takes effect on their very next request rather than at their
+    // next login — which is the point of a control an admin reaches for when
+    // something has gone wrong.
+    staffType: user.staffType,
   };
   next();
 };

@@ -344,3 +344,27 @@ describe('clinical and non-clinical staff', () => {
     assert.equal(has(sonographer, P.RADIOLOGY_WRITE), true);
   });
 });
+
+describe('the clinical bundle never widens anyone', () => {
+  const { PERMISSIONS: P, hasPermission: has } = require('../constants/permissions');
+
+  test('a lab technician is clinical but gains no patient-care writes', () => {
+    // The regression this exists for: the old gates on vitals and nursing notes
+    // named 'doctor', 'staff' and 'nurse' and never 'lab'. Replacing them with a
+    // capability and marking the lab technician clinical would have handed them
+    // the whole bundle — silently widening access on a branch whose entire
+    // purpose is to narrow it.
+    const lab = { role: 'lab', permissions: [], deniedPermissions: [], staffType: 'clinical' };
+    assert.equal(has(lab, P.CLINICAL_VIEW), true, 'could always read the record for context');
+    for (const cap of [P.CLINICAL_RECORD, P.GLP1_WRITE, P.EQUIPMENT_WRITE, P.STOCK_DISPENSE]) {
+      assert.equal(has(lab, cap), false, `${cap} was never open to lab before this branch`);
+    }
+  });
+
+  test('an explicit grant still reaches a lab technician', () => {
+    // The narrowing is a DEFAULT, not a prohibition — a clinic where the lab
+    // technician also runs triage can still be expressed through the tab.
+    const lab = { role: 'lab', permissions: [P.CLINICAL_RECORD], deniedPermissions: [], staffType: 'clinical' };
+    assert.equal(has(lab, P.CLINICAL_RECORD), true);
+  });
+});

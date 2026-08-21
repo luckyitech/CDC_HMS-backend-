@@ -89,6 +89,33 @@ const User = defineModel('User', {
     allowNull: false,
     defaultValue: [],
   },
+
+  // Does this member of staff do clinical work?
+  //
+  // `role` says which portal someone lands in. It does not say whether they
+  // touch patients — and 'staff' in particular is a leftover bin holding
+  // receptionists, administration and nurses together, so every one of them
+  // held identical powers. This is the axis that separates them.
+  //
+  // Here on User rather than on StaffProfile because it is an authorization
+  // input, read on every authenticated request exactly like role and
+  // permissions. authenticate() already selects those from this table; putting
+  // it on StaffProfile would add a join to every API call in the system.
+  // StaffProfile keeps the descriptive HR data — position, department, ward.
+  //
+  // Defaults to clinical, and that direction matters: five of the eight staff
+  // accounts in production are nurses, so defaulting to non-clinical would
+  // disable most of the clinical workforce the moment this column landed.
+  // Access is removed by classifying people deliberately, never by a default.
+  //
+  // Meaningless on a patient row, and never read for one — constants/
+  // permissions.js derives the clinical bundle from the role, so a stray value
+  // here cannot give a patient staff capabilities.
+  staffType: {
+    type: DataTypes.ENUM('clinical', 'non_clinical'),
+    allowNull: false,
+    defaultValue: 'clinical',
+  },
 }, {
   indexes: [
     { unique: true, fields: ['email'], name: 'unique_email', where: { email: { [require('sequelize').Op.ne]: null } } },
