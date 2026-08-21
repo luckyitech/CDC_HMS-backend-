@@ -167,7 +167,17 @@ router.get('/:uhid/vitals', authenticate, authorize('doctor', 'nurse', 'admin', 
 // ------------------------------------
 // POST /api/patients/:uhid/blood-sugar — single or bulk reading (upsert)
 // ------------------------------------
-router.post('/:uhid/blood-sugar', authenticate, authorize('patient'), findPatient, [
+//
+// Two kinds of author, deliberately. A patient logs their own home readings
+// through the patient portal; a nurse logs the ones taken when the patient
+// comes into clinic. Both land in the same series because that is what the
+// glycaemic charts plot — but the row records which of the two it was, since a
+// home glucometer reading and a clinic measurement are not the same evidence.
+//
+// The controller still enforces that a PATIENT may only write their own
+// readings; this gate only decides who may reach it at all. Non-clinical staff
+// do not hold clinical.record, so reception cannot log readings.
+router.post('/:uhid/blood-sugar', authenticate, authorize('patient', 'doctor', 'nurse', PERMISSIONS.CLINICAL_RECORD), findPatient, [
   body('date').notEmpty().withMessage('Date is required'),
   validate,
 ], bloodSugarController.post);

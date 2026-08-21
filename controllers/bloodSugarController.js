@@ -24,6 +24,10 @@ const formatReading = (r) => ({
   timeSlot: r.timeSlot,
   value:    parseFloat(r.value),   // MySQL DECIMAL → string; convert back to number
   time:     r.time,
+  // 'patient' (logged at home) or 'clinic' (taken and entered here). Null on
+  // rows written before this was tracked. Surfaced so a chart can distinguish
+  // the two rather than plotting them as one undifferentiated series.
+  source:   r.recordedByRole,
 });
 
 // ------------------------------------
@@ -33,8 +37,19 @@ const formatReading = (r) => ({
 // Uses upsert so a duplicate (patientId, date, timeSlot) is updated, not rejected.
 // ------------------------------------
 const post = async (req, res) => {
-  // Patient can only save their own readings
-  if (req.patient.UserId !== req.user.id) return error(res, 'Access denied', 403);
+  // Two authors, two rules.
+  //
+  // A PATIENT may only ever write their own readings — the route lets any
+  // patient through, so this is the check that stops one patient writing into
+  // another's chart. It is not redundant with the gate.
+  //
+  // CLINICAL STAFF write on a patient's behalf, so the ownership test must not
+  // apply to them; it would 403 every nurse recording a reading taken in
+  // clinic. They are already held to holding clinical.record by the route.
+  const isPatient = req.user.role === 'patient';
+  if (isPatient && req.patient.UserId !== req.user.id) {
+    return error(res, 'Access denied', 403);
+  }
   if (req.isDeactivated) return error(res, 'This patient profile is inactive. New readings cannot be added.', 403);
 
   const { date, readings, timeSlot, value, time } = req.body;
@@ -58,6 +73,11 @@ const post = async (req, res) => {
         timeSlot: s.timeSlot,
         value:    s.value,
         time:     s.time,
+        // Set on every write, including a correction, so the attribution
+        // always describes the value currently stored rather than whoever
+        // happened to enter it first.
+        recordedById:   req.user.id,
+        recordedByRole: isPatient ? 'patient' : 'clinic',
       })
     )
   );

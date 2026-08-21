@@ -26,6 +26,28 @@ const BloodSugarReading = defineModel('BloodSugarReading', {
   time: {
     type: DataTypes.STRING,         // display time e.g. "7:00 AM"
   },
+
+  // Who entered this reading, and in what capacity.
+  //
+  // Until clinical staff could log readings, every row came from the patient
+  // themselves and there was nothing to record. Now that a nurse can enter the
+  // reading taken when a patient comes into clinic, the two are clinically
+  // different evidence — a home glucometer is not a clinic measurement — and a
+  // chart that cannot tell them apart is misleading to whoever reads it next.
+  //
+  // Nullable because every existing row predates this and its author is not
+  // recoverable. A null means "recorded before this was tracked", which is
+  // honest; backfilling them all as 'patient' would be a guess presented as a
+  // fact, and every one of them would be wrong for any reading a doctor
+  // entered.
+  recordedById: {
+    type: DataTypes.INTEGER,        // Users.id
+    allowNull: true,
+  },
+  recordedByRole: {
+    type: DataTypes.ENUM('patient', 'clinic'),
+    allowNull: true,
+  },
 }, {
   // Composite unique constraint:
   // one patient can only have one reading per date per time slot.
