@@ -17,7 +17,7 @@ const { STAFF_ROLES } = require('../constants/staffRoles');
 const {
   PERMISSIONS, ALL_PERMISSIONS, PERMISSION_GROUPS, PERMISSIBLE_ROLES, STAFF_TYPES,
   hasPermission, isTrueAdmin, sanitizePermissions, sanitizeDeniedPermissions, toList,
-  effectivePermissions, ROLE_DEFAULT_PORTALS,
+  effectivePermissions, ROLE_DEFAULT_PORTALS, canOpenPortal,
 } = require('../constants/permissions');
 
 const { User, StaffProfile, UserEditLog, UserLoginLog } = db;
@@ -130,7 +130,18 @@ const formatStaff = (profile, user) => {
     // is the question an admin actually has: not "is this granted" but "can she
     // record vitals". Those differ for every capability that comes from being
     // clinical rather than from a tick.
-    effectivePermissions: [...effectivePermissions(user)],
+    // Everything this person can actually do, INCLUDING the portals their role
+    // opens. Portal entry is resolved by canOpenPortal rather than stored, so a
+    // portal that comes with a role never appears in effectivePermissions —
+    // which made every portal row on the Permissions tab render unticked for
+    // the very people who hold it, and made ticking it look broken: the screen
+    // correctly stored nothing (they have it anyway) and the box sprang back.
+    effectivePermissions: [
+      ...new Set([
+        ...effectivePermissions(user),
+        ...ALL_PERMISSIONS.filter((p) => p.startsWith('portal.') && canOpenPortal(user, p)),
+      ]),
+    ],
     // What they would hold with NOTHING ticked either way — role portals plus
     // whatever their staff type carries.
     //
