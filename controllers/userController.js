@@ -560,7 +560,7 @@ const updateUser = async (req, res) => {
       await UserEditLog.create({
         targetUserId: user.id,
         editedBy:     req.user.id,
-        editedByName: `${req.user.firstName} ${req.user.lastName}`,
+        editedByName: req.user.name || `user #${req.user.id}`,
         changes:      allChanges,
         editedAt:     new Date(),
       });
@@ -713,7 +713,7 @@ const deleteUser = async (req, res) => {
       await UserEditLog.create({
         targetUserId: user.id,
         editedBy:     req.user.id,
-        editedByName: `${req.user.firstName} ${req.user.lastName}`,
+        editedByName: req.user.name || `user #${req.user.id}`,
         changes:      { archived: { from: false, to: true } },
         editedAt:     new Date(),
       }, { transaction });

@@ -76,6 +76,7 @@ router.patch('/:employeeId/permissions', authenticate, requireTrueAdmin, findSta
   // Optional so a caller that only grants leaves existing withdrawals alone;
   // see staffController.updatePermissions.
   body('deniedPermissions').optional().isArray().withMessage('Withdrawn permissions must be a list'),
+  body('staffType').optional().isIn(['clinical', 'non_clinical']).withMessage('staffType must be clinical or non_clinical'),
   validate,
 ], staffController.updatePermissions);
 

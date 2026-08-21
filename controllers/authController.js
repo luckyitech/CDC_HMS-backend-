@@ -55,6 +55,12 @@ const buildUserResponse = async (user) => {
     // frontend cannot tell "never granted, but admin.access covers it" from
     // "withdrawn, so admin.access must not cover it" without seeing this list.
     deniedPermissions: [...deniedPermissions(user)],
+    // Clinical or non-clinical. `permissions` above already has the bundle
+    // folded in, so no screen needs this to decide what to show — it is sent so
+    // the Staff File can display and edit the classification, and so a screen
+    // can explain WHY something is missing ("this account is non-clinical")
+    // rather than only that it is.
+    staffType: user.staffType,
   };
 
   // Scheduled password rotation. mustChangePassword sends the frontend straight

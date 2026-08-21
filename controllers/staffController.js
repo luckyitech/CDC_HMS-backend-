@@ -15,7 +15,7 @@ const db = require('../models');
 const sequelize = require('../config/database');
 const { STAFF_ROLES } = require('../constants/staffRoles');
 const {
-  PERMISSIONS, ALL_PERMISSIONS, PERMISSION_GROUPS, PERMISSIBLE_ROLES,
+  PERMISSIONS, ALL_PERMISSIONS, PERMISSION_GROUPS, PERMISSIBLE_ROLES, STAFF_TYPES,
   hasPermission, isTrueAdmin, sanitizePermissions, sanitizeDeniedPermissions, toList,
 } = require('../constants/permissions');
 
@@ -70,6 +70,11 @@ const formatStaff = (profile, user) => {
     email:     user.email,
     phone:     user.phone,
     role:      user.role,
+
+    // Clinical or non-clinical. Lives on User rather than StaffProfile because
+    // it is an authorization input read on every request, but it is surfaced
+    // here with the rest of the staff file since that is where it is set.
+    staffType: user.staffType,
 
     dateOfBirth: profile.dateOfBirth,
     gender:      profile.gender,
@@ -262,7 +267,7 @@ const update = async (req, res) => {
       await UserEditLog.create({
         targetUserId: user.id,
         editedBy:     req.user.id,
-        editedByName: `${req.user.firstName} ${req.user.lastName}`,
+        editedByName: req.user.name || `user #${req.user.id}`,
         changes,
         editedAt:     new Date(),
       }, { transaction });
@@ -312,7 +317,7 @@ const updateStatus = async (req, res) => {
     await UserEditLog.create({
       targetUserId: user.id,
       editedBy:     req.user.id,
-      editedByName: `${req.user.firstName} ${req.user.lastName}`,
+      editedByName: req.user.name || `user #${req.user.id}`,
       changes:      buildChanges(before, { employmentStatus, isActive }),
       editedAt:     new Date(),
     }, { transaction });
@@ -365,7 +370,7 @@ const archive = async (req, res) => {
     await UserEditLog.create({
       targetUserId: user.id,
       editedBy:     req.user.id,
-      editedByName: `${req.user.firstName} ${req.user.lastName}`,
+      editedByName: req.user.name || `user #${req.user.id}`,
       changes:      { archived: { from: false, to: true } },
       editedAt:     new Date(),
     }, { transaction });
@@ -404,7 +409,7 @@ const restore = async (req, res) => {
     await UserEditLog.create({
       targetUserId: user.id,
       editedBy:     req.user.id,
-      editedByName: `${req.user.firstName} ${req.user.lastName}`,
+      editedByName: req.user.name || `user #${req.user.id}`,
       changes:      { archived: { from: true, to: false } },
       editedAt:     new Date(),
     });
@@ -428,10 +433,23 @@ const restore = async (req, res) => {
  */
 const updatePermissions = async (req, res) => {
   const user = req.staffUser;
-  const { permissions, deniedPermissions } = req.body;
+  const { permissions, deniedPermissions, staffType } = req.body;
 
   if (!PERMISSIBLE_ROLES.includes(user.role)) {
     return error(res, `Permissions cannot be granted to a ${user.role} account`, 400);
+  }
+
+  // Clinical or non-clinical. Changed here rather than on the general profile
+  // update because it is an access decision, not a descriptive one: it is what
+  // decides whether this person can read a consultation note. Sending it
+  // through the same real-admin-only route as the grants keeps every change
+  // that affects access on one audited path.
+  //
+  // Optional, and omission means "leave it alone" — the same rule
+  // deniedPermissions follows, so a caller that only means to change grants
+  // cannot silently reclassify someone as a side effect.
+  if (staffType !== undefined && !Object.values(STAFF_TYPES).includes(staffType)) {
+    return error(res, 'staffType must be clinical or non_clinical', 400);
   }
 
   try {
@@ -456,8 +474,13 @@ const updatePermissions = async (req, res) => {
     const before = {
       permissions:       user.permissions || [],
       deniedPermissions: user.deniedPermissions || [],
+      staffType:         user.staffType,
     };
-    const after = { permissions: granted, deniedPermissions: nextDenied };
+    const after = {
+      permissions: granted,
+      deniedPermissions: nextDenied,
+      staffType: staffType === undefined ? user.staffType : staffType,
+    };
 
     await user.update(after);
 
@@ -467,7 +490,7 @@ const updatePermissions = async (req, res) => {
     await UserEditLog.create({
       targetUserId: user.id,
       editedBy:     req.user.id,
-      editedByName: `${req.user.firstName} ${req.user.lastName}`,
+      editedByName: req.user.name || `user #${req.user.id}`,
       changes:      buildChanges(before, after),
       editedAt:     new Date(),
     });
