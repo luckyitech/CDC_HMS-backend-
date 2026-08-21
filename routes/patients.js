@@ -2,7 +2,8 @@ const express = require('express');
 const router  = express.Router();
 const { body } = require('express-validator');
 const validate = require('../middleware/validate');
-const { authenticate, authorize } = require('../middleware/auth');
+const { authenticate, authorize, requireTrueAdmin } = require('../middleware/auth');
+const logPatientAccess = require('../middleware/logPatientAccess');
 const findPatient = require('../middleware/findPatient');
 const { INTERNAL_ROLES, PERMISSIONS } = require('../constants/permissions');
 // Every internal role, for the patient's identity and administration — who they
@@ -14,6 +15,7 @@ const bloodSugarController       = require('../controllers/bloodSugarController'
 const equipmentController        = require('../controllers/equipmentController');
 const careLinkPartnerController  = require('../controllers/careLinkPartnerController');
 const barcodeController          = require('../controllers/barcodeController');
+const patientAccessLogController = require('../controllers/patientAccessLogController');
 
 // ------------------------------------
 // POST /api/patients — create patient (full registration)
@@ -157,12 +159,12 @@ router.post('/:uhid/vitals/doctor', authenticate, authorize('doctor'), findPatie
 // ------------------------------------
 // GET /api/patients/:uhid/vitals/history — all vitals records (MUST be before /:uhid/vitals)
 // ------------------------------------
-router.get('/:uhid/vitals/history', authenticate, authorize('doctor', 'nurse', 'admin', PERMISSIONS.CLINICAL_VIEW), findPatient, patientController.getVitalsHistory);
+router.get('/:uhid/vitals/history', authenticate, authorize('doctor', 'nurse', 'admin', PERMISSIONS.CLINICAL_VIEW), findPatient, logPatientAccess('vitals'), patientController.getVitalsHistory);
 
 // ------------------------------------
 // GET /api/patients/:uhid/vitals — latest vitals
 // ------------------------------------
-router.get('/:uhid/vitals', authenticate, authorize('doctor', 'nurse', 'admin', PERMISSIONS.CLINICAL_VIEW), findPatient, patientController.getVitals);
+router.get('/:uhid/vitals', authenticate, authorize('doctor', 'nurse', 'admin', PERMISSIONS.CLINICAL_VIEW), findPatient, logPatientAccess('vitals'), patientController.getVitals);
 
 // ------------------------------------
 // POST /api/patients/:uhid/blood-sugar — single or bulk reading (upsert)
@@ -185,7 +187,7 @@ router.post('/:uhid/blood-sugar', authenticate, authorize('patient', 'doctor', '
 // ------------------------------------
 // GET /api/patients/:uhid/blood-sugar — readings with date filters
 // ------------------------------------
-router.get('/:uhid/blood-sugar', authenticate, authorize('doctor', 'nurse', 'admin', 'patient', PERMISSIONS.CLINICAL_VIEW), findPatient, bloodSugarController.get);
+router.get('/:uhid/blood-sugar', authenticate, authorize('doctor', 'nurse', 'admin', 'patient', PERMISSIONS.CLINICAL_VIEW), findPatient, logPatientAccess('blood-sugar'), bloodSugarController.get);
 
 // ====================================
 // MEDICAL EQUIPMENT ENDPOINTS
@@ -194,7 +196,7 @@ router.get('/:uhid/blood-sugar', authenticate, authorize('doctor', 'nurse', 'adm
 // ------------------------------------
 // GET /api/patients/:uhid/equipment/history — MUST be before /:uhid/equipment/:id
 // ------------------------------------
-router.get('/:uhid/equipment/history',   authenticate, authorize('doctor', 'nurse', 'admin', PERMISSIONS.CLINICAL_VIEW), equipmentController.getHistory);
+router.get('/:uhid/equipment/history',   authenticate, authorize('doctor', 'nurse', 'admin', PERMISSIONS.CLINICAL_VIEW), logPatientAccess('equipment'), equipmentController.getHistory);
 
 // ------------------------------------
 // GET /api/patients/:uhid/equipment/audit-log — MUST be before /:uhid/equipment/:id
@@ -204,7 +206,7 @@ router.get('/:uhid/equipment/audit-log', authenticate, authorize('doctor', 'nurs
 // ------------------------------------
 // GET /api/patients/:uhid/equipment — current equipment
 // ------------------------------------
-router.get('/:uhid/equipment', authenticate, authorize('doctor', 'nurse', 'admin', PERMISSIONS.CLINICAL_VIEW), equipmentController.getCurrent);
+router.get('/:uhid/equipment', authenticate, authorize('doctor', 'nurse', 'admin', PERMISSIONS.CLINICAL_VIEW), logPatientAccess('equipment'), equipmentController.getCurrent);
 
 // ------------------------------------
 // POST /api/patients/:uhid/equipment — add new equipment
@@ -240,6 +242,16 @@ router.post('/:uhid/equipment/:id/replace', authenticate, authorize('doctor', 'n
 // ------------------------------------
 // GET /api/patients/:uhid/carelink-partners
 // ------------------------------------
+// ------------------------------------
+// GET /api/patients/:uhid/access-log — who has opened this clinical record
+// ------------------------------------
+// Real admin account only, not merely someone holding admin.access. The log
+// reveals who is being treated, by whom and for which section of the record, so
+// it is more sensitive than most of what it records. Reading it is deliberately
+// NOT logged here — that would need its own answer to "who watches the watcher"
+// and the honest place for it is a decision, not a quiet recursion.
+router.get('/:uhid/access-log', authenticate, requireTrueAdmin, findPatient, patientAccessLogController.list);
+
 router.get('/:uhid/carelink-partners', authenticate, authorize('doctor', 'nurse', 'admin', PERMISSIONS.CLINICAL_VIEW), careLinkPartnerController.getAll);
 
 // ------------------------------------

@@ -30,6 +30,7 @@ const MedicalEquipment    = require('./MedicalEquipment');
 const EquipmentHistory    = require('./EquipmentHistory');
 const EquipmentAuditLog   = require('./EquipmentAuditLog');
 const UserLoginLog        = require('./UserLoginLog');
+const PatientAccessLog    = require('./PatientAccessLog');
 const UserEditLog         = require('./UserEditLog');
 const CareLinkPartner     = require('./CareLinkPartner');
 const DoctorBlock         = require('./DoctorBlock');
@@ -436,6 +437,7 @@ const db = {
   EquipmentHistory,
   EquipmentAuditLog,
   UserLoginLog,
+  PatientAccessLog,
   UserEditLog,
   CareLinkPartner,
   DoctorBlock,

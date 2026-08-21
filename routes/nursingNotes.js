@@ -3,6 +3,7 @@ const router = express.Router();
 const { body } = require('express-validator');
 const validate = require('../middleware/validate');
 const { authenticate, authorize } = require('../middleware/auth');
+const logPatientAccess = require('../middleware/logPatientAccess');
 const { PERMISSIONS } = require('../constants/permissions');
 const nursingNoteController = require('../controllers/nursingNoteController');
 
@@ -33,7 +34,7 @@ router.post(
 );
 
 // GET /api/nursing-notes?uhid= — the patient's Kardex
-router.get('/', authenticate, authorize(...READ), nursingNoteController.list);
+router.get('/', authenticate, authorize(...READ), logPatientAccess('nursing-notes'), nursingNoteController.list);
 
 // DELETE /api/nursing-notes/:id — soft delete (author or admin)
 router.delete('/:id', authenticate, authorize(...WRITE), nursingNoteController.remove);

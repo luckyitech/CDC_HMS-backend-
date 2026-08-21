@@ -3,6 +3,7 @@ const router = express.Router();
 const { body } = require('express-validator');
 const validate = require('../middleware/validate');
 const { authenticate, authorize } = require('../middleware/auth');
+const logPatientAccess = require('../middleware/logPatientAccess');
 const { INTERNAL_ROLES, PERMISSIONS } = require('../constants/permissions');
 const CLINICAL_READ_ROLES = INTERNAL_ROLES;
 const glp1WeekNoteController = require('../controllers/glp1WeekNoteController');
@@ -24,6 +25,7 @@ router.get(
   '/',
   authenticate,
   authorize('doctor', 'nurse', 'admin', PERMISSIONS.CLINICAL_VIEW),
+  logPatientAccess('glp1'),
   glp1WeekNoteController.list
 );
 
