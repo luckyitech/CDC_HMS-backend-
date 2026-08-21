@@ -628,6 +628,29 @@ const effectivePermissions = (user) => {
   if (isTrueAdmin(user)) return new Set(ALL_PERMISSIONS);
   const granted = expand(user.permissions);
   typeDefaultPermissions(user).forEach((p) => granted.add(p));
+
+  // Apply the implications HERE, not only when a row is written.
+  //
+  // sanitizePermissions() adds the implied read whenever the tab saves, so a
+  // row written through the UI is always consistent. Nothing else was: a row
+  // written by the older Manage Users screen, a legacy 'stock.manage'
+  // expansion, a direct API call or a hand-edited database left someone
+  // holding stock.write without stock.access — able to move the ledger while
+  // the read middleware refused them, which is a state no screen can show and
+  // nobody can debug from the UI.
+  //
+  // routes/stock.js has said "a holder of stock.write always holds
+  // stock.access too (constants/permissions.js enforces the implication)"
+  // since the stock split. That was only true at write time. This makes the
+  // comment true.
+  //
+  // Before the deletes, so a withdrawal still beats an implication: taking away
+  // the read has to take the write with it, which is what
+  // sanitizeDeniedPermissions already records.
+  Object.entries(IMPLIED_BY).forEach(([writeCap, readCap]) => {
+    if (granted.has(writeCap)) granted.add(readCap);
+  });
+
   deniedPermissions(user).forEach((p) => granted.delete(p));
   return granted;
 };

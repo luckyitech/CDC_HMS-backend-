@@ -368,3 +368,45 @@ describe('the clinical bundle never widens anyone', () => {
     assert.equal(has(lab, P.CLINICAL_RECORD), true);
   });
 });
+
+describe('a write always carries the read it acts within', () => {
+  const { PERMISSIONS: P, hasPermission: has } = require('../constants/permissions');
+  const held = (perms, denied = []) =>
+    ({ role: 'staff', staffType: 'non_clinical', permissions: perms, deniedPermissions: denied });
+
+  // sanitizePermissions() adds the implied read whenever the tab saves, so a row
+  // written through the UI is consistent. Nothing else was — the older Manage
+  // Users screen, a legacy stock.manage expansion, a direct API call or a
+  // hand-edited row could all leave someone holding a write without its read.
+  // routes/stock.js has claimed since the stock split that
+  // "constants/permissions.js enforces the implication"; it only did so at write
+  // time, which made that comment false for exactly the rows nobody could debug.
+  const PAIRS = [
+    [P.STOCK_WRITE,        P.STOCK_ACCESS],
+    [P.INPATIENT_WRITE,    P.INPATIENT_ACCESS],
+    [P.LAB_WRITE,          P.LAB_VIEW],
+    [P.USERS_WRITE,        P.USERS_VIEW],
+    [P.APPOINTMENTS_WRITE, P.APPOINTMENTS_VIEW],
+    [P.CLINICAL_RECORD,    P.CLINICAL_VIEW],
+  ];
+
+  for (const [write, read] of PAIRS) {
+    test(`${write} carries ${read}`, () => {
+      assert.equal(has(held([write]), read), true,
+        'holding the write without the read is a state no screen can show');
+    });
+  }
+
+  test('the legacy stock.manage row still resolves to both halves', () => {
+    assert.equal(has(held(['stock.manage']), P.STOCK_ACCESS), true);
+    assert.equal(has(held(['stock.manage']), P.STOCK_WRITE), true);
+  });
+
+  test('a withdrawal still beats the implication', () => {
+    // Taking the read away has to take it away — otherwise an admin could not
+    // stop someone reading a module they can write to, and the withdrawal would
+    // silently do nothing.
+    const u = held([P.STOCK_WRITE], [P.STOCK_ACCESS]);
+    assert.equal(has(u, P.STOCK_ACCESS), false);
+  });
+});
