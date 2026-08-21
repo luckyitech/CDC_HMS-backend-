@@ -45,6 +45,7 @@ router.post(
       .isInt({ min: 1 })
       .withMessage('A therapy must be selected'),
     body('weekNumber')
+      .optional({ nullable: true })
       .isInt({ min: 0 })
       .withMessage('Week number must be a whole number, 0 or greater'),
     body('reviewDate')

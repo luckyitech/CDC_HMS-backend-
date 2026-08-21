@@ -1,7 +1,7 @@
 const { Op } = require('sequelize');
 const { success, error } = require('../utils/response');
 const { resolvePatient } = require('../utils/patientFamily');
-const { doseStepForReview } = require('../utils/glp1Schedule');
+const { doseStepForReview, weeksSince } = require('../utils/glp1Schedule');
 const db = require('../models');
 
 const {
@@ -276,16 +276,15 @@ const create = async (req, res) => {
       return error(res, 'This patient profile is inactive. No new reviews can be recorded.', 403);
     }
 
-    // One active review per week per course. Enforced here rather than by a
-    // unique index, because a soft-deleted row would otherwise block the week
-    // permanently — see the migration comment on Glp1Reviews.
-    const clash = await Glp1Review.findOne({
-      where: { Glp1TherapyId: therapy.id, weekNumber, status: 'active' },
-    });
-    if (clash) {
-      await transaction.rollback();
-      return error(res, `A week ${weekNumber} review already exists for this course`, 409);
-    }
+    // The simplified Kardex is a running, additive log — many entries can fall in
+    // the same week (a nurse injection and a doctor review the same week, say), so
+    // there is no one-per-week constraint. weekNumber is informational: the whole
+    // weeks between the course start and this entry's date. Derived here when the
+    // client leaves it out, so the log never asks anyone to count weeks by hand.
+    const entryWeek =
+      weekNumber === undefined || weekNumber === null || weekNumber === ''
+        ? (weeksSince(therapy.startDate, reviewDate ? new Date(`${String(reviewDate).slice(0, 10)}T12:00:00`) : undefined) ?? 0)
+        : Number(weekNumber);
 
     const prepared = await prepareSideEffects(sideEffects);
     if (!prepared.ok) {
@@ -295,14 +294,14 @@ const create = async (req, res) => {
 
     // Fall back to the dose this review is reporting on — the one taken during
     // the interval leading up to it, not the step being started today.
-    const scheduledStep = doseStepForReview(therapy.doseSchedule || [], Number(weekNumber));
+    const scheduledStep = doseStepForReview(therapy.doseSchedule || [], entryWeek);
     const dose = doseAtReview ?? (scheduledStep ? scheduledStep.dose : null);
 
     const review = await Glp1Review.create({
       Glp1TherapyId:      therapy.id,
       PatientId:          family.patient.id,   // PascalCase FK, denormalised
-      doctorId:           req.user.id,         // From JWT token — the Doctor column
-      weekNumber,
+      doctorId:           req.user.id,         // From JWT token — the Clinician column
+      weekNumber:         entryWeek,
       reviewDate,
       weight:             weight ?? null,
       bmi:                bmi ?? null,
