@@ -41,6 +41,38 @@ router.get(
 );
 
 // ------------------------------------
+// POST /api/glp1-therapies/ensure — Find-or-create a bare course for the Kardex
+// ------------------------------------
+// Authorization: Doctor, Nurse — recording a monitoring entry is open to whoever
+// sees the patient. No safety screen and no dose ladder: this opens a course so
+// an entry can be logged against it. Declared before POST / so it is never read
+// as the formal "start a course" gate.
+router.post(
+  '/ensure',
+  authenticate,
+  authorize('doctor', 'nurse'),
+  [
+    body('uhid')
+      .notEmpty()
+      .withMessage('Patient UHID is required'),
+    body('medicationName')
+      .trim()
+      .notEmpty()
+      .withMessage('A medication must be selected'),
+    body('indication')
+      .optional()
+      .isIn(['T2DM', 'Obesity', 'Both'])
+      .withMessage('Indication must be T2DM, Obesity or Both'),
+    body('startDate')
+      .optional()
+      .isISO8601()
+      .withMessage('Start date must be a valid date'),
+    validate,
+  ],
+  glp1TherapyController.ensureCourse
+);
+
+// ------------------------------------
 // POST /api/glp1-therapies — Start a patient on a GLP-1 agonist
 // ------------------------------------
 // Authorization: Doctor only

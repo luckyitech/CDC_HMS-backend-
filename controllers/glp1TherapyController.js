@@ -650,6 +650,69 @@ const switchMedication = async (req, res) => {
   }
 };
 
+/**
+ * POST /api/glp1-therapies/ensure
+ * Find-or-create the patient's live course for an agent — the lightweight entry
+ * point for the simplified Kardex log.
+ *
+ * Unlike POST / (which starts a formal course with a safety screen and a dose
+ * ladder), this opens a bare course so that a monitoring entry can be recorded
+ * against it. There is no hard gate: safety notes and dose are recorded on the
+ * entries themselves. A course is only ever created once per agent per patient —
+ * a second call returns the existing live course.
+ *
+ * Authorization: doctor, nurse — recording a visit is open to whoever sees the
+ * patient. doctorId (the prescriber column) is stamped only when a doctor opens
+ * the course; a nurse opening it leaves it null until a doctor takes it on.
+ *
+ * Body: { uhid, medicationName, medicationBrand?, indication?, startDate? }
+ */
+const ensureCourse = async (req, res) => {
+  try {
+    const { uhid, medicationName, medicationBrand, indication, startDate } = req.body;
+
+    const agent = String(medicationName || '').trim();
+    if (!agent) return error(res, 'A medication must be selected', 400);
+
+    const family = await resolvePatient(uhid);
+    if (!family) return error(res, `Patient ${uhid} not found`, 404);
+    if (family.isDeactivated) {
+      return error(res, 'This patient profile is inactive. No entries can be recorded.', 403);
+    }
+
+    // One live course per agent per patient — a second call returns the first.
+    let therapy = await Glp1Therapy.findOne({
+      where: {
+        PatientId:      { [Op.in]: family.patientIds },
+        medicationName: agent,
+        status:         { [Op.in]: LIVE_STATUSES },
+      },
+      include: therapyIncludes,
+    });
+
+    if (!therapy) {
+      const created = await Glp1Therapy.create({
+        PatientId:       family.patient.id,       // PascalCase FK
+        medicationName:  agent,
+        medicationBrand: medicationBrand ? String(medicationBrand).trim() : null,
+        // Prescriber column — set only when a doctor opens the course.
+        doctorId:        req.user.role === 'doctor' ? req.user.id : null,
+        indication:      ['T2DM', 'Obesity', 'Both'].includes(indication) ? indication : 'T2DM',
+        startDate:       startDate || clinicToday(),
+        // The simplified log carries no ladder, no safety screen and no planned
+        // review weeks — dose and safety notes live on the entries.
+        status:          'Active',
+      });
+      therapy = await Glp1Therapy.findByPk(created.id, { include: therapyIncludes });
+    }
+
+    return success(res, formatTherapy(therapy));
+  } catch (err) {
+    console.error('Glp1Therapy.ensureCourse error:', err);
+    return error(res, 'Failed to open GLP-1 course', 500);
+  }
+};
+
 // ====================================
 // EXPORTS
 // ====================================
@@ -657,6 +720,7 @@ module.exports = {
   list,
   getFull,
   create,
+  ensureCourse,
   update,
   updateSchedule,
   addReviewWeek,
