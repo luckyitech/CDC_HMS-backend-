@@ -7,6 +7,69 @@ Running record of features, fixes and significant changes. A task is only marked
 
 ## In Progress
 
+### Splitting staff into clinical and non-clinical
+
+- **Branch:** `feature/staff-clinical-split` (both repos)
+- **Status:** In Progress
+- **Started:** 2026-08-20
+- **Design:** `claude/STAFF-CLINICAL-SPLIT.md` in the project
+- **Description:** `role: 'staff'` is a leftover bin holding receptionists, administration
+  and nurses alike, so all of them hold identical powers. This adds a second axis —
+  `StaffProfile.staffType` of `clinical` or `non_clinical` — which decides the default
+  clinical capabilities, on top of the existing role + capability + withdrawal model. No
+  new vocabulary: the capabilities below go into `constants/permissions.js` beside the
+  existing ones and are checked through the same `authorize()` seam.
+
+**Measured against production (`cdc_hms_2026-08-20`)**
+
+| | |
+|---|---|
+| Routes total | 311 |
+| Writes reachable by `role: 'staff'` | 52 |
+| …naming no capability, so not withdrawable | 31 |
+| Staff accounts | 8 (2 receptionists, 1 administration, 5 nurses) |
+| Accounts holding `role: 'nurse'` | **0** |
+
+Live clinical read exposure: the two receptionists and the administration account can read
+**2,165 consultation notes, 2,065 treatment plans and 465 blood-sugar readings** (4,695
+rows). That is the actual defect being fixed. Most of the 31 ungated writes are on modules
+with zero production rows (all inpatient/ward, all GLP-1, all radiology, lab tests) — those
+are gated in the same pass, but as tidying before launch rather than a live fix.
+
+**New capabilities**
+
+| Term | Covers |
+|---|---|
+| `clinical.view` | read the clinical record |
+| `clinical.record` | vitals, nursing notes |
+| `glp1.write` | injections, reviews, week notes |
+| `equipment.write` | patient equipment, CareLink partners |
+| `stock.dispense` | point-of-care use, checkout dispense, returns |
+| `radiology.write` | thyroid ultrasound reporting and signing |
+| `mar.administer` | recording a drug round |
+
+`radiology.write` and `mar.administer` are default-off and ticked per person — which of a
+clinic's staff performs those acts varies, so it must not be hardcoded.
+
+**Classification applied to the real accounts**
+
+Non-clinical (3): EMP007 Mildred Omari, EMP008 Rahma Wanjiru, EMP010 Halima Hashim
+Abdulrahman. Clinical (10): the five nurses, four doctors and the lab technician.
+
+Portal access is **preserved exactly** for every existing account, written out as explicit
+grants, with one addition: the five nurses gain `portal.inpatient`, which no account could
+reach before because it belonged to the unused `nurse` role.
+
+- [ ] Capabilities and `staffType` in `constants/permissions.js`
+- [ ] `staffType` column and migration
+- [ ] `clinical.view` on the live clinical reads
+- [ ] Clinical writes and dormant modules gated
+- [ ] `PatientAccessLog`
+- [ ] Frontend: mirrored vocabulary, staffType control, sidebar tagging
+- [ ] Tested against a real MySQL dev database
+
+---
+
 ### Per-staff portal permissions tab (admin-managed)
 
 - **Branch:** `feature/staff-portal-permissions` (both repos)
