@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { authenticate, authorize } = require('../middleware/auth');
+const { PERMISSIONS } = require('../constants/permissions');
 const glp1MedicationController = require('../controllers/glp1MedicationController');
 
 // ====================================

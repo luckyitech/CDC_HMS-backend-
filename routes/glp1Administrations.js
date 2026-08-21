@@ -3,7 +3,8 @@ const router = express.Router();
 const { body } = require('express-validator');
 const validate = require('../middleware/validate');
 const { authenticate, authorize } = require('../middleware/auth');
-const { CLINICAL_READ_ROLES } = require('../constants/permissions');
+const { INTERNAL_ROLES, PERMISSIONS } = require('../constants/permissions');
+const CLINICAL_READ_ROLES = INTERNAL_ROLES;
 const glp1AdministrationController = require('../controllers/glp1AdministrationController');
 
 // ====================================
@@ -22,7 +23,7 @@ const glp1AdministrationController = require('../controllers/glp1AdministrationC
 router.get(
   '/',
   authenticate,
-  authorize(...CLINICAL_READ_ROLES),
+  authorize('doctor', 'nurse', 'admin', PERMISSIONS.CLINICAL_VIEW),
   glp1AdministrationController.list
 );
 
@@ -33,7 +34,7 @@ router.get(
 router.post(
   '/',
   authenticate,
-  authorize('doctor', 'nurse', 'staff'),
+  authorize('doctor', 'nurse', PERMISSIONS.GLP1_WRITE),
   [
     body('therapyId')
       .isInt({ min: 1 })
@@ -71,7 +72,7 @@ router.post(
 router.delete(
   '/:id',
   authenticate,
-  authorize('doctor', 'nurse', 'staff'),
+  authorize('doctor', 'nurse', PERMISSIONS.GLP1_WRITE),
   glp1AdministrationController.remove
 );
 

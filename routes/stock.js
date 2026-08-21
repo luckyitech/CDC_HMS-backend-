@@ -63,14 +63,14 @@ router.post('/dispense', authenticate, stockWrite, [
 ], movements.dispense);
 
 // Point-of-care use — clinical roles, NOT a stock capability (see header note).
-router.post('/use', authenticate, authorize('doctor', 'nurse', 'staff', 'admin'), [
+router.post('/use', authenticate, authorize('doctor', 'nurse', 'admin', PERMISSIONS.STOCK_DISPENSE), [
   body('locationId').isInt().withMessage('locationId is required'),
   qty(),
   validate,
 ], movements.use);
 
 // FEFO suggestion for the checkout nudge — clinical/reception roles.
-router.get('/fefo-suggestion', authenticate, authorize('doctor', 'nurse', 'staff', 'admin'), movements.fefoSuggestion);
+router.get('/fefo-suggestion', authenticate, authorize('doctor', 'nurse', 'admin', PERMISSIONS.STOCK_DISPENSE), movements.fefoSuggestion);
 
 // A patient's dispensing history — patient-care context, every internal role
 // (exposes only this patient's own rows), not a stock capability. It renders inside
@@ -81,7 +81,7 @@ router.get('/patient-dispenses', authenticate, authorize(...CLINICAL_READ_ROLES)
 // Checkout dispense — reception dispenses the supplies scanned on a patient's
 // discharge charge sheet, patient-linked, in one transaction. Clinical/
 // reception roles, NOT a stock capability (same rationale as /use).
-router.post('/checkout-dispense', authenticate, authorize('doctor', 'staff', 'admin'), [
+router.post('/checkout-dispense', authenticate, authorize('doctor', 'admin', PERMISSIONS.STOCK_DISPENSE), [
   body('uhid').notEmpty().withMessage('Patient UHID is required'),
   body('lines').isArray({ min: 1 }).withMessage('At least one supply line is required'),
   validate,
@@ -90,7 +90,7 @@ router.post('/checkout-dispense', authenticate, authorize('doctor', 'staff', 'ad
 // Returns — a patient brings stock back. Patient-linked (recall traceability),
 // reason required. Clinical/reception roles, NOT a stock capability (same rationale
 // as /use and /checkout-dispense).
-router.post('/return', authenticate, authorize('doctor', 'staff', 'admin'), [
+router.post('/return', authenticate, authorize('doctor', 'admin', PERMISSIONS.STOCK_DISPENSE), [
   body('uhid').notEmpty().withMessage('Patient UHID is required'),
   body('reason').notEmpty().withMessage('A reason is required'),
   qty(),
@@ -99,7 +99,7 @@ router.post('/return', authenticate, authorize('doctor', 'staff', 'admin'), [
 
 // Whether a scanned batch was ever returned (and why) — drives the dispense
 // warning. Clinical/reception roles.
-router.get('/batches/:id/return-info', authenticate, authorize('doctor', 'staff', 'admin'), movements.batchReturnInfo);
+router.get('/batches/:id/return-info', authenticate, authorize('doctor', 'admin', PERMISSIONS.STOCK_DISPENSE), movements.batchReturnInfo);
 
 router.post('/transfer', authenticate, stockWrite, [
   body('fromLocationId').isInt().withMessage('fromLocationId is required'),
@@ -136,7 +136,7 @@ router.get('/dashboard', authenticate, stockRead, movements.dashboard);
 
 // Record-Use options — clinical roles, NOT a stock capability (matches POST /use):
 // only what point-of-care recording needs, nothing more.
-router.get('/use-options', authenticate, authorize('doctor', 'nurse', 'staff', 'admin'), movements.useOptions);
+router.get('/use-options', authenticate, authorize('doctor', 'nurse', 'admin', PERMISSIONS.STOCK_DISPENSE), movements.useOptions);
 
 // ---------- Room balancing (par levels, RAG grid, restock, stocktake) ----------
 router.get('/par-levels',       authenticate, stockRead, rooms.listParLevels);

@@ -1,14 +1,20 @@
 const express = require('express');
 const router = express.Router();
 const { authenticate, authorize } = require('../middleware/auth');
-const { CLINICAL_READ_ROLES } = require('../constants/permissions');
+const { INTERNAL_ROLES, PERMISSIONS } = require('../constants/permissions');
+const CLINICAL_READ_ROLES = INTERNAL_ROLES;
 const ctrl = require('../controllers/thyroidUltrasoundController');
 
 // Thyroid ultrasound reporting — authored in the Radiology workspace.
 // Reads: any clinical role. Writes: doctor or reporting tech (staff) or admin.
 // (The exact "reporting tech" role maps to 'staff' for now — confirm at deploy.)
 const READ   = CLINICAL_READ_ROLES;
-const AUTHOR = ['doctor', 'staff', 'admin'];
+// Authoring and signing a study. 'staff' is deliberately gone: it held
+// reception and administration as well as clinical people, so the front desk
+// could sign an ultrasound report. Who actually performs and reports a scan
+// differs by clinic — a doctor here, a sonographer elsewhere — so it is granted
+// per person rather than assumed from a role.
+const AUTHOR = ['doctor', 'admin', PERMISSIONS.RADIOLOGY_WRITE];
 
 router.use(authenticate);
 

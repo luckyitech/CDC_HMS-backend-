@@ -3,6 +3,7 @@ const router = express.Router();
 const { body } = require('express-validator');
 const validate = require('../middleware/validate');
 const { authenticate, authorize } = require('../middleware/auth');
+const { PERMISSIONS } = require('../constants/permissions');
 const glp1SymptomController = require('../controllers/glp1SymptomController');
 
 // ====================================
@@ -21,7 +22,7 @@ const glp1SymptomController = require('../controllers/glp1SymptomController');
 router.get(
   '/',
   authenticate,
-  authorize('doctor', 'nurse', 'staff'),
+  authorize('doctor', 'nurse', 'admin', PERMISSIONS.CLINICAL_VIEW),
   glp1SymptomController.list
 );
 

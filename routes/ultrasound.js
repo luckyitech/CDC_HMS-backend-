@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { authenticate, authorize } = require('../middleware/auth');
+const { PERMISSIONS } = require('../constants/permissions');
 const ingestAuth = require('../middleware/ingestAuth');
 const uploadUltrasound = require('../middleware/uploadUltrasound');
 const us = require('../controllers/ultrasoundController');
@@ -47,7 +48,7 @@ router.put('/inbox-dismiss', authenticate, authorize(...READ), us.dismissInbox);
 // POST /api/ultrasound/edited — save a clinician-edited still into a patient's
 // image safe (JWT-authed; reporting tech or clinician). Multipart 'file' + uhid.
 // ------------------------------------
-router.post('/edited', authenticate, authorize('doctor', 'nurse', 'staff', 'admin'), (req, res, next) => {
+router.post('/edited', authenticate, authorize('doctor', 'nurse', 'admin', PERMISSIONS.RADIOLOGY_WRITE), (req, res, next) => {
   uploadUltrasound.single('file')(req, res, (err) => {
     if (err) return res.status(400).json({ success: false, message: err.message || 'Image upload failed.' });
     next();

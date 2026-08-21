@@ -3,7 +3,7 @@ const router = express.Router();
 const { body } = require('express-validator');
 const validate = require('../middleware/validate');
 const { authenticate, authorize } = require('../middleware/auth');
-const { CLINICAL_READ_ROLES } = require('../constants/permissions');
+const { PERMISSIONS } = require('../constants/permissions');
 const treatmentPlanController = require('../controllers/treatmentPlanController');
 
 // ====================================
@@ -52,7 +52,7 @@ router.post(
 router.get(
   '/stats',
   authenticate,
-  authorize(...CLINICAL_READ_ROLES),
+  authorize('doctor', 'admin', PERMISSIONS.CLINICAL_VIEW),
   treatmentPlanController.stats
 );
 
@@ -65,7 +65,7 @@ router.get(
 router.get(
   '/',
   authenticate,
-  authorize(...CLINICAL_READ_ROLES),
+  authorize('doctor', 'admin', PERMISSIONS.CLINICAL_VIEW),
   treatmentPlanController.list
 );
 
@@ -76,7 +76,7 @@ router.get(
 router.get(
   '/:id',
   authenticate,
-  authorize(...CLINICAL_READ_ROLES),
+  authorize('doctor', 'admin', PERMISSIONS.CLINICAL_VIEW),
   treatmentPlanController.getOne
 );
 

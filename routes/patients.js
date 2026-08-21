@@ -4,7 +4,11 @@ const { body } = require('express-validator');
 const validate = require('../middleware/validate');
 const { authenticate, authorize } = require('../middleware/auth');
 const findPatient = require('../middleware/findPatient');
-const { CLINICAL_READ_ROLES } = require('../constants/permissions');
+const { INTERNAL_ROLES, PERMISSIONS } = require('../constants/permissions');
+// Every internal role, for the patient's identity and administration — who they
+// are, where they are, what they owe. Reception needs all of it. The clinical
+// record is gated separately, by PERMISSIONS.CLINICAL_VIEW.
+const CLINICAL_READ_ROLES = INTERNAL_ROLES;
 const patientController          = require('../controllers/patientController');
 const bloodSugarController       = require('../controllers/bloodSugarController');
 const equipmentController        = require('../controllers/equipmentController');
@@ -137,7 +141,7 @@ router.delete('/:uhid', authenticate, authorize('admin'), findPatient, patientCo
 // ------------------------------------
 // POST /api/patients/:uhid/vitals — record triage vitals
 // ------------------------------------
-router.post('/:uhid/vitals', authenticate, authorize('staff', 'nurse'), findPatient, [
+router.post('/:uhid/vitals', authenticate, authorize('nurse', PERMISSIONS.CLINICAL_RECORD), findPatient, [
   body('bp').notEmpty().withMessage('Blood pressure is required'),
   body('heartRate').isInt().withMessage('Heart rate must be an integer'),
   body('weight').optional({ nullable: true }).isFloat().withMessage('Weight must be a number'),
@@ -153,12 +157,12 @@ router.post('/:uhid/vitals/doctor', authenticate, authorize('doctor'), findPatie
 // ------------------------------------
 // GET /api/patients/:uhid/vitals/history — all vitals records (MUST be before /:uhid/vitals)
 // ------------------------------------
-router.get('/:uhid/vitals/history', authenticate, authorize(...CLINICAL_READ_ROLES), findPatient, patientController.getVitalsHistory);
+router.get('/:uhid/vitals/history', authenticate, authorize('doctor', 'nurse', 'admin', PERMISSIONS.CLINICAL_VIEW), findPatient, patientController.getVitalsHistory);
 
 // ------------------------------------
 // GET /api/patients/:uhid/vitals — latest vitals
 // ------------------------------------
-router.get('/:uhid/vitals', authenticate, authorize(...CLINICAL_READ_ROLES), findPatient, patientController.getVitals);
+router.get('/:uhid/vitals', authenticate, authorize('doctor', 'nurse', 'admin', PERMISSIONS.CLINICAL_VIEW), findPatient, patientController.getVitals);
 
 // ------------------------------------
 // POST /api/patients/:uhid/blood-sugar — single or bulk reading (upsert)
@@ -171,7 +175,7 @@ router.post('/:uhid/blood-sugar', authenticate, authorize('patient'), findPatien
 // ------------------------------------
 // GET /api/patients/:uhid/blood-sugar — readings with date filters
 // ------------------------------------
-router.get('/:uhid/blood-sugar', authenticate, authorize(...CLINICAL_READ_ROLES, 'patient'), findPatient, bloodSugarController.get);
+router.get('/:uhid/blood-sugar', authenticate, authorize('doctor', 'nurse', 'admin', 'patient', PERMISSIONS.CLINICAL_VIEW), findPatient, bloodSugarController.get);
 
 // ====================================
 // MEDICAL EQUIPMENT ENDPOINTS
@@ -180,22 +184,22 @@ router.get('/:uhid/blood-sugar', authenticate, authorize(...CLINICAL_READ_ROLES,
 // ------------------------------------
 // GET /api/patients/:uhid/equipment/history — MUST be before /:uhid/equipment/:id
 // ------------------------------------
-router.get('/:uhid/equipment/history',   authenticate, authorize(...CLINICAL_READ_ROLES), equipmentController.getHistory);
+router.get('/:uhid/equipment/history',   authenticate, authorize('doctor', 'nurse', 'admin', PERMISSIONS.CLINICAL_VIEW), equipmentController.getHistory);
 
 // ------------------------------------
 // GET /api/patients/:uhid/equipment/audit-log — MUST be before /:uhid/equipment/:id
 // ------------------------------------
-router.get('/:uhid/equipment/audit-log', authenticate, authorize(...CLINICAL_READ_ROLES), equipmentController.getAuditLog);
+router.get('/:uhid/equipment/audit-log', authenticate, authorize('doctor', 'nurse', 'admin', PERMISSIONS.CLINICAL_VIEW), equipmentController.getAuditLog);
 
 // ------------------------------------
 // GET /api/patients/:uhid/equipment — current equipment
 // ------------------------------------
-router.get('/:uhid/equipment', authenticate, authorize(...CLINICAL_READ_ROLES), equipmentController.getCurrent);
+router.get('/:uhid/equipment', authenticate, authorize('doctor', 'nurse', 'admin', PERMISSIONS.CLINICAL_VIEW), equipmentController.getCurrent);
 
 // ------------------------------------
 // POST /api/patients/:uhid/equipment — add new equipment
 // ------------------------------------
-router.post('/:uhid/equipment', authenticate, authorize('doctor', 'nurse', 'staff'), [
+router.post('/:uhid/equipment', authenticate, authorize('doctor', 'nurse', PERMISSIONS.EQUIPMENT_WRITE), [
   body('deviceType').isIn(['pump', 'transmitter']).withMessage('Device type must be pump or transmitter'),
   body('type').isIn(['new', 'pre-owned', 'replacement', 'upgrade']).withMessage('Invalid equipment type'),
   body('serialNo').notEmpty().withMessage('Serial number is required'),
@@ -208,7 +212,7 @@ router.post('/:uhid/equipment', authenticate, authorize('doctor', 'nurse', 'staf
 // ------------------------------------
 // POST /api/patients/:uhid/equipment/:id/replace — replace equipment
 // ------------------------------------
-router.post('/:uhid/equipment/:id/replace', authenticate, authorize('doctor', 'nurse', 'staff'), [
+router.post('/:uhid/equipment/:id/replace', authenticate, authorize('doctor', 'nurse', PERMISSIONS.EQUIPMENT_WRITE), [
   body('deviceType').isIn(['pump', 'transmitter']).withMessage('Device type must be pump or transmitter'),
   body('reason').notEmpty().withMessage('Reason for replacement is required'),
   body('type').isIn(['new', 'pre-owned', 'replacement', 'upgrade']).withMessage('Invalid equipment type'),
@@ -226,12 +230,12 @@ router.post('/:uhid/equipment/:id/replace', authenticate, authorize('doctor', 'n
 // ------------------------------------
 // GET /api/patients/:uhid/carelink-partners
 // ------------------------------------
-router.get('/:uhid/carelink-partners', authenticate, authorize(...CLINICAL_READ_ROLES), careLinkPartnerController.getAll);
+router.get('/:uhid/carelink-partners', authenticate, authorize('doctor', 'nurse', 'admin', PERMISSIONS.CLINICAL_VIEW), careLinkPartnerController.getAll);
 
 // ------------------------------------
 // POST /api/patients/:uhid/carelink-partners
 // ------------------------------------
-router.post('/:uhid/carelink-partners', authenticate, authorize('doctor', 'nurse', 'staff'), [
+router.post('/:uhid/carelink-partners', authenticate, authorize('doctor', 'nurse', PERMISSIONS.EQUIPMENT_WRITE), [
   body('firstName').notEmpty().withMessage('First name is required'),
   body('lastName').notEmpty().withMessage('Last name is required'),
   body('email').isEmail().withMessage('Valid email is required'),
@@ -242,16 +246,16 @@ router.post('/:uhid/carelink-partners', authenticate, authorize('doctor', 'nurse
 // ------------------------------------
 // PUT /api/patients/:uhid/carelink-partners/:id
 // ------------------------------------
-router.put('/:uhid/carelink-partners/:id', authenticate, authorize('doctor', 'nurse', 'staff'), careLinkPartnerController.update);
+router.put('/:uhid/carelink-partners/:id', authenticate, authorize('doctor', 'nurse', PERMISSIONS.EQUIPMENT_WRITE), careLinkPartnerController.update);
 
 // ------------------------------------
 // DELETE /api/patients/:uhid/carelink-partners/:id
 // ------------------------------------
-router.delete('/:uhid/carelink-partners/:id', authenticate, authorize('doctor', 'nurse', 'staff'), careLinkPartnerController.remove);
+router.delete('/:uhid/carelink-partners/:id', authenticate, authorize('doctor', 'nurse', PERMISSIONS.EQUIPMENT_WRITE), careLinkPartnerController.remove);
 
 // ------------------------------------
 // PUT /api/patients/:uhid/equipment/:id — update equipment
 // ------------------------------------
-router.put('/:uhid/equipment/:id', authenticate, authorize('doctor', 'nurse', 'staff'), equipmentController.update);
+router.put('/:uhid/equipment/:id', authenticate, authorize('doctor', 'nurse', PERMISSIONS.EQUIPMENT_WRITE), equipmentController.update);
 
 module.exports = router;

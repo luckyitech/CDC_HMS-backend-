@@ -3,7 +3,7 @@ const router = express.Router();
 const { body } = require('express-validator');
 const validate = require('../middleware/validate');
 const { authenticate, authorize } = require('../middleware/auth');
-const { CLINICAL_READ_ROLES } = require('../constants/permissions');
+const { PERMISSIONS } = require('../constants/permissions');
 const consultationNoteController = require('../controllers/consultationNoteController');
 
 // ====================================
@@ -63,7 +63,7 @@ router.post(
 router.get(
   '/',
   authenticate,
-  authorize(...CLINICAL_READ_ROLES),
+  authorize('doctor', 'admin', PERMISSIONS.CLINICAL_VIEW),
   consultationNoteController.list
 );
 
@@ -74,7 +74,7 @@ router.get(
 router.get(
   '/:id',
   authenticate,
-  authorize(...CLINICAL_READ_ROLES),
+  authorize('doctor', 'admin', PERMISSIONS.CLINICAL_VIEW),
   consultationNoteController.getById
 );
 

@@ -40,6 +40,26 @@ const CHECKED_ELSEWHERE = {
 // not an API concept, so no route can check one.
 const isPortal = (p) => p.startsWith('portal.');
 
+/**
+ * Capabilities named in a piece of route text.
+ *
+ * Two spellings, both in use across the route files: the literal
+ * `'clinical.view'`, and the symbol `PERMISSIONS.CLINICAL_VIEW`. Reading only
+ * the first would make this test quietly blind to every gate written in the
+ * second — it would report "this capability gates nothing" for a capability
+ * that gates thirteen routes, which is worse than not testing at all.
+ */
+const capsIn = (text) => {
+  const caps = new Set();
+  for (const m of text.matchAll(/'([a-z0-9]+\.[a-z0-9]+)'/g)) {
+    if (!m[1].endsWith('.js')) caps.add(m[1]);
+  }
+  for (const m of text.matchAll(/PERMISSIONS\.([A-Z0-9_]+)/g)) {
+    if (PERMISSIONS[m[1]]) caps.add(PERMISSIONS[m[1]]);
+  }
+  return caps;
+};
+
 /** Every route in the tree, with its method and the capabilities in its gate. */
 const scanRoutes = () => {
   const found = [];
@@ -52,13 +72,9 @@ const scanRoutes = () => {
     for (const chunk of text.split(/(?=router\.(?:get|post|put|patch|delete)\()/)) {
       const head = chunk.match(/^router\.(get|post|put|patch|delete)\(\s*'([^']*)'/);
       if (!head) continue;
-      const caps = new Set(
-        [...chunk.matchAll(/'([a-z]+\.[a-z]+)'/g)].map((m) => m[1]).filter((c) => !c.endsWith('.js'))
-      );
+      const caps = capsIn(chunk);
       for (const spread of [...chunk.matchAll(/\.\.\.(\w+)/g)].map((m) => m[1])) {
-        if (consts[spread]) {
-          for (const m of consts[spread].matchAll(/'([a-z]+\.[a-z]+)'/g)) caps.add(m[1]);
-        }
+        if (consts[spread]) for (const c of capsIn(consts[spread])) caps.add(c);
       }
       found.push({ method: head[1].toUpperCase(), path: head[2], file, caps: [...caps] });
     }
@@ -120,14 +136,37 @@ describe('read capabilities do not grant writes', () => {
   });
 
   test('every module with a write also has a way to see what it acts on', () => {
-    // A write capability with no read route and no paired access capability is
-    // unusable: you could change a thing you cannot look at.
+    // A write capability with no way to read what it acts on is unusable: you
+    // could change a thing you cannot look at. Four shapes count as readable,
+    // and an area must declare which one it is rather than leaving it to be
+    // inferred:
+    //
+    //   area.access            its own paired read capability
+    //   a GET checking .write  the write capability itself opens the read
+    //   area.readVia           another capability governs reading it — several
+    //                          clinical areas read through 'clinical.view'
+    //                          rather than carrying a read toggle of their own,
+    //                          which would put the same switch on the tab twice
+    //   area.readOpen          reading is deliberately open to every internal
+    //                          role; the string says why
     const areas = PERMISSION_GROUPS.flatMap((g) => g.areas).filter((a) => a.write);
+    const failures = [];
     for (const area of areas) {
-      const readable = area.access
+      if (area.readOpen) continue;
+      const viaOwn = area.access
         || ROUTES.some((r) => r.method === 'GET' && r.caps.includes(area.write));
-      assert.ok(readable,
-        `${area.name}: has a write capability but no paired access and no readable route`);
+      if (viaOwn) continue;
+      if (area.readVia) {
+        // A declared readVia has to be true, not just asserted — otherwise the
+        // field becomes a way to silence this test.
+        const honoured = ROUTES.some((r) => r.method === 'GET' && r.caps.includes(area.readVia));
+        if (!honoured) {
+          failures.push(`${area.name}: declares readVia '${area.readVia}' but no GET route checks it`);
+        }
+        continue;
+      }
+      failures.push(`${area.name}: has a write capability but nothing that reads what it acts on`);
     }
+    assert.deepEqual(failures, []);
   });
 });

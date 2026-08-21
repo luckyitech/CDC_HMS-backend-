@@ -3,6 +3,7 @@ const router = express.Router();
 const { body } = require('express-validator');
 const validate = require('../middleware/validate');
 const { authenticate, authorize } = require('../middleware/auth');
+const { PERMISSIONS } = require('../constants/permissions');
 const glp1TherapyController = require('../controllers/glp1TherapyController');
 
 // ====================================
@@ -24,7 +25,7 @@ const glp1TherapyController = require('../controllers/glp1TherapyController');
 router.get(
   '/',
   authenticate,
-  authorize('doctor', 'nurse', 'staff'),
+  authorize('doctor', 'nurse', 'admin', PERMISSIONS.CLINICAL_VIEW),
   glp1TherapyController.list
 );
 
@@ -36,7 +37,7 @@ router.get(
 router.get(
   '/:id/full',
   authenticate,
-  authorize('doctor', 'nurse', 'staff'),
+  authorize('doctor', 'nurse', 'admin', PERMISSIONS.CLINICAL_VIEW),
   glp1TherapyController.getFull
 );
 

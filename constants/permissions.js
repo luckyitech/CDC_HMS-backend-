@@ -86,6 +86,52 @@ const PERMISSIONS = {
   // stays with the doctor role, since ordering is a clinical decision.
   LAB_VIEW:  'lab.view',
   LAB_WRITE: 'lab.write',
+
+  // --- Clinical ---
+  // The clinical record itself, as opposed to the patient's identity and
+  // administration. Reception legitimately needs to know who a patient is,
+  // where they are in the queue, which ward they are on and what they owe; they
+  // have no reason to read the consultation note. Before this existed there was
+  // no way to say that, so every internal role read everything.
+  //
+  // CLINICAL_VIEW covers reading: consultation notes, treatment plans, nursing
+  // notes, blood-sugar readings, discharge summaries.
+  // CLINICAL_RECORD covers writing the everyday clinical entries a nurse makes:
+  // vitals and nursing notes. Authoring a doctor's clinical record — the
+  // consultation note, the treatment plan, a prescription, a diagnosis — is
+  // clinical authority and stays gated by the doctor role, exactly as
+  // INPATIENT_WRITE stops short of the ward round note.
+  CLINICAL_VIEW:   'clinical.view',
+  CLINICAL_RECORD: 'clinical.record',
+
+  // GLP-1 therapy administration: recording a weekly injection, a review, a
+  // week note. Starting or stopping a course stays with the doctor role — that
+  // is a prescribing decision, and the route files already say so.
+  GLP1_WRITE: 'glp1.write',
+
+  // Patient equipment and CareLink partners. Issuing, replacing and retiring a
+  // device, and maintaining the caregiver contacts attached to a patient.
+  EQUIPMENT_WRITE: 'equipment.write',
+
+  // Handing stock to or taking it back from a patient: point-of-care use,
+  // checkout dispense at discharge, returns. Separate from STOCK_WRITE, which
+  // is running the ledger — intake, transfers, adjustments, write-offs. The
+  // route files had already reached for this distinction in comments
+  // ("clinical/reception roles, NOT a stock capability") and had to settle for
+  // naming roles because there was no capability to name.
+  STOCK_DISPENSE: 'stock.dispense',
+
+  // Ultrasound reporting: authoring, amending, signing and reopening a study,
+  // and its nodules and images. Deliberately NOT part of the clinical default
+  // bundle — which member of staff performs and signs a scan varies by clinic
+  // (a doctor here, a sonographer or radiographer elsewhere), so hardcoding it
+  // to a role would bake one hospital's staffing into the schema.
+  RADIOLOGY_WRITE: 'radiology.write',
+
+  // Recording a drug round — that a patient was actually given their
+  // medication. Off by default and granted per person, for the same reason as
+  // RADIOLOGY_WRITE.
+  MAR_ADMINISTER: 'mar.administer',
 };
 
 const ALL_PERMISSIONS = Object.values(PERMISSIONS);
@@ -115,6 +161,7 @@ const IMPLIED_BY = {
   [PERMISSIONS.LAB_WRITE]:          PERMISSIONS.LAB_VIEW,
   [PERMISSIONS.USERS_WRITE]:        PERMISSIONS.USERS_VIEW,
   [PERMISSIONS.APPOINTMENTS_WRITE]: PERMISSIONS.APPOINTMENTS_VIEW,
+  [PERMISSIONS.CLINICAL_RECORD]:    PERMISSIONS.CLINICAL_VIEW,
 };
 
 // Which portals each role reaches without anything being granted.
@@ -134,6 +181,70 @@ const ROLE_DEFAULT_PORTALS = {
   lab:    [PERMISSIONS.PORTAL_LAB],
   nurse:  [PERMISSIONS.PORTAL_INPATIENT],
 };
+
+// =====================================================================
+// CLINICAL vs NON-CLINICAL
+//
+// `role` says which portal a person lands in. It does NOT say whether they
+// touch patients — and 'staff' in particular is a leftover bin holding
+// receptionists, administration and nurses together, so all of them held
+// identical powers. Splitting that bin is what these two values are for.
+//
+// The two axes are independent on purpose. A clinic's nurse may be role
+// 'staff'; its lab technician is role 'lab' and clinical; its administrator is
+// role 'staff' and not. Folding the two together would just recreate the bin.
+//
+// Where the line falls: identity and administration on one side — who the
+// patient is, where they are in the queue, which ward, what they owe — and the
+// clinical record on the other. Reception cannot check anyone in without the
+// first; it has no reason for the second.
+// =====================================================================
+const STAFF_TYPES = {
+  CLINICAL:     'clinical',
+  NON_CLINICAL: 'non_clinical',
+};
+
+// What each type holds without anything being ticked, so that a correctly
+// created account is right before an admin ever opens the Permissions tab.
+//
+// This is the point of the whole feature. If the tab were the only mechanism,
+// every new hire would be twenty ticks; nobody does twenty ticks, so the admin
+// copies whatever the last person had and within a year everyone holds
+// everything — which is precisely the state this is fixing. Defaults do the
+// normal case; the tab handles exceptions.
+//
+// RADIOLOGY_WRITE and MAR_ADMINISTER are deliberately absent: which member of
+// staff signs a scan or runs a drug round differs between clinics, so they are
+// granted per person rather than assumed.
+//
+// PORTAL_INPATIENT is also absent, though every nurse needs it. staffType is
+// independent of role, so a clinical bundle also covers doctors and the lab
+// technician — and a lab technician does not belong on the ward. It is granted
+// per person instead.
+const TYPE_DEFAULT_PERMISSIONS = {
+  [STAFF_TYPES.CLINICAL]: [
+    PERMISSIONS.CLINICAL_VIEW,
+    PERMISSIONS.CLINICAL_RECORD,
+    PERMISSIONS.GLP1_WRITE,
+    PERMISSIONS.EQUIPMENT_WRITE,
+    PERMISSIONS.STOCK_DISPENSE,
+  ],
+  [STAFF_TYPES.NON_CLINICAL]: [],
+};
+
+/**
+ * Does this person do clinical work?
+ *
+ * Defaults to clinical when unset. A row written before this column existed, or
+ * a user with no StaffProfile, must not silently lose the clinical access they
+ * have today — the split is applied by classifying people deliberately, never
+ * by a missing value.
+ */
+const isClinical = (user) => user?.staffType !== STAFF_TYPES.NON_CLINICAL;
+
+/** The capabilities a person holds by virtue of their staff type alone. */
+const typeDefaultPermissions = (user) =>
+  TYPE_DEFAULT_PERMISSIONS[isClinical(user) ? STAFF_TYPES.CLINICAL : STAFF_TYPES.NON_CLINICAL];
 
 /**
  * The Permissions tab, in render order.
@@ -183,6 +294,58 @@ const PERMISSION_GROUPS = [
       { key: 'documents', name: 'Medical documents', appliesIn: 'Staff, Doctor, Admin',
         access: null, write: PERMISSIONS.DOCUMENTS_WRITE,
         writeLabel: 'Can upload and edit documents', roleDefault: 'Front desk, doctors' },
+    ],
+  },
+  {
+    key: 'clinical',
+    name: 'Clinical work',
+    description: 'What this person may do with the clinical record, as opposed to the '
+      + 'patient\'s identity and administration. Most of this follows from whether they are '
+      + 'marked clinical or non-clinical on the Profile tab — set it there, and only use '
+      + 'these when someone is an exception.',
+    areas: [
+      { key: 'clinical-record', name: 'Clinical record', appliesIn: 'Staff, Doctor, Inpatient workspace',
+        description: 'Consultation notes, treatment plans, nursing notes and blood-sugar '
+          + 'readings. Writing covers vitals and nursing notes; authoring a consultation '
+          + 'note, treatment plan or prescription stays with the doctor role.',
+        access: PERMISSIONS.CLINICAL_VIEW, write: PERMISSIONS.CLINICAL_RECORD,
+        accessLabel: 'Can read the clinical record',
+        writeLabel: 'Can record vitals and nursing notes',
+        roleDefault: 'Clinical staff' },
+      { key: 'glp1', name: 'GLP-1 therapy', appliesIn: 'Staff, Doctor',
+        description: 'Recording weekly injections, reviews and week notes. Starting or '
+          + 'stopping a course stays with the doctor role.',
+        access: null, write: PERMISSIONS.GLP1_WRITE, readVia: PERMISSIONS.CLINICAL_VIEW,
+        writeLabel: 'Can record injections and reviews', roleDefault: 'Clinical staff' },
+      { key: 'equipment', name: 'Patient equipment', appliesIn: 'Staff, Doctor',
+        description: 'Issuing, replacing and retiring a device, and the CareLink caregiver '
+          + 'contacts attached to a patient.',
+        access: null, write: PERMISSIONS.EQUIPMENT_WRITE, readVia: PERMISSIONS.CLINICAL_VIEW,
+        writeLabel: 'Can issue and replace equipment', roleDefault: 'Clinical staff' },
+      { key: 'dispensing', name: 'Dispensing to patients', appliesIn: 'Staff, Doctor',
+        description: 'Point-of-care use, checkout dispense at discharge and returns. '
+          + 'Separate from Stock / Pharmacy below, which is running the ledger.',
+        access: null, write: PERMISSIONS.STOCK_DISPENSE,
+        readOpen: 'the dispensing screens read the stock catalogue and a batch\'s return '
+          + 'history, which is not patient-clinical data and stays open to every internal role',
+        writeLabel: 'Can dispense to and take back from patients',
+        roleDefault: 'Clinical staff' },
+      { key: 'radiology-report', name: 'Ultrasound reporting', appliesIn: 'Radiology Suite',
+        description: 'Authoring, amending, signing and reopening a study, and its nodules '
+          + 'and images.',
+        access: null, write: PERMISSIONS.RADIOLOGY_WRITE,
+        readOpen: 'reading a study follows the Radiology Suite portal and is unchanged by '
+          + 'the clinical split',
+        writeLabel: 'Can report and sign ultrasound studies',
+        roleDefault: 'Nobody by role — must be granted',
+        warning: 'Signing a report is a medico-legal act. Grant this only to the people who '
+          + 'actually perform and report scans at this clinic.' },
+      { key: 'mar', name: 'Drug round', appliesIn: 'Inpatient workspace',
+        description: 'Recording that a patient was given their medication. Ordering a '
+          + 'medication stays with the doctor role.',
+        access: null, write: PERMISSIONS.MAR_ADMINISTER, readVia: PERMISSIONS.INPATIENT_ACCESS,
+        writeLabel: 'Can record medication administration',
+        roleDefault: 'Nobody by role — must be granted' },
     ],
   },
   {
@@ -253,7 +416,20 @@ const PERMISSIBLE_ROLES = ['doctor', 'staff', 'lab', 'nurse'];
 // doctors' notes are written on the understanding that patients do not read
 // them. Routes that intentionally expose a patient's own data to them keep
 // 'patient' listed explicitly alongside this spread.
-const CLINICAL_READ_ROLES = ['doctor', 'staff', 'nurse', 'lab', 'admin'];
+// Every role that belongs to the clinic, as opposed to a patient. This is an
+// INTERNAL-vs-patient list, not a clinical one.
+//
+// It was called CLINICAL_READ_ROLES, which was misleading from the day it was
+// written — it contains every internal role, including reception — and became
+// actively dangerous once `clinical` started to mean something specific. A gate
+// wanting "any member of staff" uses this; a gate wanting "someone who does
+// clinical work" uses PERMISSIONS.CLINICAL_VIEW.
+const INTERNAL_ROLES = ['doctor', 'staff', 'nurse', 'lab', 'admin'];
+
+// Deprecated alias. Kept so the rename can move file by file with the tests
+// green at every step rather than in one flag-day commit. Remove once no route
+// file imports it.
+const CLINICAL_READ_ROLES = INTERNAL_ROLES;
 
 /** A real admin account, as opposed to someone granted admin capabilities. */
 const isTrueAdmin = (user) => user?.role === 'admin';
@@ -313,11 +489,22 @@ const deniedPermissions = (user) => {
  * and storing the list on the admin row would just be a second thing to keep in
  * sync. Anyone else holds what has been granted, minus what has been withdrawn:
  * a denial beats a grant, so revoking is never ambiguous.
+ *
+ * Staff-type defaults are folded in here rather than written to the row, for
+ * the same reason the admin's list is not stored: the bundle is a property of
+ * being clinical, so reclassifying one person must not require rewriting their
+ * permissions column, and changing what "clinical" means must not require a
+ * data migration over every clinical account.
+ *
+ * A withdrawal still beats a type default — the deletes run last. That is what
+ * makes "clinical, except this one thing" expressible, which is the whole point
+ * of having a Permissions tab on top of the classification.
  */
 const effectivePermissions = (user) => {
   if (!user) return new Set();
   if (isTrueAdmin(user)) return new Set(ALL_PERMISSIONS);
   const granted = expand(user.permissions);
+  typeDefaultPermissions(user).forEach((p) => granted.add(p));
   deniedPermissions(user).forEach((p) => granted.delete(p));
   return granted;
 };
@@ -387,7 +574,12 @@ module.exports = {
   PERMISSION_GROUPS,
   ROLE_DEFAULT_PORTALS,
   PERMISSIBLE_ROLES,
+  INTERNAL_ROLES,
   CLINICAL_READ_ROLES,
+  STAFF_TYPES,
+  TYPE_DEFAULT_PERMISSIONS,
+  isClinical,
+  typeDefaultPermissions,
   effectivePermissions,
   deniedPermissions,
   hasPermission,
