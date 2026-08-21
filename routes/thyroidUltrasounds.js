@@ -21,7 +21,7 @@ router.use(authenticate);
 // ----- catalogue (declared before /:id so 'catalog' is not read as an id) -----
 router.get('/catalog/:type',            authorize(...READ),   ctrl.listCatalog);
 router.post('/catalog/:type',           authorize(...AUTHOR), ctrl.addCatalog);
-router.patch('/catalog/:type/:id/retire', authorize('admin'), ctrl.retireCatalog);
+router.patch('/catalog/:type/:id/retire', authorize('admin', PERMISSIONS.ADMIN_SETUP), ctrl.retireCatalog);
 
 // ----- reports -----
 router.get('/',            authorize(...READ),   ctrl.list);

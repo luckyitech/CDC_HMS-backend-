@@ -56,7 +56,7 @@ router.post(
 router.delete(
   '/:id',
   authenticate,
-  authorize('admin'),
+  authorize('admin', PERMISSIONS.ADMIN_SETUP),
   glp1SymptomController.retire
 );
 

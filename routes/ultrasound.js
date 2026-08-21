@@ -63,6 +63,6 @@ router.put('/:id/assign', authenticate, authorize(...READ), us.assign);
 // ------------------------------------
 // PUT /api/ultrasound/:id/archive — admin soft-delete (never hard-delete)
 // ------------------------------------
-router.put('/:id/archive', authenticate, authorize('admin'), us.archive);
+router.put('/:id/archive', authenticate, authorize('admin', PERMISSIONS.ADMIN_SETUP), us.archive);
 
 module.exports = router;

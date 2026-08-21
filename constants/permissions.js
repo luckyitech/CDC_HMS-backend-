@@ -54,6 +54,24 @@ const PERMISSIONS = {
   // has always been; the three below carve out narrower slices for someone who
   // should run one admin screen without holding the lot.
   ADMIN_ACCESS:    'admin.access',
+
+  // Surgery on the patient record: merging two records into one, deleting a
+  // patient, undoing a merge, and the duplicate list that finds them. Separate
+  // from PATIENTS_WRITE, which is registering and editing — these are
+  // irreversible and act on records rather than on a person's details.
+  PATIENTS_MERGE:  'patients.merge',
+
+  // Structural setup and maintenance: beds, retiring a catalog item, rebuilding
+  // stock levels, archiving an ultrasound, removing a GLP-1 side-effect entry.
+  // Configuration of the system rather than work done in it.
+  //
+  // Both of these exist so that ADMIN_ACCESS is exactly the sum of the boxes
+  // shown beneath it. Ten admin-only routes had no capability at all, so they
+  // appeared nowhere on the Permissions tab — which meant unticking any admin
+  // sub-box and having the parent untick with it would silently remove ten
+  // powers nothing on screen mentioned, with no way to give them back.
+  ADMIN_SETUP:     'admin.setup',
+
   USERS_VIEW:      'users.view',
   USERS_WRITE:     'users.write',
   CONFIG_WRITE:    'config.write',
@@ -287,6 +305,7 @@ const PATIENT_CARE_ROLES = ['doctor', 'staff', 'nurse'];
 // a test pass — if the test disagrees, the routes changed and this list is the
 // thing that is wrong.
 const ADMIN_ACCESS_COVERS = [
+  PERMISSIONS.ADMIN_SETUP,
   PERMISSIONS.APPOINTMENTS_VIEW,
   PERMISSIONS.APPOINTMENTS_WRITE,
   PERMISSIONS.CLINICAL_RECORD,
@@ -297,6 +316,7 @@ const ADMIN_ACCESS_COVERS = [
   PERMISSIONS.INPATIENT_WRITE,
   PERMISSIONS.LAB_VIEW,
   PERMISSIONS.MONITORING_VIEW,
+  PERMISSIONS.PATIENTS_MERGE,
   PERMISSIONS.PATIENTS_WRITE,
   PERMISSIONS.QUEUE_WRITE,
   PERMISSIONS.RADIOLOGY_WRITE,
@@ -468,6 +488,22 @@ const PERMISSION_GROUPS = [
     description: 'Slices of the admin portal, for someone who should run one screen without '
       + 'holding everything an administrator can do.',
     areas: [
+      { key: 'patient-records', name: 'Merge and delete patient records', appliesIn: 'Admin',
+        description: 'Merging two records into one, deleting a patient, and undoing a merge. '
+          + 'Irreversible, and separate from registering and editing a patient.',
+        access: null, write: PERMISSIONS.PATIENTS_MERGE,
+        readOpen: 'the duplicate list is part of the same capability',
+        writeLabel: 'Can merge, delete and restore patient records',
+        roleDefault: 'Administrators',
+        warning: 'Merging and deleting patient records cannot be undone from the interface. '
+          + 'Grant this only to someone who maintains the record itself.' },
+      { key: 'system-setup', name: 'Beds, catalog and stock setup', appliesIn: 'Admin',
+        description: 'Creating and editing beds, retiring a catalog item, rebuilding stock '
+          + 'levels, archiving an ultrasound.',
+        access: null, write: PERMISSIONS.ADMIN_SETUP,
+        readOpen: 'the things being configured are readable through their own modules',
+        writeLabel: 'Can set up beds, catalog and stock',
+        roleDefault: 'Administrators' },
       { key: 'admin-all', name: 'Full administrator access', appliesIn: 'Admin',
         description: 'Every admin-only endpoint, including the three below. Anything set to '
           + 'Withdrawn still overrides this — a withdrawal always beats a grant.',

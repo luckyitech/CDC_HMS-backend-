@@ -156,6 +156,6 @@ router.get('/reports/variances',      authenticate, stockRead, reports.variances
 router.get('/reports/inventory',      authenticate, stockRead, reports.inventory);
 
 // ---------- Admin maintenance ----------
-router.post('/levels/rebuild', authenticate, authorize('admin'), movements.rebuild);
+router.post('/levels/rebuild', authenticate, authorize('admin', PERMISSIONS.ADMIN_SETUP), movements.rebuild);
 
 module.exports = router;

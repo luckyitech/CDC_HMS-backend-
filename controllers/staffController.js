@@ -17,7 +17,7 @@ const { STAFF_ROLES } = require('../constants/staffRoles');
 const {
   PERMISSIONS, ALL_PERMISSIONS, PERMISSION_GROUPS, PERMISSIBLE_ROLES, STAFF_TYPES,
   hasPermission, isTrueAdmin, sanitizePermissions, sanitizeDeniedPermissions, toList,
-  effectivePermissions, ROLE_DEFAULT_PORTALS, displayedPermissions,
+  effectivePermissions, ROLE_DEFAULT_PORTALS, displayedPermissions, ADMIN_ACCESS_COVERS,
 } = require('../constants/permissions');
 
 const { User, StaffProfile, UserEditLog, UserLoginLog } = db;
@@ -558,6 +558,10 @@ const permissionCatalog = async (_req, res) =>
     // the screen cannot drift from the vocabulary the routes actually enforce.
     groups: PERMISSION_GROUPS,
     permissibleRoles: PERMISSIBLE_ROLES,
+    // What full administrator access carries. Served rather than mirrored so
+    // the tab cannot hold a stale copy of a list that is itself derived from
+    // the routes and checked by permissionVocabulary.test.
+    adminAccessCovers: ADMIN_ACCESS_COVERS,
   });
 
 /**

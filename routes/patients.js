@@ -52,13 +52,13 @@ router.get('/check-id', authenticate, authorize('staff', 'admin', 'patients.writ
 // GET /api/patients/duplicates — admin: active patient pairs sharing same idNumber
 // MUST be before /:uhid
 // ------------------------------------
-router.get('/duplicates', authenticate, authorize('admin'), patientController.getDuplicates);
+router.get('/duplicates', authenticate, authorize('admin', PERMISSIONS.PATIENTS_MERGE), patientController.getDuplicates);
 
 // ------------------------------------
 // POST /api/patients/merge — admin: merge one patient into another then deactivate
 // MUST be before /:uhid
 // ------------------------------------
-router.post('/merge', authenticate, authorize('admin'), [
+router.post('/merge', authenticate, authorize('admin', PERMISSIONS.PATIENTS_MERGE), [
   body('keepUhid').notEmpty().withMessage('keepUhid is required'),
   body('discardUhid').notEmpty().withMessage('discardUhid is required'),
   validate,
@@ -85,7 +85,7 @@ router.post('/:uhid/barcode-event', authenticate, authorize('staff', 'admin', 'd
 // PATCH /api/patients/:uhid/reactivate — admin: undo a merge and restore an inactive patient
 // MUST be before /:uhid generic routes
 // ------------------------------------
-router.patch('/:uhid/reactivate', authenticate, authorize('admin'), patientController.reactivatePatient);
+router.patch('/:uhid/reactivate', authenticate, authorize('admin', PERMISSIONS.PATIENTS_MERGE), patientController.reactivatePatient);
 
 // ------------------------------------
 // GET /api/patients — list with filters
@@ -138,7 +138,7 @@ router.patch('/:uhid/summary', authenticate, authorize('doctor'), findPatient, p
 // ------------------------------------
 // DELETE /api/patients/:uhid — delete patient
 // ------------------------------------
-router.delete('/:uhid', authenticate, authorize('admin'), findPatient, patientController.destroy);
+router.delete('/:uhid', authenticate, authorize('admin', PERMISSIONS.PATIENTS_MERGE), findPatient, patientController.destroy);
 
 // ------------------------------------
 // POST /api/patients/:uhid/vitals — record triage vitals
