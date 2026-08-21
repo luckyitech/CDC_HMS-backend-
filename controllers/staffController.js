@@ -17,6 +17,7 @@ const { STAFF_ROLES } = require('../constants/staffRoles');
 const {
   PERMISSIONS, ALL_PERMISSIONS, PERMISSION_GROUPS, PERMISSIBLE_ROLES, STAFF_TYPES,
   hasPermission, isTrueAdmin, sanitizePermissions, sanitizeDeniedPermissions, toList,
+  effectivePermissions,
 } = require('../constants/permissions');
 
 const { User, StaffProfile, UserEditLog, UserLoginLog } = db;
@@ -120,6 +121,16 @@ const formatStaff = (profile, user) => {
     // Permissions tab can show a section as denied rather than merely
     // not-granted — two states that look identical without this.
     deniedPermissions: toList(user.deniedPermissions),
+    // What this person can ACTUALLY do — grants, plus whatever their staff type
+    // carries, minus withdrawals. The two lists above are the inputs; this is
+    // the answer, and the Permissions tab needs it to say "allowed" or "not
+    // allowed" per row rather than only "granted" or "not granted".
+    //
+    // Without it the tab could show the settings but never the outcome, which
+    // is the question an admin actually has: not "is this granted" but "can she
+    // record vitals". Those differ for every capability that comes from being
+    // clinical rather than from a tick.
+    effectivePermissions: [...effectivePermissions(user)],
     canManageStock:  hasPermission(user, PERMISSIONS.STOCK_ACCESS),
     hasAdminAccess:  hasPermission(user, PERMISSIONS.ADMIN_ACCESS),
     canHoldPermissions: PERMISSIBLE_ROLES.includes(user.role),
