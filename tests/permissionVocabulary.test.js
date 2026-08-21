@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const {
-  ALL_PERMISSIONS, PERMISSION_GROUPS, PERMISSIONS,
+  ALL_PERMISSIONS, PERMISSION_GROUPS, PERMISSIONS, ADMIN_ACCESS_COVERS,
 } = require('../constants/permissions');
 
 // =====================================================================
@@ -73,10 +73,20 @@ const scanRoutes = () => {
       const head = chunk.match(/^router\.(get|post|put|patch|delete)\(\s*'([^']*)'/);
       if (!head) continue;
       const caps = capsIn(chunk);
+      // The full gate text, spreads resolved, so a later test can ask whether
+      // this route admits admins without re-finding the chunk by hand.
+      let gate = (chunk.match(/authorize\(([\s\S]*?)\)/) || [, ''])[1];
       for (const spread of [...chunk.matchAll(/\.\.\.(\w+)/g)].map((m) => m[1])) {
-        if (consts[spread]) for (const c of capsIn(consts[spread])) caps.add(c);
+        if (consts[spread]) {
+          for (const c of capsIn(consts[spread])) caps.add(c);
+          gate += `, ${consts[spread]}`;
+        }
       }
-      found.push({ method: head[1].toUpperCase(), path: head[2], file, caps: [...caps] });
+      found.push({
+        method: head[1].toUpperCase(), path: head[2], file,
+        caps: [...caps],
+        admitsAdmin: /'admin'/.test(gate),
+      });
     }
   }
   return found;
@@ -168,5 +178,37 @@ describe('read capabilities do not grant writes', () => {
       failures.push(`${area.name}: has a write capability but nothing that reads what it acts on`);
     }
     assert.deepEqual(failures, []);
+  });
+});
+
+
+describe('ADMIN_ACCESS_COVERS matches what the routes actually do', () => {
+  test('the recorded list is exactly what admin.access lets through', () => {
+    // authorize() admits an admin.access holder to any gate listing 'admin', so
+    // holding it silently confers every capability named alongside 'admin'
+    // anywhere in the route files. The Permissions tab draws those as ticked,
+    // because the person genuinely has them.
+    //
+    // That makes the list load-bearing for what an admin SEES, and a hand-kept
+    // list goes stale the first time someone adds a route — so it is recomputed
+    // here from the routes themselves.
+    //
+    // If this fails, the routes changed and constants/permissions.js is the
+    // thing that is wrong. Do not edit the expectation to match.
+    const derived = new Set();
+    for (const route of ROUTES) {
+      if (!route.admitsAdmin) continue;
+      for (const cap of route.caps) {
+        if (cap === PERMISSIONS.ADMIN_ACCESS) continue;   // it does not cover itself
+        if (isPortal(cap)) continue;                      // portals are not API gates
+        derived.add(cap);
+      }
+    }
+
+    assert.deepEqual(
+      [...derived].sort(),
+      [...ADMIN_ACCESS_COVERS].sort(),
+      'ADMIN_ACCESS_COVERS has drifted from the routes'
+    );
   });
 });

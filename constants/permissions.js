@@ -271,6 +271,40 @@ const TYPE_DEFAULT_PERMISSIONS = {
 // that just as badly in the other direction.
 const PATIENT_CARE_ROLES = ['doctor', 'staff', 'nurse'];
 
+// What holding ADMIN_ACCESS effectively gives you.
+//
+// authorize() admits an admin.access holder to any gate that lists 'admin', so
+// holding it silently confers every capability named alongside 'admin' anywhere
+// in the route files. That is not a design choice made here — it is a
+// consequence of the bypass, and it has always been true.
+//
+// It is written down because the Permissions tab has to be able to say so. A
+// screen showing "Can view users" unticked for someone who can, in fact, view
+// users is lying, and the admin then ticks it and watches nothing change.
+//
+// DERIVED, NOT INVENTED: permissionVocabulary.test.js recomputes this by
+// scanning the routes and fails if the list drifts. Do not hand-edit it to make
+// a test pass — if the test disagrees, the routes changed and this list is the
+// thing that is wrong.
+const ADMIN_ACCESS_COVERS = [
+  PERMISSIONS.APPOINTMENTS_VIEW,
+  PERMISSIONS.APPOINTMENTS_WRITE,
+  PERMISSIONS.CLINICAL_RECORD,
+  PERMISSIONS.CLINICAL_VIEW,
+  PERMISSIONS.CONFIG_WRITE,
+  PERMISSIONS.DOCUMENTS_WRITE,
+  PERMISSIONS.INPATIENT_ACCESS,
+  PERMISSIONS.INPATIENT_WRITE,
+  PERMISSIONS.LAB_VIEW,
+  PERMISSIONS.MONITORING_VIEW,
+  PERMISSIONS.PATIENTS_WRITE,
+  PERMISSIONS.QUEUE_WRITE,
+  PERMISSIONS.RADIOLOGY_WRITE,
+  PERMISSIONS.STOCK_DISPENSE,
+  PERMISSIONS.USERS_VIEW,
+  PERMISSIONS.USERS_WRITE,
+];
+
 /**
  * Does this person do clinical work?
  *
@@ -476,6 +510,51 @@ const PERMISSIBLE_ROLES = ['doctor', 'staff', 'lab', 'nurse'];
 // 'patient' listed explicitly alongside this spread.
 
 /** A real admin account, as opposed to someone granted admin capabilities. */
+/**
+ * Everything the Permissions tab should show as TICKED for this person.
+ *
+ * Deliberately separate from effectivePermissions(), which is the storage
+ * answer: what has been granted, minus what has been withdrawn. Access is
+ * decided by more than that, and the difference is exactly where the tab used
+ * to lie:
+ *
+ *   - a portal that comes with their ROLE is never stored, so every portal row
+ *     rendered empty for the people who hold it;
+ *   - ADMIN_ACCESS admits its holder to any gate listing 'admin', so sixteen
+ *     capabilities they genuinely have showed as not-granted.
+ *
+ * Both cases produced the same broken-feeling behaviour: the box looked empty,
+ * the admin ticked it, the screen correctly stored nothing — because they had
+ * it already — and the box sprang back.
+ *
+ * NOT used by authorize() or requirePermission(). Widening those would change
+ * who gets through a gate; this only changes what a screen draws.
+ */
+const displayedPermissions = (user) => {
+  if (!user) return [];
+  if (isTrueAdmin(user)) return [...ALL_PERMISSIONS];
+
+  const shown = effectivePermissions(user);
+  const refused = deniedPermissions(user);
+
+  // Portals, resolved rather than stored.
+  ALL_PERMISSIONS
+    .filter((p) => p.startsWith('portal.'))
+    .filter((p) => canOpenPortal(user, p))
+    .forEach((p) => shown.add(p));
+
+  // What full administrator access carries with it. A withdrawal still wins —
+  // "everything an admin can do, except the activity log" has to stay
+  // expressible, and the tab has to draw it correctly.
+  if (shown.has(PERMISSIONS.ADMIN_ACCESS)) {
+    ADMIN_ACCESS_COVERS
+      .filter((p) => !refused.has(p))
+      .forEach((p) => shown.add(p));
+  }
+
+  return [...shown];
+};
+
 const isTrueAdmin = (user) => user?.role === 'admin';
 
 /**
@@ -624,6 +703,8 @@ module.exports = {
   TYPE_DEFAULT_PERMISSIONS,
   isClinical,
   typeDefaultPermissions,
+  ADMIN_ACCESS_COVERS,
+  displayedPermissions,
   effectivePermissions,
   deniedPermissions,
   hasPermission,
