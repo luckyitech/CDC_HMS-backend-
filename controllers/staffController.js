@@ -17,7 +17,7 @@ const { STAFF_ROLES } = require('../constants/staffRoles');
 const {
   PERMISSIONS, ALL_PERMISSIONS, PERMISSION_GROUPS, PERMISSIBLE_ROLES, STAFF_TYPES,
   hasPermission, isTrueAdmin, sanitizePermissions, sanitizeDeniedPermissions, toList,
-  effectivePermissions,
+  effectivePermissions, ROLE_DEFAULT_PORTALS,
 } = require('../constants/permissions');
 
 const { User, StaffProfile, UserEditLog, UserLoginLog } = db;
@@ -131,6 +131,26 @@ const formatStaff = (profile, user) => {
     // record vitals". Those differ for every capability that comes from being
     // clinical rather than from a tick.
     effectivePermissions: [...effectivePermissions(user)],
+    // What they would hold with NOTHING ticked either way — role portals plus
+    // whatever their staff type carries.
+    //
+    // This is what lets the tab be a plain checkbox. A tick means "can do it"
+    // and an empty box means "cannot", and the screen works out what to STORE
+    // by comparing the two: unticking something they would have by default has
+    // to record a withdrawal, while unticking something they only had by grant
+    // just removes the grant. The admin never has to know the difference —
+    // which was the whole problem with the three-state control.
+    defaultPermissions: [
+      ...new Set([
+        ...effectivePermissions({
+          role: user.role,
+          staffType: user.staffType,
+          permissions: [],
+          deniedPermissions: [],
+        }),
+        ...(ROLE_DEFAULT_PORTALS[user.role] || []),
+      ]),
+    ],
     canManageStock:  hasPermission(user, PERMISSIONS.STOCK_ACCESS),
     hasAdminAccess:  hasPermission(user, PERMISSIONS.ADMIN_ACCESS),
     canHoldPermissions: PERMISSIBLE_ROLES.includes(user.role),
