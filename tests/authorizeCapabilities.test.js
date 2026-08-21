@@ -275,3 +275,72 @@ describe('area capabilities widen a gate without narrowing it', () => {
     assert.equal((await run(authorize(...GATE), staffShutOut)).allowed, false);
   });
 });
+
+// =====================================================================
+// Staff type — clinical vs non-clinical
+//
+// The bundle is folded into effectivePermissions() rather than stored on the
+// row, so these are the tests that stop it leaking to the wrong people.
+// =====================================================================
+describe('clinical and non-clinical staff', () => {
+  const { PERMISSIONS: P, hasPermission: has } = require('../constants/permissions');
+  const staff = (extra = {}) => ({ role: 'staff', permissions: [], deniedPermissions: [], ...extra });
+
+  test('a patient never holds a clinical capability', () => {
+    // The regression this exists for: staffType defaults to clinical so that no
+    // member of staff loses access at deploy, and a patient row carries the same
+    // default. Without a role guard every patient would hold clinical.view and
+    // could read every other patient's consultation notes through the very gate
+    // added to prevent that.
+    const patient = { role: 'patient', permissions: [], deniedPermissions: [] };
+    assert.equal(has(patient, P.CLINICAL_VIEW), false);
+    assert.equal(has(patient, P.CLINICAL_RECORD), false);
+    // Even if a stray value is written to the row.
+    assert.equal(has({ ...patient, staffType: 'clinical' }, P.CLINICAL_VIEW), false);
+  });
+
+  test('clinical staff hold the bundle without anything granted', () => {
+    const nurse = staff({ staffType: 'clinical' });
+    for (const cap of [P.CLINICAL_VIEW, P.CLINICAL_RECORD, P.GLP1_WRITE,
+                       P.EQUIPMENT_WRITE, P.STOCK_DISPENSE]) {
+      assert.equal(has(nurse, cap), true, `${cap} should come with being clinical`);
+    }
+  });
+
+  test('non-clinical staff hold none of it', () => {
+    const reception = staff({ staffType: 'non_clinical' });
+    for (const cap of [P.CLINICAL_VIEW, P.CLINICAL_RECORD, P.GLP1_WRITE,
+                       P.EQUIPMENT_WRITE, P.STOCK_DISPENSE]) {
+      assert.equal(has(reception, cap), false, `${cap} should not follow from being staff`);
+    }
+  });
+
+  test('an unset staffType is treated as clinical', () => {
+    // Deploy-day safety: every existing row has no value, and five of the eight
+    // staff accounts in production are nurses. Defaulting to non-clinical would
+    // disable most of the clinical workforce the moment the column landed.
+    assert.equal(has(staff(), P.CLINICAL_VIEW), true);
+  });
+
+  test('a withdrawal beats a clinical default', () => {
+    // What makes "clinical, except this one thing" expressible. If the type
+    // bundle won, the Permissions tab could not carve an exception out of it.
+    const held = staff({ staffType: 'clinical', deniedPermissions: [P.GLP1_WRITE] });
+    assert.equal(has(held, P.GLP1_WRITE), false);
+    assert.equal(has(held, P.CLINICAL_VIEW), true);
+  });
+
+  test('the two per-clinic capabilities are never given by the bundle', () => {
+    // Who signs a scan or runs a drug round differs between clinics, so both are
+    // granted per person. A clinical default here would hand every nurse the
+    // ability to sign an ultrasound report.
+    const nurse = staff({ staffType: 'clinical' });
+    assert.equal(has(nurse, P.RADIOLOGY_WRITE), false);
+    assert.equal(has(nurse, P.MAR_ADMINISTER), false);
+  });
+
+  test('a granted per-clinic capability still works', () => {
+    const sonographer = staff({ staffType: 'clinical', permissions: [P.RADIOLOGY_WRITE] });
+    assert.equal(has(sonographer, P.RADIOLOGY_WRITE), true);
+  });
+});

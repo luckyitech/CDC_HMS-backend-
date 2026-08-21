@@ -182,6 +182,21 @@ const ROLE_DEFAULT_PORTALS = {
   nurse:  [PERMISSIONS.PORTAL_INPATIENT],
 };
 
+// Every role that belongs to the clinic, as opposed to a patient. This is an
+// INTERNAL-vs-patient list, not a clinical one.
+//
+// It was called CLINICAL_READ_ROLES, which was misleading from the day it was
+// written — it contains every internal role, including reception — and became
+// actively dangerous once `clinical` started to mean something specific. A gate
+// wanting "any member of staff" uses this; a gate wanting "someone who does
+// clinical work" uses PERMISSIONS.CLINICAL_VIEW.
+const INTERNAL_ROLES = ['doctor', 'staff', 'nurse', 'lab', 'admin'];
+
+// Deprecated alias. Kept so the rename can move file by file with the tests
+// green at every step rather than in one flag-day commit. Remove once no route
+// file imports it.
+const CLINICAL_READ_ROLES = INTERNAL_ROLES;
+
 // =====================================================================
 // CLINICAL vs NON-CLINICAL
 //
@@ -203,6 +218,15 @@ const STAFF_TYPES = {
   CLINICAL:     'clinical',
   NON_CLINICAL: 'non_clinical',
 };
+
+/**
+ * Does this account belong to the clinic, as opposed to a patient?
+ *
+ * The one thing a staff type must never be read for is a patient. Everything
+ * below derives from the role rather than from the presence of a column, so a
+ * patient row cannot acquire staff capabilities by carrying a stray value.
+ */
+const isInternal = (user) => !!user && INTERNAL_ROLES.includes(user.role);
 
 // What each type holds without anything being ticked, so that a correctly
 // created account is right before an admin ever opens the Permissions tab.
@@ -240,11 +264,26 @@ const TYPE_DEFAULT_PERMISSIONS = {
  * have today — the split is applied by classifying people deliberately, never
  * by a missing value.
  */
-const isClinical = (user) => user?.staffType !== STAFF_TYPES.NON_CLINICAL;
+const isClinical = (user) => isInternal(user) && user.staffType !== STAFF_TYPES.NON_CLINICAL;
 
-/** The capabilities a person holds by virtue of their staff type alone. */
-const typeDefaultPermissions = (user) =>
-  TYPE_DEFAULT_PERMISSIONS[isClinical(user) ? STAFF_TYPES.CLINICAL : STAFF_TYPES.NON_CLINICAL];
+/**
+ * The capabilities a person holds by virtue of their staff type alone.
+ *
+ * A PATIENT never gets any of this, whatever their row says. The check is not
+ * paranoia: staffType defaults to clinical so that no existing member of staff
+ * loses access at deploy, and a patient row carries the same default — so
+ * without this guard every patient would silently hold clinical.view and could
+ * read the consultation notes of every patient in the clinic through the very
+ * gate this branch added to stop that.
+ *
+ * The rule is that a staff type is meaningless for someone who is not staff.
+ * Deriving it from the role rather than trusting the column keeps it that way
+ * even if a patient row is later written with a staffType by some other path.
+ */
+const typeDefaultPermissions = (user) => {
+  if (!isInternal(user)) return [];
+  return TYPE_DEFAULT_PERMISSIONS[isClinical(user) ? STAFF_TYPES.CLINICAL : STAFF_TYPES.NON_CLINICAL];
+};
 
 /**
  * The Permissions tab, in render order.
@@ -416,20 +455,6 @@ const PERMISSIBLE_ROLES = ['doctor', 'staff', 'lab', 'nurse'];
 // doctors' notes are written on the understanding that patients do not read
 // them. Routes that intentionally expose a patient's own data to them keep
 // 'patient' listed explicitly alongside this spread.
-// Every role that belongs to the clinic, as opposed to a patient. This is an
-// INTERNAL-vs-patient list, not a clinical one.
-//
-// It was called CLINICAL_READ_ROLES, which was misleading from the day it was
-// written — it contains every internal role, including reception — and became
-// actively dangerous once `clinical` started to mean something specific. A gate
-// wanting "any member of staff" uses this; a gate wanting "someone who does
-// clinical work" uses PERMISSIONS.CLINICAL_VIEW.
-const INTERNAL_ROLES = ['doctor', 'staff', 'nurse', 'lab', 'admin'];
-
-// Deprecated alias. Kept so the rename can move file by file with the tests
-// green at every step rather than in one flag-day commit. Remove once no route
-// file imports it.
-const CLINICAL_READ_ROLES = INTERNAL_ROLES;
 
 /** A real admin account, as opposed to someone granted admin capabilities. */
 const isTrueAdmin = (user) => user?.role === 'admin';
