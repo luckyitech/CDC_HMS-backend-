@@ -599,6 +599,54 @@ const expiringLicences = async (req, res) => {
  *
  * Authorization: Admin only
  */
+/**
+ * Turn one UserEditLog row into something an administrator can read.
+ *
+ * TWO PROBLEMS, both of which made the Activity tab useless for access changes.
+ *
+ * The column is DataTypes.JSON, which MySQL hands back as an object and MariaDB
+ * — where JSON is an alias for LONGTEXT — hands back as a string. The tab did
+ * Object.keys(e.changes), and Object.keys on a string returns character
+ * indices, so on MariaDB every entry rendered as "0, 1, 2, 3, 4, …". The same
+ * shape of bug as the permissions column, which is why toList() exists.
+ *
+ * And a capability change recorded the WHOLE list before and after. "permissions
+ * changed from eight things to four" does not tell an administrator what
+ * happened; "removed glp1.write, radiology.write" does. Since this is the record
+ * of who changed someone's access and when, the difference between those two is
+ * the difference between an audit trail and a pile of arrays.
+ */
+const describeChanges = (raw) => {
+  let parsed = raw;
+  if (typeof parsed === 'string') {
+    try { parsed = JSON.parse(parsed); } catch { return []; }
+  }
+  if (!parsed || typeof parsed !== 'object') return [];
+
+  const asList = (v) => {
+    if (Array.isArray(v)) return v;
+    if (typeof v === 'string') {
+      try { const p = JSON.parse(v); return Array.isArray(p) ? p : null; } catch { return null; }
+    }
+    return null;
+  };
+
+  return Object.entries(parsed).map(([field, { from, to }]) => {
+    const before = asList(from);
+    const after = asList(to);
+
+    // A list of capabilities: say what moved, not what the list now contains.
+    if (before && after) {
+      const added = after.filter((x) => !before.includes(x));
+      const removed = before.filter((x) => !after.includes(x));
+      return { field, added, removed };
+    }
+
+    // Anything else — staffType, a profile field — reads fine as before/after.
+    return { field, from: from ?? null, to: to ?? null };
+  });
+};
+
 const activity = async (req, res) => {
   const limit = Math.min(parseInt(req.query.limit, 10) || 25, 100);
 
@@ -621,7 +669,10 @@ const activity = async (req, res) => {
         id: l.id, loginAt: l.loginAt, ipAddress: l.ipAddress, role: l.role,
       })),
       edits: edits.map((e) => ({
-        id: e.id, editedAt: e.editedAt, editedByName: e.editedByName, changes: e.changes,
+        id: e.id,
+        editedAt: e.editedAt,
+        editedByName: e.editedByName,
+        changes: describeChanges(e.changes),
       })),
     });
   } catch (err) {
