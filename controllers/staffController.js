@@ -19,6 +19,8 @@ const {
   hasPermission, isTrueAdmin, sanitizePermissions, sanitizeDeniedPermissions, toList,
 } = require('../constants/permissions');
 
+const { collectAllEvents } = require('./activityController');
+
 const { User, StaffProfile, UserEditLog, UserLoginLog } = db;
 
 // Never load these into memory on a read path, let alone risk serialising them.
@@ -538,30 +540,64 @@ const expiringLicences = async (req, res) => {
  * Authorization: Admin only
  */
 const activity = async (req, res) => {
-  const limit = Math.min(parseInt(req.query.limit, 10) || 25, 100);
+  const limit = Math.min(parseInt(req.query.limit, 10) || 200, 500);
+  const { startDate, endDate } = req.query;
+
+  // Optional date window, applied to every source.
+  const dateFilter = {};
+  if (startDate) dateFilter[Op.gte] = new Date(startDate);
+  if (endDate) { const e = new Date(endDate); e.setHours(23, 59, 59, 999); dateFilter[Op.lte] = e; }
+  const hasDateFilter = !!(startDate || endDate);
 
   try {
-    const [logins, edits] = await Promise.all([
+    const [logins, edits, allEvents] = await Promise.all([
       UserLoginLog.findAll({
-        where: { userId: req.staffUser.id },
-        order: [['loginAt', 'DESC']],
-        limit,
+        where: { userId: req.staffUser.id, ...(hasDateFilter ? { loginAt: dateFilter } : {}) },
+        order: [['loginAt', 'DESC']], limit,
       }),
       UserEditLog.findAll({
-        where: { targetUserId: req.staffUser.id },
-        order: [['editedAt', 'DESC']],
-        limit,
+        where: { targetUserId: req.staffUser.id, ...(hasDateFilter ? { editedAt: dateFilter } : {}) },
+        order: [['editedAt', 'DESC']], limit,
       }),
+      // Clinical/operational activity — same derivation as the admin Activity Log
+      // (one source of truth), filtered to this staff.
+      collectAllEvents(dateFilter, hasDateFilter),
     ]);
 
-    return success(res, {
-      logins: logins.map((l) => ({
-        id: l.id, loginAt: l.loginAt, ipAddress: l.ipAddress, role: l.role,
-      })),
-      edits: edits.map((e) => ({
-        id: e.id, editedAt: e.editedAt, editedByName: e.editedByName, changes: e.changes,
-      })),
+    // Match events to this staff member by name (event.staff is a display string:
+    // "Dr. First Last" for doctors, "First Last" otherwise — both contain the name).
+    const fullName = `${req.staffUser.firstName} ${req.staffUser.lastName}`.trim().toLowerCase();
+    const clinical = allEvents
+      .filter((e) => e.staff && e.staff.toLowerCase().includes(fullName))
+      // Logins come from UserLoginLog below (authoritative, by id); account_created
+      // is about creating OTHER accounts, not this person's own activity.
+      .filter((e) => e.type !== 'user_login' && e.type !== 'account_created')
+      .map((e) => ({ type: e.type, label: e.label, patient: e.patient, uhid: e.uhid, detail: e.detail, timestamp: e.timestamp }));
+
+    const loginEvents = logins.map((l) => ({
+      type: 'user_login', label: 'Logged in', patient: null, uhid: null,
+      detail: l.ipAddress ? `IP ${l.ipAddress}` : null, timestamp: l.loginAt,
+    }));
+
+    const editEvents = edits.map((e) => {
+      const fields = Object.keys(e.changes || {});
+      const who = e.editedByName && !/undefined/i.test(e.editedByName) ? e.editedByName : 'System';
+      const isPerm = fields.includes('permissions') || fields.includes('deniedPermissions');
+      return {
+        type: isPerm ? 'permissions_changed' : 'profile_updated',
+        label: isPerm ? 'Permissions changed' : 'Profile updated',
+        patient: null, uhid: null,
+        detail: `${fields.join(', ') || 'no fields'} · by ${who}`,
+        timestamp: e.editedAt,
+      };
     });
+
+    // One chronological stream — logins + profile edits + every recorded action.
+    const timeline = [...clinical, ...loginEvents, ...editEvents]
+      .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))
+      .slice(0, limit);
+
+    return success(res, { timeline });
   } catch (err) {
     console.error('Staff activity error:', err.message);
     return error(res, 'Failed to load activity', 500);

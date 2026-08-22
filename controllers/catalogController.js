@@ -19,7 +19,14 @@ const normalizeDrugClass = (type, raw) => {
 
 // One controller serves every catalog type. Add a type here (and to the
 // model enum) and the whole API + admin UI picks it up.
-const VALID_TYPES = ['medication', 'diagnosis'];
+const VALID_TYPES = ['medication', 'diagnosis', 'labTest'];
+
+// price / isCommon apply only to labTest entries. Parse defensively.
+const parsePrice = (raw) => {
+  if (raw === undefined || raw === null || raw === '') return null;
+  const n = Number(raw);
+  return Number.isFinite(n) && n >= 0 ? n : null;
+};
 
 // Where the autocomplete suggestions come from, per catalog type:
 //   'external' — the public NIH APIs (RxNorm / ICD-10), the default until
@@ -44,6 +51,9 @@ const formatItem = (item) => ({
   name: item.name,
   detail: item.detail,
   drugClass: item.drugClass || null,
+  // labTest catalogue fields (null/false for other types).
+  price: item.price != null ? Number(item.price) : null,
+  isCommon: !!item.isCommon,
   addedBy: item.addedBy,
   createdAt: item.createdAt,
 });
@@ -103,6 +113,9 @@ const create = async (req, res) => {
       name,
       detail,
       drugClass: drugClass.value,
+      // labTest: price + common-card flag. Ignored (defaults) for other types.
+      price: req.catalogType === 'labTest' ? parsePrice(req.body.price) : null,
+      isCommon: req.catalogType === 'labTest' ? !!req.body.isCommon : false,
       addedBy: await archiverName(req.user.id),
     });
 
@@ -190,6 +203,11 @@ const update = async (req, res) => {
       const drugClass = normalizeDrugClass(req.catalogType, req.body.drugClass);
       if (!drugClass.ok) return error(res, drugClass.message, 400);
       updates.drugClass = drugClass.value;
+    }
+    // labTest price / common-card flag.
+    if (req.catalogType === 'labTest') {
+      if (req.body.price !== undefined) updates.price = parsePrice(req.body.price);
+      if (req.body.isCommon !== undefined) updates.isCommon = !!req.body.isCommon;
     }
 
     await item.update(updates);

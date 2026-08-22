@@ -48,6 +48,49 @@ router.post(
 );
 
 // ------------------------------------
+// POST /api/lab-tests/request — Create a multi-test lab REQUEST (one requisition)
+// ------------------------------------
+// Authorization: doctor OR nurse. This is the shared request form's endpoint.
+// A nurse must name the doctor they are requesting on behalf of (enforced in the
+// controller). Attribution (who raised it) is taken from the JWT.
+router.post(
+  '/request',
+  authenticate,
+  authorize('doctor', 'nurse'),
+  [
+    body('uhid').notEmpty().withMessage('Patient UHID is required'),
+    body('tests').isArray({ min: 1 }).withMessage('At least one test is required'),
+    body('priority').optional().isIn(['Routine', 'Urgent', 'STAT'])
+      .withMessage('Priority must be Routine, Urgent, or STAT'),
+    validate,
+  ],
+  labTestController.createRequest
+);
+
+// PUT /api/lab-tests/request/:requisitionNumber — edit a request in place
+// (only while every row is still Pending). doctor OR nurse.
+router.put(
+  '/request/:requisitionNumber',
+  authenticate,
+  authorize('doctor', 'nurse'),
+  [
+    body('uhid').notEmpty().withMessage('Patient UHID is required'),
+    body('tests').isArray({ min: 1 }).withMessage('At least one test is required'),
+    validate,
+  ],
+  labTestController.updateRequest
+);
+
+// PUT /api/lab-tests/request/:requisitionNumber/cancel — soft-cancel a request.
+router.put(
+  '/request/:requisitionNumber/cancel',
+  authenticate,
+  authorize('doctor', 'nurse', 'admin'),
+  [body('uhid').notEmpty().withMessage('Patient UHID is required'), validate],
+  labTestController.cancelRequest
+);
+
+// ------------------------------------
 // GET /api/lab-tests/stats — MUST be before /:id
 // ------------------------------------
 // Authorization: Lab technicians (for dashboard)

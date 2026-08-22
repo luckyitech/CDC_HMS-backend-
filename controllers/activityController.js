@@ -29,6 +29,7 @@ const SUMMARY_KEYS = {
   equipment_replaced:    'equipmentReplaced',
   prescription_created:    'prescriptionCreated',
   lab_test_ordered:        'labTestOrdered',
+  lab_test_cancelled:      'labTestCancelled',
   treatment_plan_created:  'treatmentPlanCreated',
   consultation_note:         'consultationNote',
   consultation_note_edited:  'consultationNoteEdited',
@@ -229,7 +230,7 @@ const getDoctorEvents = async (dateFilter, hasDateFilter) => {
 
   const [prescriptions, labTests, treatmentPlans, consultationNotes, editedNotes, physicalExams, assessments] = await Promise.all([
     Prescription.findAll({       where: dateWhere, include: [patientInclude, doctorInclude] }),
-    LabTest.findAll({            where: dateWhere, include: [patientInclude, { model: User, as: 'orderedBy', attributes: doctorAttr }] }),
+    LabTest.findAll({            where: dateWhere, include: [patientInclude, { model: User, as: 'orderedBy', attributes: [...doctorAttr, 'role'] }] }),
     TreatmentPlan.findAll({      where: dateWhere, include: [patientInclude, doctorInclude] }),
     ConsultationNote.findAll({   where: dateWhere, include: [patientInclude, doctorInclude] }),
     ConsultationNote.findAll({   where: editedNoteWhere, include: [patientInclude, doctorInclude], attributes: ['id', 'updatedAt', 'doctorId'] }),
@@ -244,8 +245,13 @@ const getDoctorEvents = async (dateFilter, hasDateFilter) => {
     events.push(makeEvent('prescription_created', 'Wrote Prescription', doctor, `${r.Patient.firstName} ${r.Patient.lastName}`, r.Patient.uhid, r.createdAt, null, 'doctor'));
   }
   for (const r of labTests) {
-    const doctor = r.orderedBy ? `Dr. ${r.orderedBy.firstName} ${r.orderedBy.lastName}` : 'Unknown';
-    events.push(makeEvent('lab_test_ordered', 'Ordered Lab Test', doctor, `${r.Patient.firstName} ${r.Patient.lastName}`, r.Patient.uhid, r.createdAt, r.testType, 'doctor'));
+    // Role-aware attribution: a lab request may be raised by a doctor OR a nurse,
+    // so don't hardcode "Dr."/doctor — a nurse must land under their own name/role.
+    const role = r.orderedBy?.role || 'doctor';
+    const who = r.orderedBy
+      ? (role === 'doctor' ? `Dr. ${r.orderedBy.firstName} ${r.orderedBy.lastName}` : `${r.orderedBy.firstName} ${r.orderedBy.lastName}`)
+      : 'Unknown';
+    events.push(makeEvent('lab_test_ordered', 'Ordered Lab Test', who, `${r.Patient.firstName} ${r.Patient.lastName}`, r.Patient.uhid, r.createdAt, r.testType, role));
   }
   for (const r of treatmentPlans) {
     const doctor = r.doctor ? `Dr. ${r.doctor.firstName} ${r.doctor.lastName}` : 'Unknown';
@@ -366,6 +372,27 @@ const getAppointmentCancellationEvents = async (dateFilter, hasDateFilter) => {
   });
 };
 
+const getLabTestCancellationEvents = async (dateFilter, hasDateFilter) => {
+  const rows = await LabTest.findAll({
+    where: {
+      status: 'Cancelled',
+      cancelledBy: { [Op.ne]: null },
+      ...(hasDateFilter ? { cancelledAt: dateFilter } : {}),
+    },
+    include: [{ model: Patient, attributes: ['uhid', 'firstName', 'lastName'], required: true }],
+  });
+
+  return rows.map(r => makeEvent(
+    'lab_test_cancelled', 'Cancelled Lab Test',
+    r.cancelledBy,
+    `${r.Patient.firstName} ${r.Patient.lastName}`,
+    r.Patient.uhid,
+    r.cancelledAt,
+    r.testType,
+    r.cancelledByRole || 'staff',
+  ));
+};
+
 const getDoctorBlockEvents = async (dateFilter, hasDateFilter) => {
   const blocks = await DoctorBlock.findAll({
     where: {
@@ -427,6 +454,27 @@ const getBarcodeEvents = async (dateFilter, hasDateFilter) => {
 
 // ── Controller ────────────────────────────────────────────────────────────────
 
+// Every activity event across the system, in one array. Exported so per-staff
+// views (the Staff File Activity tab) reuse the exact same derivation instead of
+// duplicating it — one source of truth for "what counts as activity".
+const collectAllEvents = async (dateFilter = {}, hasDateFilter = false) => (
+  await Promise.all([
+    getRegistrationEvents(dateFilter, hasDateFilter),
+    getQueueEvents(dateFilter, hasDateFilter),
+    getDocumentEvents(dateFilter, hasDateFilter),
+    getDocumentReviewedEvents(dateFilter, hasDateFilter),
+    getEquipmentEvents(dateFilter, hasDateFilter),
+    getDoctorEvents(dateFilter, hasDateFilter),
+    getAccountCreationEvents(dateFilter, hasDateFilter),
+    getLoginEvents(dateFilter, hasDateFilter),
+    getAppointmentEvents(dateFilter, hasDateFilter),
+    getAppointmentCancellationEvents(dateFilter, hasDateFilter),
+    getLabTestCancellationEvents(dateFilter, hasDateFilter),
+    getDoctorBlockEvents(dateFilter, hasDateFilter),
+    getBarcodeEvents(dateFilter, hasDateFilter),
+  ])
+).flat();
+
 const getActivityLog = async (req, res) => {
   const { startDate, endDate, staff, action } = req.query;
 
@@ -439,21 +487,7 @@ const getActivityLog = async (req, res) => {
   }
   const hasDateFilter = !!(startDate || endDate);
 
-  // Fetch all sources in parallel
-  const allEvents = (await Promise.all([
-    getRegistrationEvents(dateFilter, hasDateFilter),
-    getQueueEvents(dateFilter, hasDateFilter),
-    getDocumentEvents(dateFilter, hasDateFilter),
-    getDocumentReviewedEvents(dateFilter, hasDateFilter),
-    getEquipmentEvents(dateFilter, hasDateFilter),
-    getDoctorEvents(dateFilter, hasDateFilter),
-    getAccountCreationEvents(dateFilter, hasDateFilter),
-    getLoginEvents(dateFilter, hasDateFilter),
-    getAppointmentEvents(dateFilter, hasDateFilter),
-    getAppointmentCancellationEvents(dateFilter, hasDateFilter),
-    getDoctorBlockEvents(dateFilter, hasDateFilter),
-    getBarcodeEvents(dateFilter, hasDateFilter),
-  ])).flat();
+  const allEvents = await collectAllEvents(dateFilter, hasDateFilter);
 
   // Summary uses all events (unfiltered)
   const summary = buildSummary(allEvents);
@@ -474,4 +508,4 @@ const getActivityLog = async (req, res) => {
   return success(res, { events: filtered, summary });
 };
 
-module.exports = { getActivityLog };
+module.exports = { getActivityLog, collectAllEvents };

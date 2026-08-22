@@ -70,6 +70,10 @@ const FluidBalanceEntry        = require('./FluidBalanceEntry');
 // --- HMIS V4 ultrasound (DICOM bridge ingest) ---
 const UltrasoundImage          = require('./UltrasoundImage');
 
+// --- Lab request form: test bundles ---
+const LabPackage               = require('./LabPackage');
+const LabPackageItem           = require('./LabPackageItem');
+
 // =============================================
 // ASSOCIATIONS
 // =============================================
@@ -135,6 +139,15 @@ Prescription.belongsTo(User, { as: 'doctor', foreignKey: 'doctorId' });
 Patient.hasMany(LabTest);
 LabTest.belongsTo(Patient);
 LabTest.belongsTo(User, { as: 'orderedBy', foreignKey: 'orderedById' });
+// Nurse-raised requests name the doctor they are for; null for doctor-raised.
+LabTest.belongsTo(User, { as: 'onBehalfOfDoctor', foreignKey: 'onBehalfOfDoctorId' });
+
+// Lab packages (bundles) ↔ their member labTest catalogue entries.
+LabPackage.belongsToMany(CatalogItem, { through: LabPackageItem, foreignKey: 'LabPackageId', otherKey: 'CatalogItemId', as: 'tests' });
+CatalogItem.belongsToMany(LabPackage, { through: LabPackageItem, foreignKey: 'CatalogItemId', otherKey: 'LabPackageId', as: 'packages' });
+LabPackage.hasMany(LabPackageItem, { foreignKey: 'LabPackageId' });
+LabPackageItem.belongsTo(LabPackage, { foreignKey: 'LabPackageId' });
+LabPackageItem.belongsTo(CatalogItem, { foreignKey: 'CatalogItemId' });
 
 Patient.hasMany(TreatmentPlan);
 TreatmentPlan.belongsTo(Patient);
@@ -419,6 +432,8 @@ const db = {
   Glp1Administration,
   Glp1WeekNote,
   CatalogItem,
+  LabPackage,
+  LabPackageItem,
   Setting,
   BarcodeScan,
   PatientDiagnosis,

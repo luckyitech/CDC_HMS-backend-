@@ -57,6 +57,7 @@ app.use('/api/patients',           require('./routes/patients'));
 app.use('/api/queue',              require('./routes/queue'));
 app.use('/api/prescriptions',      require('./routes/prescriptions'));
 app.use('/api/lab-tests',          require('./routes/labTests'));
+app.use('/api/lab-packages',       require('./routes/labPackages'));
 app.use('/api/treatment-plans',    require('./routes/treatmentPlans'));
 app.use('/api/physical-exams',     require('./routes/physicalExams'));
 app.use('/api/assessments',        require('./routes/assessments'));
