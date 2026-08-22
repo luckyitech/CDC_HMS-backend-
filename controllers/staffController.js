@@ -648,32 +648,55 @@ const describeChanges = (raw) => {
 };
 
 const activity = async (req, res) => {
+  // Paged, and the two lists page INDEPENDENTLY.
+  //
+  // They grow at wildly different rates — Bridgit Adalah has 1,020 logins in
+  // production and five edits — so one shared page number would mean paging
+  // through forty pages of logins to reach the second page of edits, or the
+  // reverse. Two parameters cost nothing and make each list usable.
+  //
+  // Unbounded before: it took a single `limit`, capped at 100, with no way to
+  // reach anything older. On the busiest account that hid 92% of the logins
+  // with no indication they existed.
   const limit = Math.min(parseInt(req.query.limit, 10) || 25, 100);
+  const loginPage = Math.max(parseInt(req.query.loginPage, 10) || 1, 1);
+  const editPage  = Math.max(parseInt(req.query.editPage, 10) || 1, 1);
 
   try {
-    const [logins, edits] = await Promise.all([
-      UserLoginLog.findAll({
+    const [loginResult, editResult] = await Promise.all([
+      UserLoginLog.findAndCountAll({
         where: { userId: req.staffUser.id },
         order: [['loginAt', 'DESC']],
+        offset: (loginPage - 1) * limit,
         limit,
       }),
-      UserEditLog.findAll({
+      UserEditLog.findAndCountAll({
         where: { targetUserId: req.staffUser.id },
         order: [['editedAt', 'DESC']],
+        offset: (editPage - 1) * limit,
         limit,
       }),
     ]);
 
     return success(res, {
-      logins: logins.map((l) => ({
+      logins: loginResult.rows.map((l) => ({
         id: l.id, loginAt: l.loginAt, ipAddress: l.ipAddress, role: l.role,
       })),
-      edits: edits.map((e) => ({
+      edits: editResult.rows.map((e) => ({
         id: e.id,
         editedAt: e.editedAt,
         editedByName: e.editedByName,
         changes: describeChanges(e.changes),
       })),
+      // Same shape the rest of the API uses for a paged list, one per list.
+      loginPagination: {
+        total: loginResult.count, page: loginPage, limit,
+        totalPages: Math.ceil(loginResult.count / limit),
+      },
+      editPagination: {
+        total: editResult.count, page: editPage, limit,
+        totalPages: Math.ceil(editResult.count / limit),
+      },
     });
   } catch (err) {
     console.error('Staff activity error:', err.message);
