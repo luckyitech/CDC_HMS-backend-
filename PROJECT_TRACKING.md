@@ -7,69 +7,6 @@ Running record of features, fixes and significant changes. A task is only marked
 
 ## In Progress
 
-### Splitting staff into clinical and non-clinical
-
-- **Branch:** `feature/staff-clinical-split` (both repos)
-- **Status:** In Progress
-- **Started:** 2026-08-20
-- **Design:** `claude/STAFF-CLINICAL-SPLIT.md` in the project
-- **Description:** `role: 'staff'` is a leftover bin holding receptionists, administration
-  and nurses alike, so all of them hold identical powers. This adds a second axis —
-  `StaffProfile.staffType` of `clinical` or `non_clinical` — which decides the default
-  clinical capabilities, on top of the existing role + capability + withdrawal model. No
-  new vocabulary: the capabilities below go into `constants/permissions.js` beside the
-  existing ones and are checked through the same `authorize()` seam.
-
-**Measured against production (`cdc_hms_2026-08-20`)**
-
-| | |
-|---|---|
-| Routes total | 311 |
-| Writes reachable by `role: 'staff'` | 52 |
-| …naming no capability, so not withdrawable | 31 |
-| Staff accounts | 8 (2 receptionists, 1 administration, 5 nurses) |
-| Accounts holding `role: 'nurse'` | **0** |
-
-Live clinical read exposure: the two receptionists and the administration account can read
-**2,165 consultation notes, 2,065 treatment plans and 465 blood-sugar readings** (4,695
-rows). That is the actual defect being fixed. Most of the 31 ungated writes are on modules
-with zero production rows (all inpatient/ward, all GLP-1, all radiology, lab tests) — those
-are gated in the same pass, but as tidying before launch rather than a live fix.
-
-**New capabilities**
-
-| Term | Covers |
-|---|---|
-| `clinical.view` | read the clinical record |
-| `clinical.record` | vitals, nursing notes |
-| `glp1.write` | injections, reviews, week notes |
-| `equipment.write` | patient equipment, CareLink partners |
-| `stock.dispense` | point-of-care use, checkout dispense, returns |
-| `radiology.write` | thyroid ultrasound reporting and signing |
-| `mar.administer` | recording a drug round |
-
-`radiology.write` and `mar.administer` are default-off and ticked per person — which of a
-clinic's staff performs those acts varies, so it must not be hardcoded.
-
-**Classification applied to the real accounts**
-
-Non-clinical (3): EMP007 Mildred Omari, EMP008 Rahma Wanjiru, EMP010 Halima Hashim
-Abdulrahman. Clinical (10): the five nurses, four doctors and the lab technician.
-
-Portal access is **preserved exactly** for every existing account, written out as explicit
-grants, with one addition: the five nurses gain `portal.inpatient`, which no account could
-reach before because it belonged to the unused `nurse` role.
-
-- [ ] Capabilities and `staffType` in `constants/permissions.js`
-- [ ] `staffType` column and migration
-- [ ] `clinical.view` on the live clinical reads
-- [ ] Clinical writes and dormant modules gated
-- [ ] `PatientAccessLog`
-- [ ] Frontend: mirrored vocabulary, staffType control, sidebar tagging
-- [ ] Tested against a real MySQL dev database
-
----
-
 ### Per-staff portal permissions tab (admin-managed)
 
 - **Branch:** `feature/staff-portal-permissions` (both repos)
@@ -555,6 +492,129 @@ Issues found while working on the above. Each needs its own branch.
 ---
 
 ## Completed
+
+### Splitting staff into clinical and non-clinical
+
+- **Branch:** `feature/staff-clinical-split` (both repos)
+- **Status:** Completed
+- **Started:** 2026-08-20
+- **Completed:** 2026-08-23
+- **Design:** `claude/STAFF-CLINICAL-SPLIT.md` in the project
+- **Description:** `role: 'staff'` is a leftover bin holding receptionists, administration
+  and nurses alike, so all of them hold identical powers. This adds a second axis —
+  `StaffProfile.staffType` of `clinical` or `non_clinical` — which decides the default
+  clinical capabilities, on top of the existing role + capability + withdrawal model. No
+  new vocabulary: the capabilities below go into `constants/permissions.js` beside the
+  existing ones and are checked through the same `authorize()` seam.
+
+**Measured against production (`cdc_hms_2026-08-20`)**
+
+| | |
+|---|---|
+| Routes total | 311 |
+| Writes reachable by `role: 'staff'` | 52 |
+| …naming no capability, so not withdrawable | 31 |
+| Staff accounts | 8 (2 receptionists, 1 administration, 5 nurses) |
+| Accounts holding `role: 'nurse'` | **0** |
+
+Live clinical read exposure: the two receptionists and the administration account can read
+**2,165 consultation notes, 2,065 treatment plans and 465 blood-sugar readings** (4,695
+rows). That is the actual defect being fixed. Most of the 31 ungated writes are on modules
+with zero production rows (all inpatient/ward, all GLP-1, all radiology, lab tests) — those
+are gated in the same pass, but as tidying before launch rather than a live fix.
+
+**New capabilities**
+
+| Term | Covers |
+|---|---|
+| `clinical.view` | read the clinical record |
+| `clinical.record` | vitals, nursing notes |
+| `glp1.write` | injections, reviews, week notes |
+| `equipment.write` | patient equipment, CareLink partners |
+| `stock.dispense` | point-of-care use, checkout dispense, returns |
+| `radiology.write` | thyroid ultrasound reporting and signing |
+| `mar.administer` | recording a drug round |
+
+`radiology.write` and `mar.administer` are default-off and ticked per person — which of a
+clinic's staff performs those acts varies, so it must not be hardcoded.
+
+**Classification applied to the real accounts**
+
+Non-clinical (3): EMP007 Mildred Omari, EMP008 Rahma Wanjiru, EMP010 Halima Hashim
+Abdulrahman. Clinical (10): the five nurses, four doctors and the lab technician.
+
+Portal access is **preserved exactly** for every existing account, written out as explicit
+grants, with one addition: the five nurses gain `portal.inpatient`, which no account could
+reach before because it belonged to the unused `nurse` role.
+
+- [x] Capabilities and `staffType` in `constants/permissions.js`
+- [x] `staffType` column and migration
+- [x] `clinical.view` on the live clinical reads
+- [x] Clinical writes and dormant modules gated
+- [x] `PatientAccessLog`
+- [x] Frontend: mirrored vocabulary, staffType control, sidebar tagging
+- [x] Tested against a real MySQL dev database
+
+**What shipped beyond the original scope**, all of it found by testing rather
+than by reading the code:
+
+- **Deploy safety.** `20260821000001-preserve-existing-access` writes out, as
+  explicit grants, exactly what each existing account could do under the old
+  gates. Rehearsed against all 13 production accounts: nobody loses anything.
+  New accounts follow the new model, since the migration runs once over the
+  rows present when it runs.
+- **The Permissions tab became a checkbox list.** Ticked means the person can do
+  it. The three-way Withdrawn / Default / Granted control was accurate about the
+  model and needed explaining before anyone could use it. All three stored
+  states still exist; the screen decides which to write.
+- **The tab was showing the wrong state in three places.** Portals that come
+  with a role, the sixteen capabilities `admin.access` confers, and every
+  write/read pair — none appeared in the stored list, so boxes rendered empty
+  for people who held them and ticking them appeared to do nothing.
+- **A write now carries its read at resolution, not only at save.** Any row
+  written outside the tab could hold `stock.write` without `stock.access` —
+  able to move the ledger while the read middleware refused them.
+- **Two capabilities for ten unrepresented admin routes** (`patients.merge`,
+  `admin.setup`), so full administrator access is exactly the sum of the boxes
+  beneath it and unticking a child can safely untick the parent.
+- **Login stops hardcoding a destination.** It used `ROLE_DASHBOARDS`, a role to
+  one dashboard map — the same assumption already removed from
+  `ROLE_DEFAULT_PORTALS`. A user whose own portal was withdrawn was sent to a
+  door the guard refused and bounced to the login page, signed in, with no
+  message.
+- **The edit history was rendering character indices.** `Object.keys()` on a
+  column MariaDB returns as a string. It now describes what was added and
+  removed, and names the administrator who did it — `editedByName` had been
+  writing `'undefined undefined'` on every row since before this branch.
+- **The activity lists are paged**, independently: one production account has
+  1,020 logins and 5 edits.
+
+**Defects I introduced and caught before shipping**, recorded because they share
+a shape worth watching for — a default correct for one group applied to a group
+it was never meant for:
+
+- Every patient account would have held `clinical.view`, and could have read any
+  patient's consultation notes through the gate added to stop reception doing
+  exactly that.
+- The lab technician gained vitals and nursing-note writes he never had, because
+  the clinical bundle applied to any clinical role rather than to patient-care
+  roles.
+- A 403 toast fired on background reads, so opening a patient file warned people
+  who had done nothing wrong.
+
+**Verified end to end** on a fresh database: the full migration chain (~123
+migrations) applies clean, then eight real accounts log in over HTTP and hit 15
+endpoints each. Every result matches the design. The access log recorded 70
+reads with no patient and no non-clinical account among them.
+
+**Left for review after deploy, deliberately not done on deploy day:** every
+`staff` account explicitly holds `radiology.write`, because the old thyroid gate
+listed `'staff'`. Nobody has ever signed a report — the tables are empty — but
+it is now visible on the tab and untickable per person, which it never was
+before.
+
+---
+
 
 ### Patient file read access — every internal role sees the whole record
 
