@@ -71,12 +71,9 @@ const FluidBalanceEntry        = require('./FluidBalanceEntry');
 // --- HMIS V4 ultrasound (DICOM bridge ingest) ---
 const UltrasoundImage          = require('./UltrasoundImage');
 
-// --- Thyroid ultrasound reporting ---
-const ThyroidUltrasound                = require('./ThyroidUltrasound');
-const ThyroidNodule                    = require('./ThyroidNodule');
-const ThyroidNoduleFollicularAssessment= require('./ThyroidNoduleFollicularAssessment');
-const ThyroidUsCatalogItem             = require('./ThyroidUsCatalogItem');
-const ThyroidUltrasoundImage           = require('./ThyroidUltrasoundImage');
+// --- Lab request form: test bundles ---
+const LabPackage               = require('./LabPackage');
+const LabPackageItem           = require('./LabPackageItem');
 
 // =============================================
 // ASSOCIATIONS
@@ -143,6 +140,15 @@ Prescription.belongsTo(User, { as: 'doctor', foreignKey: 'doctorId' });
 Patient.hasMany(LabTest);
 LabTest.belongsTo(Patient);
 LabTest.belongsTo(User, { as: 'orderedBy', foreignKey: 'orderedById' });
+// Nurse-raised requests name the doctor they are for; null for doctor-raised.
+LabTest.belongsTo(User, { as: 'onBehalfOfDoctor', foreignKey: 'onBehalfOfDoctorId' });
+
+// Lab packages (bundles) ↔ their member labTest catalogue entries.
+LabPackage.belongsToMany(CatalogItem, { through: LabPackageItem, foreignKey: 'LabPackageId', otherKey: 'CatalogItemId', as: 'tests' });
+CatalogItem.belongsToMany(LabPackage, { through: LabPackageItem, foreignKey: 'CatalogItemId', otherKey: 'LabPackageId', as: 'packages' });
+LabPackage.hasMany(LabPackageItem, { foreignKey: 'LabPackageId' });
+LabPackageItem.belongsTo(LabPackage, { foreignKey: 'LabPackageId' });
+LabPackageItem.belongsTo(CatalogItem, { foreignKey: 'CatalogItemId' });
 
 Patient.hasMany(TreatmentPlan);
 TreatmentPlan.belongsTo(Patient);
@@ -385,27 +391,6 @@ RadiologyOrder.belongsTo(User, { as: 'reportedByUser', foreignKey: 'reportedById
 // --- HMIS V4 ultrasound images (machine-ingested; PatientId nullable ⇒ Unassigned) ---
 Patient.hasMany(UltrasoundImage);    UltrasoundImage.belongsTo(Patient);
 
-// --- Thyroid ultrasound reporting ---
-Patient.hasMany(ThyroidUltrasound);  ThyroidUltrasound.belongsTo(Patient);
-ThyroidUltrasound.belongsTo(User, { as: 'reportedByUser', foreignKey: 'reportedById' }); // author from JWT
-ThyroidUltrasound.belongsTo(User, { as: 'signedByUser',   foreignKey: 'signedById'   });
-ThyroidUltrasound.belongsTo(User, { as: 'reopenedByUser', foreignKey: 'reopenedById' });
-ThyroidUltrasound.belongsTo(User, { as: 'deletedByUser',  foreignKey: 'deletedBy'    });
-ThyroidUltrasound.belongsTo(User, { as: 'ablationAckByUser', foreignKey: 'ablationWarningAcknowledgedById' });
-
-ThyroidUltrasound.hasMany(ThyroidNodule);   ThyroidNodule.belongsTo(ThyroidUltrasound);
-Patient.hasMany(ThyroidNodule);             ThyroidNodule.belongsTo(Patient);            // denormalised, merge-aware
-
-ThyroidNodule.hasOne(ThyroidNoduleFollicularAssessment);
-ThyroidNoduleFollicularAssessment.belongsTo(ThyroidNodule);
-
-ThyroidUltrasound.hasMany(ThyroidUltrasoundImage); ThyroidUltrasoundImage.belongsTo(ThyroidUltrasound);
-ThyroidNodule.hasMany(ThyroidUltrasoundImage);     ThyroidUltrasoundImage.belongsTo(ThyroidNodule);
-UltrasoundImage.hasMany(ThyroidUltrasoundImage);   ThyroidUltrasoundImage.belongsTo(UltrasoundImage);
-
-User.hasMany(ThyroidUsCatalogItem, { foreignKey: 'addedBy', as: 'addedThyroidCatalogItems' });
-ThyroidUsCatalogItem.belongsTo(User, { foreignKey: 'addedBy', as: 'addedByUser' });
-
 Admission.hasMany(FluidBalanceEntry);   FluidBalanceEntry.belongsTo(Admission);
 Patient.hasMany(FluidBalanceEntry);     FluidBalanceEntry.belongsTo(Patient);
 FluidBalanceEntry.belongsTo(User, { as: 'recordedByUser', foreignKey: 'recordedById' });
@@ -449,6 +434,8 @@ const db = {
   Glp1Administration,
   Glp1WeekNote,
   CatalogItem,
+  LabPackage,
+  LabPackageItem,
   Setting,
   BarcodeScan,
   PatientDiagnosis,
@@ -475,12 +462,6 @@ const db = {
   FluidBalanceEntry,
   // --- HMIS V4 ultrasound ---
   UltrasoundImage,
-  // --- Thyroid ultrasound reporting ---
-  ThyroidUltrasound,
-  ThyroidNodule,
-  ThyroidNoduleFollicularAssessment,
-  ThyroidUsCatalogItem,
-  ThyroidUltrasoundImage,
 };
 
 module.exports = db;

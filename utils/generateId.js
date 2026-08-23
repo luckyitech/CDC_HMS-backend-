@@ -70,10 +70,17 @@ const generateLabTestNumber = async (LabTest) => {
   return generateNumber(LabTest, 'testNumber', 'LAB');
 };
 
+// Requisition Number: REQ-2026-001, REQ-2026-002, ...
+// One per lab request (a request can hold several tests, all sharing this number).
+const generateRequisitionNumber = async (LabTest) => {
+  return generateNumber(LabTest, 'requisitionNumber', 'REQ');
+};
+
 module.exports = {
   generateUHID,
   generateEmployeeId,
   generateNumber,
   generatePrescriptionNumber,
   generateLabTestNumber,
+  generateRequisitionNumber,
 };

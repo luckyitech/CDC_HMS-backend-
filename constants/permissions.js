@@ -139,11 +139,14 @@ const PERMISSIONS = {
   // naming roles because there was no capability to name.
   STOCK_DISPENSE: 'stock.dispense',
 
-  // Ultrasound reporting: authoring, amending, signing and reopening a study,
-  // and its nodules and images. Deliberately NOT part of the clinical default
-  // bundle — which member of staff performs and signs a scan varies by clinic
-  // (a doctor here, a sonographer or radiographer elsewhere), so hardcoding it
-  // to a role would bake one hospital's staffing into the schema.
+  // Writing to a patient's ultrasound imaging — currently saving a
+  // clinician-edited still into their record.
+  //
+  // It covered the thyroid reporting tool as well until that was removed from
+  // main; the gating went with the tool rather than being left behind pointing
+  // at nothing. Deliberately NOT part of the clinical default bundle: which
+  // member of staff works on imaging varies by clinic, so hardcoding it to a
+  // role would bake one hospital's staffing into the schema.
   RADIOLOGY_WRITE: 'radiology.write',
 
   // Recording a drug round — that a patient was actually given their
@@ -442,16 +445,13 @@ const PERMISSION_GROUPS = [
           + 'history, which is not patient-clinical data and stays open to every internal role',
         writeLabel: 'Can dispense to and take back from patients',
         roleDefault: 'Clinical staff' },
-      { key: 'radiology-report', name: 'Ultrasound reporting', appliesIn: 'Radiology Suite',
-        description: 'Authoring, amending, signing and reopening a study, and its nodules '
-          + 'and images.',
+      { key: 'radiology-report', name: 'Ultrasound imaging', appliesIn: 'Radiology Suite',
+        description: 'Saving a clinician-edited still into a patient\'s record.',
         access: null, write: PERMISSIONS.RADIOLOGY_WRITE,
         readOpen: 'reading a study follows the Radiology Suite portal and is unchanged by '
           + 'the clinical split',
-        writeLabel: 'Can report and sign ultrasound studies',
-        roleDefault: 'Nobody by role — must be granted',
-        warning: 'Signing a report is a medico-legal act. Grant this only to the people who '
-          + 'actually perform and report scans at this clinic.' },
+        writeLabel: 'Can save edited ultrasound images',
+        roleDefault: 'Nobody by role — must be granted' },
       { key: 'mar', name: 'Drug round', appliesIn: 'Inpatient workspace',
         description: 'Recording that a patient was given their medication. Ordering a '
           + 'medication stays with the doctor role.',

@@ -57,6 +57,7 @@ app.use('/api/patients',           require('./routes/patients'));
 app.use('/api/queue',              require('./routes/queue'));
 app.use('/api/prescriptions',      require('./routes/prescriptions'));
 app.use('/api/lab-tests',          require('./routes/labTests'));
+app.use('/api/lab-packages',       require('./routes/labPackages'));
 app.use('/api/treatment-plans',    require('./routes/treatmentPlans'));
 app.use('/api/physical-exams',     require('./routes/physicalExams'));
 app.use('/api/assessments',        require('./routes/assessments'));
@@ -98,7 +99,6 @@ app.use('/api/inpatient/billing',        require('./routes/inpatientBilling'));
 
 // --- HMIS V4 ultrasound (HS70A DICOM bridge ingest + gallery) ---
 app.use('/api/ultrasound',               require('./routes/ultrasound'));
-app.use('/api/thyroid-ultrasounds',      require('./routes/thyroidUltrasounds'));
 
 // Global error handler — must be last
 app.use(errorHandler);
