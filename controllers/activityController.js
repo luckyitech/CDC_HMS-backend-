@@ -13,6 +13,36 @@ const makeEvent = (type, label, staff, patient, uhid, timestamp, detail = null, 
   type, label, staff, patient, uhid, timestamp, detail, role,
 });
 
+// ── Date window ────────────────────────────────────────────────────────────────
+
+// Every event source below scans its whole table filtered only by this window —
+// with no bound, "load the activity log" means "load the hospital's entire
+// history" and gets slower every month. Default to a recent window; an explicit
+// startDate/endDate (from the query string) still widens or narrows it freely.
+const DEFAULT_ACTIVITY_WINDOW_DAYS = 30;
+
+// Every event source's `where` unconditionally includes this column — an empty
+// `{}` is NOT "no filter" to Sequelize/MySQL here, it matches nothing. So
+// "all time" is a real lower bound (the epoch), not an omitted one.
+const EPOCH = new Date(0);
+
+const resolveDateFilter = (startDate, endDate, allTime = false) => {
+  const dateFilter = {};
+  if (startDate) {
+    dateFilter[Op.gte] = new Date(startDate);
+  } else if (allTime) {
+    dateFilter[Op.gte] = EPOCH;
+  } else {
+    dateFilter[Op.gte] = new Date(Date.now() - DEFAULT_ACTIVITY_WINDOW_DAYS * 24 * 60 * 60 * 1000);
+  }
+  if (endDate) {
+    const end = new Date(endDate);
+    end.setHours(23, 59, 59, 999);
+    dateFilter[Op.lte] = end;
+  }
+  return dateFilter;
+};
+
 // ── Summary builder ───────────────────────────────────────────────────────────
 
 const SUMMARY_KEYS = {
@@ -61,9 +91,9 @@ const buildSummary = (events) => {
 
 // ── Event sources (each returns Event[]) ─────────────────────────────────────
 
-const getRegistrationEvents = async (dateFilter, hasDateFilter) => {
+const getRegistrationEvents = async (dateFilter) => {
   const patients = await Patient.findAll({
-    where: hasDateFilter ? { createdAt: dateFilter } : {},
+    where: { createdAt: dateFilter },
     attributes: ['uhid', 'firstName', 'lastName', 'registeredBy', 'registeredByRole', 'createdAt'],
   });
 
@@ -72,7 +102,7 @@ const getRegistrationEvents = async (dateFilter, hasDateFilter) => {
   );
 };
 
-const getQueueEvents = async (dateFilter, hasDateFilter) => {
+const getQueueEvents = async (dateFilter) => {
   const items = await Queue.findAll({
     where: {
       [Op.or]: [
@@ -83,7 +113,7 @@ const getQueueEvents = async (dateFilter, hasDateFilter) => {
         { consultationStartTime:{ [Op.ne]: null } },
         { consultationEndTime:  { [Op.ne]: null } },
       ],
-      ...(hasDateFilter ? { createdAt: dateFilter } : {}),
+      createdAt: dateFilter,
     },
     include: [
       { model: Patient, attributes: ['uhid', 'firstName', 'lastName'] },
@@ -113,11 +143,11 @@ const getQueueEvents = async (dateFilter, hasDateFilter) => {
   return events;
 };
 
-const getDocumentEvents = async (dateFilter, hasDateFilter) => {
+const getDocumentEvents = async (dateFilter) => {
   const docs = await MedicalDocument.findAll({
     where: {
       uploadedByRole: { [Op.in]: ['Doctor', 'Staff'] }, // exclude patient self-uploads
-      ...(hasDateFilter ? { createdAt: dateFilter } : {}),
+      createdAt: dateFilter,
     },
     include: [
       { model: Patient, attributes: ['uhid', 'firstName', 'lastName'] },
@@ -134,14 +164,13 @@ const getDocumentEvents = async (dateFilter, hasDateFilter) => {
   });
 };
 
-const getDocumentReviewedEvents = async (dateFilter, hasDateFilter) => {
+const getDocumentReviewedEvents = async (dateFilter) => {
   const docs = await MedicalDocument.findAll({
     where: {
       status:           'Reviewed',
       reviewedBy:       { [Op.ne]: null },
-      reviewDate:       { [Op.ne]: null },
       uploadedByRole:   { [Op.in]: ['Staff', 'Lab'] }, // only staff/lab uploads reviewed by a doctor
-      ...(hasDateFilter ? { reviewDate: dateFilter } : {}),
+      reviewDate:       dateFilter,
     },
     include: [
       { model: Patient, attributes: ['uhid', 'firstName', 'lastName'] },
@@ -162,12 +191,12 @@ const getDocumentReviewedEvents = async (dateFilter, hasDateFilter) => {
   );
 };
 
-const getEquipmentEvents = async (dateFilter, hasDateFilter) => {
+const getEquipmentEvents = async (dateFilter) => {
   const [added, updated, replaced] = await Promise.all([
     MedicalEquipment.findAll({
       where: {
         addedBy: { [Op.ne]: null },
-        ...(hasDateFilter ? { addedDate: dateFilter } : {}),
+        addedDate: dateFilter,
       },
       include: [
         { model: Patient, attributes: ['uhid', 'firstName', 'lastName'] },
@@ -177,7 +206,7 @@ const getEquipmentEvents = async (dateFilter, hasDateFilter) => {
     MedicalEquipment.findAll({
       where: {
         lastUpdatedBy: { [Op.ne]: null },
-        ...(hasDateFilter ? { lastUpdatedDate: dateFilter } : {}),
+        lastUpdatedDate: dateFilter,
       },
       include: [
         { model: Patient, attributes: ['uhid', 'firstName', 'lastName'] },
@@ -187,7 +216,7 @@ const getEquipmentEvents = async (dateFilter, hasDateFilter) => {
     EquipmentHistory.findAll({
       where: {
         archivedBy: { [Op.ne]: null },
-        ...(hasDateFilter ? { archivedDate: dateFilter } : {}),
+        archivedDate: dateFilter,
       },
       include: [
         { model: Patient, attributes: ['uhid', 'firstName', 'lastName'] },
@@ -215,8 +244,8 @@ const getEquipmentEvents = async (dateFilter, hasDateFilter) => {
   return events;
 };
 
-const getDoctorEvents = async (dateFilter, hasDateFilter) => {
-  const dateWhere = hasDateFilter ? { createdAt: dateFilter } : {};
+const getDoctorEvents = async (dateFilter) => {
+  const dateWhere = { createdAt: dateFilter };
   const doctorAttr = ['firstName', 'lastName'];
 
   const patientInclude = { model: Patient, attributes: ['uhid', 'firstName', 'lastName'], required: true };
@@ -224,7 +253,7 @@ const getDoctorEvents = async (dateFilter, hasDateFilter) => {
   const doctorInclude = { model: User, as: 'doctor', attributes: doctorAttr };
 
   const editedNoteWhere = {
-    updatedAt: hasDateFilter ? dateFilter : { [Op.ne]: null },
+    updatedAt: dateFilter,
     [Op.and]: db.sequelize.literal('`ConsultationNote`.`updatedAt` > `ConsultationNote`.`createdAt`'),
   };
 
@@ -279,11 +308,11 @@ const getDoctorEvents = async (dateFilter, hasDateFilter) => {
 
 const ACCOUNT_ROLE_LABEL = { doctor: 'Doctor', staff: 'Staff', lab: 'Lab Tech' };
 
-const getAccountCreationEvents = async (dateFilter, hasDateFilter) => {
+const getAccountCreationEvents = async (dateFilter) => {
   const users = await User.findAll({
     where: {
       role: { [Op.in]: ['doctor', 'staff', 'lab'] },
-      ...(hasDateFilter ? { createdAt: dateFilter } : {}),
+      createdAt: dateFilter,
     },
     attributes: ['firstName', 'lastName', 'role', 'createdBy', 'createdAt'],
   });
@@ -302,9 +331,9 @@ const getAccountCreationEvents = async (dateFilter, hasDateFilter) => {
   );
 };
 
-const getLoginEvents = async (dateFilter, hasDateFilter) => {
+const getLoginEvents = async (dateFilter) => {
   const logs = await UserLoginLog.findAll({
-    where: hasDateFilter ? { loginAt: dateFilter } : {},
+    where: { loginAt: dateFilter },
     attributes: ['userId', 'name', 'role', 'ipAddress', 'loginAt'],
     order: [['loginAt', 'DESC']],
   });
@@ -314,12 +343,12 @@ const getLoginEvents = async (dateFilter, hasDateFilter) => {
   );
 };
 
-const getAppointmentEvents = async (dateFilter, hasDateFilter) => {
+const getAppointmentEvents = async (dateFilter) => {
   const appointments = await Appointment.findAll({
     where: {
       bookedByRole: { [Op.in]: ['staff', 'doctor'] },
       bookedBy:     { [Op.ne]: null },
-      ...(hasDateFilter ? { createdAt: dateFilter } : {}),
+      createdAt:    dateFilter,
     },
     include: [
       { model: Patient, attributes: ['uhid', 'firstName', 'lastName'] },
@@ -343,12 +372,12 @@ const getAppointmentEvents = async (dateFilter, hasDateFilter) => {
   });
 };
 
-const getAppointmentCancellationEvents = async (dateFilter, hasDateFilter) => {
+const getAppointmentCancellationEvents = async (dateFilter) => {
   const appointments = await Appointment.findAll({
     where: {
       status:          'cancelled',
       cancelledBy:     { [Op.ne]: null },
-      ...(hasDateFilter ? { cancelledAt: dateFilter } : {}),
+      cancelledAt:     dateFilter,
     },
     include: [
       { model: Patient, attributes: ['uhid', 'firstName', 'lastName'] },
@@ -372,12 +401,12 @@ const getAppointmentCancellationEvents = async (dateFilter, hasDateFilter) => {
   });
 };
 
-const getLabTestCancellationEvents = async (dateFilter, hasDateFilter) => {
+const getLabTestCancellationEvents = async (dateFilter) => {
   const rows = await LabTest.findAll({
     where: {
       status: 'Cancelled',
       cancelledBy: { [Op.ne]: null },
-      ...(hasDateFilter ? { cancelledAt: dateFilter } : {}),
+      cancelledAt: dateFilter,
     },
     include: [{ model: Patient, attributes: ['uhid', 'firstName', 'lastName'], required: true }],
   });
@@ -393,11 +422,11 @@ const getLabTestCancellationEvents = async (dateFilter, hasDateFilter) => {
   ));
 };
 
-const getDoctorBlockEvents = async (dateFilter, hasDateFilter) => {
+const getDoctorBlockEvents = async (dateFilter) => {
   const blocks = await DoctorBlock.findAll({
     where: {
       blockedBy: { [Op.ne]: null },
-      ...(hasDateFilter ? { createdAt: dateFilter } : {}),
+      createdAt: dateFilter,
     },
     include: [
       { model: User, as: 'doctor', attributes: ['firstName', 'lastName'] },
@@ -425,9 +454,9 @@ const BARCODE_DETAIL = {
   email:       'Card emailed to patient',
 };
 
-const getBarcodeEvents = async (dateFilter, hasDateFilter) => {
+const getBarcodeEvents = async (dateFilter) => {
   const rows = await BarcodeScan.findAll({
-    where: hasDateFilter ? { createdAt: dateFilter } : {},
+    where: { createdAt: dateFilter },
     include: [
       { model: Patient, attributes: ['uhid', 'firstName', 'lastName'] },
       { model: User, as: 'scannedByUser', attributes: ['firstName', 'lastName', 'role'] },
@@ -457,37 +486,30 @@ const getBarcodeEvents = async (dateFilter, hasDateFilter) => {
 // Every activity event across the system, in one array. Exported so per-staff
 // views (the Staff File Activity tab) reuse the exact same derivation instead of
 // duplicating it — one source of truth for "what counts as activity".
-const collectAllEvents = async (dateFilter = {}, hasDateFilter = false) => (
+const collectAllEvents = async (dateFilter = resolveDateFilter()) => (
   await Promise.all([
-    getRegistrationEvents(dateFilter, hasDateFilter),
-    getQueueEvents(dateFilter, hasDateFilter),
-    getDocumentEvents(dateFilter, hasDateFilter),
-    getDocumentReviewedEvents(dateFilter, hasDateFilter),
-    getEquipmentEvents(dateFilter, hasDateFilter),
-    getDoctorEvents(dateFilter, hasDateFilter),
-    getAccountCreationEvents(dateFilter, hasDateFilter),
-    getLoginEvents(dateFilter, hasDateFilter),
-    getAppointmentEvents(dateFilter, hasDateFilter),
-    getAppointmentCancellationEvents(dateFilter, hasDateFilter),
-    getLabTestCancellationEvents(dateFilter, hasDateFilter),
-    getDoctorBlockEvents(dateFilter, hasDateFilter),
-    getBarcodeEvents(dateFilter, hasDateFilter),
+    getRegistrationEvents(dateFilter),
+    getQueueEvents(dateFilter),
+    getDocumentEvents(dateFilter),
+    getDocumentReviewedEvents(dateFilter),
+    getEquipmentEvents(dateFilter),
+    getDoctorEvents(dateFilter),
+    getAccountCreationEvents(dateFilter),
+    getLoginEvents(dateFilter),
+    getAppointmentEvents(dateFilter),
+    getAppointmentCancellationEvents(dateFilter),
+    getLabTestCancellationEvents(dateFilter),
+    getDoctorBlockEvents(dateFilter),
+    getBarcodeEvents(dateFilter),
   ])
 ).flat();
 
 const getActivityLog = async (req, res) => {
-  const { startDate, endDate, staff, action } = req.query;
+  const { startDate, endDate, staff, action, allTime } = req.query;
 
-  const dateFilter = {};
-  if (startDate) dateFilter[Op.gte] = new Date(startDate);
-  if (endDate) {
-    const end = new Date(endDate);
-    end.setHours(23, 59, 59, 999);
-    dateFilter[Op.lte] = end;
-  }
-  const hasDateFilter = !!(startDate || endDate);
+  const dateFilter = resolveDateFilter(startDate, endDate, allTime === 'true');
 
-  const allEvents = await collectAllEvents(dateFilter, hasDateFilter);
+  const allEvents = await collectAllEvents(dateFilter);
 
   // Summary uses all events (unfiltered)
   const summary = buildSummary(allEvents);
@@ -508,4 +530,4 @@ const getActivityLog = async (req, res) => {
   return success(res, { events: filtered, summary });
 };
 
-module.exports = { getActivityLog, collectAllEvents };
+module.exports = { getActivityLog, collectAllEvents, resolveDateFilter };

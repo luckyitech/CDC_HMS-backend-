@@ -20,7 +20,7 @@ const {
   effectivePermissions, ROLE_DEFAULT_PORTALS, displayedPermissions, ADMIN_ACCESS_COVERS,
 } = require('../constants/permissions');
 
-const { collectAllEvents } = require('./activityController');
+const { collectAllEvents, resolveDateFilter } = require('./activityController');
 
 const { User, StaffProfile, UserEditLog, UserLoginLog } = db;
 
@@ -664,25 +664,29 @@ const activity = async (req, res) => {
   const limit = Math.min(parseInt(req.query.limit, 10) || 200, 500);
   const { startDate, endDate } = req.query;
 
-  // Optional date window, applied to every source.
-  const dateFilter = {};
-  if (startDate) dateFilter[Op.gte] = new Date(startDate);
-  if (endDate) { const e = new Date(endDate); e.setHours(23, 59, 59, 999); dateFilter[Op.lte] = e; }
-  const hasDateFilter = !!(startDate || endDate);
+  // Login/edit queries are already scoped to this one staff member and capped
+  // by `limit`, so — unlike collectAllEvents below — they're left unbounded
+  // when no date is given rather than defaulting to a recent window.
+  const rawDateFilter = {};
+  if (startDate) rawDateFilter[Op.gte] = new Date(startDate);
+  if (endDate) { const e = new Date(endDate); e.setHours(23, 59, 59, 999); rawDateFilter[Op.lte] = e; }
+  const hasRawDateFilter = !!(startDate || endDate);
 
   try {
     const [logins, edits, allEvents] = await Promise.all([
       UserLoginLog.findAll({
-        where: { userId: req.staffUser.id, ...(hasDateFilter ? { loginAt: dateFilter } : {}) },
+        where: { userId: req.staffUser.id, ...(hasRawDateFilter ? { loginAt: rawDateFilter } : {}) },
         order: [['loginAt', 'DESC']], limit,
       }),
       UserEditLog.findAll({
-        where: { targetUserId: req.staffUser.id, ...(hasDateFilter ? { editedAt: dateFilter } : {}) },
+        where: { targetUserId: req.staffUser.id, ...(hasRawDateFilter ? { editedAt: rawDateFilter } : {}) },
         order: [['editedAt', 'DESC']], limit,
       }),
       // Clinical/operational activity — same derivation as the admin Activity Log
-      // (one source of truth), filtered to this staff.
-      collectAllEvents(dateFilter, hasDateFilter),
+      // (one source of truth), filtered to this staff. Bounded the same way the
+      // admin log is (defaults to a recent window) — this used to scan the whole
+      // hospital's history for a single staff member's tab.
+      collectAllEvents(resolveDateFilter(startDate, endDate)),
     ]);
 
     // Match events to this staff member by name (event.staff is a display string:
