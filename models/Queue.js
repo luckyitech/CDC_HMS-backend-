@@ -21,6 +21,22 @@ const Queue = defineModel('Queue', {
     type: DataTypes.TEXT,
   },
 
+  // Where this visit is headed. Drives which portal/dashboard picks it up.
+  // Backfilled to 'Outpatient' by 20260901000002 so existing rows are unchanged.
+  // (A walk-in inpatient admission creates an Admission directly, not a Queue
+  // row, so in practice this is Outpatient | Radiology | Pharmacy.)
+  destination: {
+    type: DataTypes.ENUM('Outpatient', 'Inpatient', 'Radiology', 'Pharmacy'),
+    allowNull: false,
+    defaultValue: 'Outpatient',
+  },
+  // Sub-type within a destination — e.g. Radiology -> 'Neuropathy' | 'Ultrasound'.
+  // Queryable (unlike stuffing it in reason). Nullable; only radiology uses it.
+  service: {
+    type: DataTypes.STRING,
+    defaultValue: null,
+  },
+
   // Set by the controller when triage starts / ends. Start = the row moves to
   // 'In Triage' (the nurse opens the vitals form); end = vitals are saved for
   // this visit (patientController.recordVitals), or, failing that, the row

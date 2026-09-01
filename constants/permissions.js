@@ -445,12 +445,13 @@ const PERMISSION_GROUPS = [
           + 'history, which is not patient-clinical data and stays open to every internal role',
         writeLabel: 'Can dispense to and take back from patients',
         roleDefault: 'Clinical staff' },
-      { key: 'radiology-report', name: 'Ultrasound imaging', appliesIn: 'Radiology Suite',
-        description: 'Saving a clinician-edited still into a patient\'s record.',
+      { key: 'radiology-report', name: 'Radiology & neuropathy', appliesIn: 'Radiology Suite',
+        description: 'Saving a clinician-edited ultrasound still, and recording/grading a '
+          + 'neuropathy (PNS) study, into a patient\'s record.',
         access: null, write: PERMISSIONS.RADIOLOGY_WRITE,
         readOpen: 'reading a study follows the Radiology Suite portal and is unchanged by '
           + 'the clinical split',
-        writeLabel: 'Can save edited ultrasound images',
+        writeLabel: 'Can sign ultrasound & neuropathy studies',
         roleDefault: 'Nobody by role — must be granted' },
       { key: 'mar', name: 'Drug round', appliesIn: 'Inpatient workspace',
         description: 'Recording that a patient was given their medication. Ordering a '

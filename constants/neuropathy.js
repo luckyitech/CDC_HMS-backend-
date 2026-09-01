@@ -12,12 +12,12 @@
 
 const FEET = ['R', 'L'];
 
-// Full plantar site set the device supports. The clinic's working protocol
-// tests FOUR of these (PLANTAR_PROTOCOL_SITES) and omits MTH 3 + the instep —
-// that is what 744/752 historical studies did. The other two remain valid so a
-// study can include them if a clinician chooses.
+// Full plantar site set the device supports. The clinic's working protocol now
+// tests all SIX (PLANTAR_PROTOCOL_SITES), matching the vendor template. Grading
+// still averages only the sites actually tested, so older 4-site studies remain
+// valid and comparable.
 const SITES = ['greatToe', 'mth1', 'mth3', 'mth5', 'midfoot', 'heel'];
-const PLANTAR_PROTOCOL_SITES = ['greatToe', 'mth1', 'mth5', 'heel'];
+const PLANTAR_PROTOCOL_SITES = ['greatToe', 'mth1', 'mth3', 'mth5', 'midfoot', 'heel'];
 
 const SITE_LABELS = {
   greatToe: 'Great toe',
