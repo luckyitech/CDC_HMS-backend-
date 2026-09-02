@@ -5,6 +5,7 @@ const { PERMISSIONS } = require('../constants/permissions');
 const ingestAuth = require('../middleware/ingestAuth');
 const uploadUltrasound = require('../middleware/uploadUltrasound');
 const us = require('../controllers/ultrasoundController');
+const bridge = require('../controllers/bridgeController');
 
 // HMIS V4 — ultrasound imaging (HS70A → DICOM bridge → here).
 const READ = ['doctor', 'nurse', 'admin'];
@@ -23,6 +24,16 @@ router.post('/ingest', ingestAuth, (req, res, next) => {
     next();
   });
 }, us.ingest);
+
+// ------------------------------------
+// DICOM bridge control — status chip + Restart button in the Radiology Suite.
+//   heartbeat: machine auth (the bridge polls this and gets any pending restart
+//              back in the response); status/restart: JWT, any radiology user.
+// ------------------------------------
+const BRIDGE_USERS = ['doctor', 'nurse', 'staff', 'admin', PERMISSIONS.RADIOLOGY_WRITE];
+router.post('/bridge/heartbeat', ingestAuth, bridge.heartbeat);
+router.get('/bridge/status',  authenticate, authorize(...BRIDGE_USERS), bridge.status);
+router.post('/bridge/restart', authenticate, authorize(...BRIDGE_USERS), bridge.requestRestart);
 
 // ------------------------------------
 // GET /api/ultrasound — list (uhid=... | unassigned=1)

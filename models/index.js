@@ -70,6 +70,7 @@ const FluidBalanceEntry        = require('./FluidBalanceEntry');
 
 // --- HMIS V4 ultrasound (DICOM bridge ingest) ---
 const UltrasoundImage          = require('./UltrasoundImage');
+const BridgeStatus             = require('./BridgeStatus');
 
 // --- Neuropathy Studio (in-portal Vibrotherm Dx assessment) ---
 const NeuropathyStudy          = require('./NeuropathyStudy');
@@ -395,6 +396,9 @@ RadiologyOrder.belongsTo(User, { as: 'reportedByUser', foreignKey: 'reportedById
 // --- HMIS V4 ultrasound images (machine-ingested; PatientId nullable ⇒ Unassigned) ---
 Patient.hasMany(UltrasoundImage);    UltrasoundImage.belongsTo(Patient);
 
+// --- DICOM bridge status: who requested the last restart (nullable) ---
+BridgeStatus.belongsTo(User, { as: 'restartRequestedBy', foreignKey: 'restartRequestedById' });
+
 // --- Neuropathy Studio: study → patient (required), clinician attribution,
 //     readings normalised one-row-per-site (cascade with the study) ---
 Patient.hasMany(NeuropathyStudy);    NeuropathyStudy.belongsTo(Patient);
@@ -474,6 +478,7 @@ const db = {
   FluidBalanceEntry,
   // --- HMIS V4 ultrasound ---
   UltrasoundImage,
+  BridgeStatus,
   // --- Neuropathy Studio ---
   NeuropathyStudy,
   NeuropathyReading,

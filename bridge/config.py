@@ -38,5 +38,11 @@ LOG_FILE = Path(os.environ.get("LOG_FILE", BASE_DIR / "bridge.log"))
 RETRY_INTERVAL_SECONDS = int(os.environ.get("RETRY_INTERVAL_SECONDS", "60"))
 UPLOAD_TIMEOUT_SECONDS = int(os.environ.get("UPLOAD_TIMEOUT_SECONDS", "60"))
 
+# --- Bridge identity + control channel (heartbeat / self-heal / restart) ---
+BRIDGE_ID = os.environ.get("BRIDGE_ID", "default")
+BRIDGE_VERSION = os.environ.get("BRIDGE_VERSION", "2.0.0")
+HEARTBEAT_INTERVAL_SECONDS = int(os.environ.get("HEARTBEAT_INTERVAL_SECONDS", "30"))
+HEARTBEAT_TIMEOUT_SECONDS = int(os.environ.get("HEARTBEAT_TIMEOUT_SECONDS", "15"))
+
 INCOMING_DIR.mkdir(parents=True, exist_ok=True)
 QUEUE_DIR.mkdir(parents=True, exist_ok=True)

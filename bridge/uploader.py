@@ -72,7 +72,9 @@ def _upload_job(sidecar: Path) -> bool:
                 },
                 timeout=config.UPLOAD_TIMEOUT_SECONDS,
             )
-    except requests.RequestException as exc:
+    except (requests.RequestException, OSError) as exc:
+        # OSError covers cert-bundle / disk IO failures (see 26 Aug outage): keep
+        # the job queued and retry rather than crashing the uploader pass.
         log.warning("Upload failed (will retry): %s", exc)
         return False
 
