@@ -68,6 +68,16 @@ const NeuropathyStudy = defineModel('NeuropathyStudy', {
     type: DataTypes.TEXT,
     defaultValue: null,
   },
+  // Per-foot free-text interpretation (vendor Right/Left Interpretation). The
+  // report auto-fills from the grades when these are blank.
+  rightInterpretation: {
+    type: DataTypes.TEXT,
+    defaultValue: null,
+  },
+  leftInterpretation: {
+    type: DataTypes.TEXT,
+    defaultValue: null,
+  },
   completedAt: {
     type: DataTypes.DATE,
     defaultValue: null,

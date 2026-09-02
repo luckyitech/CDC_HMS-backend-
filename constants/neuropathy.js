@@ -33,7 +33,7 @@ const SITE_LABELS = {
 // MONO — 10 g monofilament: 1 = felt (protective sensation intact), 0 = not felt.
 //        MONO is a separate physical test the clinician performs and ticks per
 //        site; it does not come from the probe.
-const MODALITIES = ['VPT', 'HOT', 'COLD', 'MONO'];
+const MODALITIES = ['VPT', 'COLD', 'HOT', 'MONO'];
 
 const GRADES = ['Normal', 'Mild', 'Moderate', 'Severe'];
 

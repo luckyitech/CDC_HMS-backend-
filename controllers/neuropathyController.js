@@ -61,6 +61,8 @@ const formatStudy = (study, { withReadings = false } = {}) => {
     },
     remarks: s.remarks,
     impression: s.impression,
+    rightInterpretation: s.rightInterpretation,
+    leftInterpretation: s.leftInterpretation,
     completedAt: s.completedAt,
     cancelledAt: s.cancelledAt,
     cancelledByName: clinicianName(s.cancelledBy),
@@ -180,7 +182,7 @@ const saveReadings = async (req, res) => {
 /**
  * PUT /api/neuropathy/:id/complete
  * Grade the study server-side from its readings and lock it.
- * Body: { remarks?, impression? }
+ * Body: { remarks?, rightInterpretation?, leftInterpretation?, impression? }
  */
 const complete = async (req, res) => {
   try {
@@ -192,11 +194,13 @@ const complete = async (req, res) => {
     const hasData = readings.some((r) => !r.omitted && r.value !== null && r.value !== undefined);
     if (!hasData) return error(res, 'Record at least one reading before completing the study.', 400);
 
-    const { remarks, impression } = req.body;
+    const { remarks, impression, rightInterpretation, leftInterpretation } = req.body;
     await study.update({
       ...computeSummary(readings),
       remarks: remarks ?? study.remarks,
       impression: impression ?? study.impression,
+      rightInterpretation: rightInterpretation ?? study.rightInterpretation,
+      leftInterpretation: leftInterpretation ?? study.leftInterpretation,
       status: 'Completed',
       completedAt: new Date(),
     });
