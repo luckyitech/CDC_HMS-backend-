@@ -64,6 +64,8 @@ const formatStudy = (study, { withReadings = false } = {}) => {
     rightInterpretation: s.rightInterpretation,
     leftInterpretation: s.leftInterpretation,
     completedAt: s.completedAt,
+    reportSavedAt: s.reportSavedAt,
+    reportDocumentId: s.reportDocumentId,
     cancelledAt: s.cancelledAt,
     cancelledByName: clinicianName(s.cancelledBy),
     cancelReason: s.cancelReason,
@@ -280,4 +282,29 @@ const cancel = async (req, res) => {
   }
 };
 
-module.exports = { create, saveReadings, complete, list, getById, cancel };
+/**
+ * PUT /api/neuropathy/:id/report-saved
+ * Record that the graded report PDF was filed to the patient's Medical
+ * Documents. Idempotent-refusing: a study whose report is already saved returns
+ * 409 so a second Save can never create a duplicate document.
+ * Body: { documentId? }
+ */
+const markReportSaved = async (req, res) => {
+  try {
+    const study = await loadStudy(req.params.id, res);
+    if (!study) return;
+    if (study.status !== 'Completed') return error(res, 'Only a completed study can have its report saved.', 409);
+    if (study.reportSavedAt) return error(res, 'This report has already been saved to the record.', 409);
+
+    const documentId = req.body.documentId === undefined || req.body.documentId === null ? null : Number(req.body.documentId);
+    await study.update({ reportSavedAt: new Date(), reportDocumentId: Number.isNaN(documentId) ? null : documentId });
+
+    const full = await loadStudy(study.id, res, { includeReadings: true });
+    return success(res, formatStudy(full, { withReadings: true }));
+  } catch (err) {
+    console.error('NeuropathyStudy.markReportSaved error:', err);
+    return error(res, 'Failed to record report save', 500);
+  }
+};
+
+module.exports = { create, saveReadings, complete, list, getById, cancel, markReportSaved };

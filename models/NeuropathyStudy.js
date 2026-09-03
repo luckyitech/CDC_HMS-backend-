@@ -83,6 +83,18 @@ const NeuropathyStudy = defineModel('NeuropathyStudy', {
     defaultValue: null,
   },
 
+  // ---- report "saved once" guard ----
+  // Set when the graded report PDF is first filed to Medical Documents; once
+  // set, the exam UI allows view/print only (no second Save).
+  reportSavedAt: {
+    type: DataTypes.DATE,
+    defaultValue: null,
+  },
+  reportDocumentId: {
+    type: DataTypes.INTEGER,
+    defaultValue: null,
+  },
+
   // ---- soft-delete attribution ----
   cancelledAt: {
     type: DataTypes.DATE,

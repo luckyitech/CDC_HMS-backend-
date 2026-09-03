@@ -90,4 +90,15 @@ router.put(
   neuropathy.cancel
 );
 
+// ------------------------------------
+// PUT /api/neuropathy/:id/report-saved — record the report PDF was filed (once)
+// ------------------------------------
+router.put(
+  '/:id/report-saved',
+  authenticate,
+  authorize(...WRITE),
+  [body('documentId').optional({ nullable: true }).isInt().withMessage('documentId must be an integer'), validate],
+  neuropathy.markReportSaved
+);
+
 module.exports = router;
