@@ -71,6 +71,10 @@ const FluidBalanceEntry        = require('./FluidBalanceEntry');
 // --- HMIS V4 ultrasound (DICOM bridge ingest) ---
 const UltrasoundImage          = require('./UltrasoundImage');
 
+// --- Neuropathy Studio (in-portal Vibrotherm Dx assessment) ---
+const NeuropathyStudy          = require('./NeuropathyStudy');
+const NeuropathyReading        = require('./NeuropathyReading');
+
 // --- Lab request form: test bundles ---
 const LabPackage               = require('./LabPackage');
 const LabPackageItem           = require('./LabPackageItem');
@@ -391,6 +395,14 @@ RadiologyOrder.belongsTo(User, { as: 'reportedByUser', foreignKey: 'reportedById
 // --- HMIS V4 ultrasound images (machine-ingested; PatientId nullable ⇒ Unassigned) ---
 Patient.hasMany(UltrasoundImage);    UltrasoundImage.belongsTo(Patient);
 
+// --- Neuropathy Studio: study → patient (required), clinician attribution,
+//     readings normalised one-row-per-site (cascade with the study) ---
+Patient.hasMany(NeuropathyStudy);    NeuropathyStudy.belongsTo(Patient);
+NeuropathyStudy.belongsTo(User, { as: 'performedBy', foreignKey: 'performedById' });
+NeuropathyStudy.belongsTo(User, { as: 'cancelledBy', foreignKey: 'cancelledById' });
+NeuropathyStudy.hasMany(NeuropathyReading, { onDelete: 'CASCADE' });
+NeuropathyReading.belongsTo(NeuropathyStudy);
+
 Admission.hasMany(FluidBalanceEntry);   FluidBalanceEntry.belongsTo(Admission);
 Patient.hasMany(FluidBalanceEntry);     FluidBalanceEntry.belongsTo(Patient);
 FluidBalanceEntry.belongsTo(User, { as: 'recordedByUser', foreignKey: 'recordedById' });
@@ -462,6 +474,9 @@ const db = {
   FluidBalanceEntry,
   // --- HMIS V4 ultrasound ---
   UltrasoundImage,
+  // --- Neuropathy Studio ---
+  NeuropathyStudy,
+  NeuropathyReading,
 };
 
 module.exports = db;

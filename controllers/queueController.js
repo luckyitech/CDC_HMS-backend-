@@ -86,6 +86,8 @@ const formatItem = (item, position) => {
     priority:              q.priority,
     status:                q.status,
     reason:                q.reason,
+    destination:           q.destination || 'Outpatient',
+    service:               q.service || null,
     estimatedWait:         position !== null ? `${position * 15} min` : null,
     assignedDoctorId:      q.assignedDoctorId,
     assignedDoctorName:    q.assignedDoctor
@@ -133,7 +135,18 @@ const formatItem = (item, position) => {
 // ------------------------------------
 const add = async (req, res) => {
   try {
-    const { uhid, priority = 'Normal', reason, isReview = false, assignedDoctorId = null } = req.body;
+    const { uhid, priority = 'Normal', reason, isReview = false, assignedDoctorId = null,
+            destination = 'Outpatient', service = null } = req.body;
+
+    const VALID_DESTINATIONS = ['Outpatient', 'Inpatient', 'Radiology', 'Pharmacy'];
+    if (!VALID_DESTINATIONS.includes(destination)) {
+      return error(res, 'Invalid destination', 400);
+    }
+    // Inpatient admissions are created directly against a bed (POST /admissions/direct),
+    // never as a queue row. Guard so the two paths can't diverge.
+    if (destination === 'Inpatient') {
+      return error(res, 'Use the admissions flow for inpatient admissions', 400);
+    }
 
     const { resolvePatient } = require('../utils/patientFamily');
     const family = await resolvePatient(uhid);
@@ -170,6 +183,8 @@ const add = async (req, res) => {
       priority,
       reason,
       status:           initialStatus,
+      destination,
+      service:          destination === 'Radiology' ? service : null,
       assignedDoctorId: isReview ? assignedDoctorId : null,
       addedBy:          req.user.name || 'Unknown',
     });

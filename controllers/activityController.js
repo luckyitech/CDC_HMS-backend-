@@ -2,7 +2,7 @@ const { Op } = require('sequelize');
 const { success } = require('../utils/response');
 const db = require('../models');
 
-const { Queue, Patient, MedicalDocument, MedicalEquipment, EquipmentHistory, User, Prescription, LabTest, TreatmentPlan, ConsultationNote, PhysicalExamination, InitialAssessment, UserLoginLog, Appointment, DoctorBlock, BarcodeScan } = db;
+const { Queue, Patient, MedicalDocument, MedicalEquipment, EquipmentHistory, User, Prescription, LabTest, TreatmentPlan, ConsultationNote, PhysicalExamination, InitialAssessment, UserLoginLog, Appointment, DoctorBlock, BarcodeScan, NeuropathyStudy } = db;
 
 // ── Shared event shape ────────────────────────────────────────────────────────
 
@@ -74,6 +74,9 @@ const SUMMARY_KEYS = {
   slot_blocked:            'slotBlocked',
   barcode_scanned:         'barcodeScanned',
   barcode_generated:       'barcodeGenerated',
+  neuropathy_started:      'neuropathyStarted',
+  neuropathy_completed:    'neuropathyCompleted',
+  neuropathy_cancelled:    'neuropathyCancelled',
 };
 
 const buildSummary = (events) => {
@@ -483,6 +486,36 @@ const getBarcodeEvents = async (dateFilter) => {
 
 // ── Controller ────────────────────────────────────────────────────────────────
 
+// Neuropathy Studio — study started (Draft) / completed / cancelled, attributed
+// via the JWT-stamped performedBy / cancelledBy. Mirrors the other clinical
+// sources; readings themselves are not events.
+const getNeuropathyEvents = async (dateFilter) => {
+  const rows = await NeuropathyStudy.findAll({
+    where: { createdAt: dateFilter },
+    include: [
+      { model: Patient, attributes: ['uhid', 'firstName', 'lastName'], required: true },
+      { model: User, as: 'performedBy', attributes: ['firstName', 'lastName'] },
+      { model: User, as: 'cancelledBy',  attributes: ['firstName', 'lastName'] },
+    ],
+  });
+  const events = [];
+  for (const r of rows) {
+    const patient = `${r.Patient.firstName} ${r.Patient.lastName}`;
+    const uhid = r.Patient.uhid;
+    const doc = r.performedBy ? `Dr. ${r.performedBy.firstName} ${r.performedBy.lastName}` : 'Unknown';
+    events.push(makeEvent('neuropathy_started', 'Started Neuropathy Study', doc, patient, uhid, r.createdAt, null, 'doctor'));
+    if (r.status === 'Completed' && r.completedAt) {
+      events.push(makeEvent('neuropathy_completed', 'Completed Neuropathy Study', doc, patient, uhid, r.completedAt, null, 'doctor'));
+    }
+    if (r.status === 'Cancelled') {
+      const canceller = r.cancelledBy ? `Dr. ${r.cancelledBy.firstName} ${r.cancelledBy.lastName}` : doc;
+      events.push(makeEvent('neuropathy_cancelled', 'Cancelled Neuropathy Study', canceller, patient, uhid, r.cancelledAt || r.updatedAt, r.cancelReason, 'doctor'));
+    }
+  }
+  return events;
+};
+
+
 // Every activity event across the system, in one array. Exported so per-staff
 // views (the Staff File Activity tab) reuse the exact same derivation instead of
 // duplicating it — one source of truth for "what counts as activity".
@@ -501,6 +534,7 @@ const collectAllEvents = async (dateFilter = resolveDateFilter()) => (
     getLabTestCancellationEvents(dateFilter),
     getDoctorBlockEvents(dateFilter),
     getBarcodeEvents(dateFilter),
+    getNeuropathyEvents(dateFilter),
   ])
 ).flat();
 
