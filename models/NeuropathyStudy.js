@@ -60,6 +60,12 @@ const NeuropathyStudy = defineModel('NeuropathyStudy', {
   leftMonoTested:     { type: DataTypes.INTEGER, defaultValue: null },
   leftMonoInsensate:  { type: DataTypes.INTEGER, defaultValue: null },
 
+  // Single Final-Result severity for the study — the WORST of R/L × VPT/HOT/COLD
+  // grades (monofilament excluded), matching NeuropathyReport. Set on `complete`
+  // and back-filled by migration 20260904000001; the cohort analytics read this
+  // so counts reflect the clinically-signed result.
+  overallGrade: { type: DataTypes.ENUM(...GRADES), defaultValue: null },
+
   remarks: {
     type: DataTypes.TEXT,
     defaultValue: null,

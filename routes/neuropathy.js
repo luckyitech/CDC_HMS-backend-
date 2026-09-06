@@ -42,6 +42,17 @@ router.post(
 router.get('/', authenticate, authorize(...READ), logPatientAccess('neuropathy'), neuropathy.list);
 
 // ------------------------------------
+// GET /api/neuropathy/analytics/overview — cross-patient cohort analytics
+// (live prospective PNS study). Doctor/admin only; aggregate, so NOT
+// patient-access-logged. Declared BEFORE '/:id' so this two-segment path is
+// never captured by the single-segment id param.
+// ------------------------------------
+router.get('/analytics/overview', authenticate, authorize('doctor', 'admin'), neuropathy.analyticsOverview);
+router.get('/analytics/coverage', authenticate, authorize('doctor', 'admin'), neuropathy.analyticsCoverage);
+router.get('/analytics/correlation', authenticate, authorize('doctor', 'admin'), neuropathy.analyticsCorrelation);
+router.get('/analytics/longitudinal', authenticate, authorize('doctor', 'admin'), neuropathy.analyticsLongitudinal);
+
+// ------------------------------------
 // GET /api/neuropathy/:id — full study with readings
 // ------------------------------------
 router.get('/:id', authenticate, authorize(...READ), logPatientAccess('neuropathy'), neuropathy.getById);

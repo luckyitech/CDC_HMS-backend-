@@ -82,7 +82,13 @@ const gradeValue = (modality, avg) => {
  * 737/752 historical rows). VPT rounds to a whole volt; thermal to 0.1 °C.
  */
 const averageReadings = (modality, values) => {
-  const tested = values.filter((v) => v !== null && v !== undefined && !Number.isNaN(Number(v))).map(Number);
+  // A mis-captured thermal 0 °C is treated as NOT tested (never counted toward the
+  // average) so it can't drag a foot into a false abnormal band — matches the report.
+  const thermal = modality === 'HOT' || modality === 'COLD';
+  const tested = values
+    .filter((v) => v !== null && v !== undefined && v !== '' && !Number.isNaN(Number(v)))
+    .map(Number)
+    .filter((v) => !(thermal && v === 0));
   if (!tested.length) return null;
   const mean = tested.reduce((a, b) => a + b, 0) / tested.length;
   return modality === 'VPT' ? Math.round(mean) : Math.round(mean * 10) / 10;
@@ -92,6 +98,19 @@ const averageReadings = (modality, values) => {
 const monoSummary = (values) => {
   const tested = values.filter((v) => v === 0 || v === 1 || v === '0' || v === '1').map(Number);
   return { tested: tested.length, insensate: tested.filter((v) => v === 0).length };
+};
+
+// Severity ordering, and the study's single Final-Result grade: the WORST of the
+// numeric per-foot grades passed in (R/L × VPT/HOT/COLD). Monofilament is a
+// separate felt/not-felt test and is NOT folded into this grade — exactly how
+// NeuropathyReport derives the printed Final Result. Returns null if none graded.
+const GRADE_RANK = { Normal: 0, Mild: 1, Moderate: 2, Severe: 3 };
+const overallGrade = (grades) => {
+  const ranks = (grades || [])
+    .filter((g) => g && Object.prototype.hasOwnProperty.call(GRADE_RANK, g))
+    .map((g) => GRADE_RANK[g]);
+  if (!ranks.length) return null;
+  return GRADES[Math.max(...ranks)];
 };
 
 module.exports = {
@@ -107,4 +126,6 @@ module.exports = {
   gradeValue,
   averageReadings,
   monoSummary,
+  GRADE_RANK,
+  overallGrade,
 };
