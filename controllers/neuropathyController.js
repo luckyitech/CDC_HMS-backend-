@@ -379,7 +379,7 @@ const analyticsOverview = async (req, res) => {
     const ageBandFilter = req.query.ageBand;
 
     const studies = await NeuropathyStudy.findAll({
-      where: { status: { [Op.in]: ['Completed', 'Cancelled'] } },
+      where: { status: 'Completed' },   // signed studies only — Drafts/Cancelled are never counted
       include: [
         { model: Patient, attributes: ['id', 'uhid', 'mergedIntoId', 'status', 'gender', 'dateOfBirth'] },
         { model: User, as: 'performedBy', attributes: ['id', 'firstName', 'lastName', 'role'] },
@@ -419,8 +419,7 @@ const analyticsOverview = async (req, res) => {
       })
       .filter((s) => !ageBandFilter || s.ageBand === ageBandFilter);
 
-    const completed = shaped.filter((s) => s.status === 'Completed' && s.cid);
-    const cancelled = shaped.filter((s) => s.status === 'Cancelled' && s.cid);
+    const completed = shaped.filter((s) => s.cid);
 
     // latest completed study per canonical patient (loaded ASC -> last wins)
     const latestByPatient = new Map();
@@ -486,21 +485,19 @@ const analyticsOverview = async (req, res) => {
     }
 
     // throughput / accrual (per study)
-    const monthCounts = {}; const cancelledCounts = {}; const firstSeen = {};
+    const monthCounts = {}; const firstSeen = {};
     for (const s of completed) {
       const k = monthKey(s.completedAt || s.studyDate);
       monthCounts[k] = (monthCounts[k] || 0) + 1;
       if (!firstSeen[s.cid] || k < firstSeen[s.cid]) firstSeen[s.cid] = k;
     }
-    for (const s of cancelled) { const k = monthKey(s.completedAt || s.studyDate); cancelledCounts[k] = (cancelledCounts[k] || 0) + 1; }
     const newByMonth = {};
     for (const cid of Object.keys(firstSeen)) newByMonth[firstSeen[cid]] = (newByMonth[firstSeen[cid]] || 0) + 1;
 
-    const months = [...new Set([...Object.keys(monthCounts), ...Object.keys(cancelledCounts), ...Object.keys(newByMonth)])].sort();
+    const months = [...new Set([...Object.keys(monthCounts), ...Object.keys(newByMonth)])].sort();
     let cum = 0;
-    const throughput = months.map((m) => { cum += (newByMonth[m] || 0); return { month: m, completed: monthCounts[m] || 0, cancelled: cancelledCounts[m] || 0, newPatients: newByMonth[m] || 0, cumulativePatients: cum }; });
+    const throughput = months.map((m) => { cum += (newByMonth[m] || 0); return { month: m, completed: monthCounts[m] || 0, newPatients: newByMonth[m] || 0, cumulativePatients: cum }; });
 
-    const started = completed.length + cancelled.length;
     return success(res, {
       generatedAt: new Date(),
       filters: { from: from || null, to: to || null, sex: sex || null, ageBand: ageBandFilter || null, performedById: performedById || null },
@@ -508,11 +505,9 @@ const analyticsOverview = async (req, res) => {
       totals: {
         patientsScreened: latestByPatient.size,
         studiesCompleted: completed.length,
-        studiesCancelled: cancelled.length,
         repeatPatients: Object.values(perPatientCount).filter((n) => n > 1).length,
         dpnPrevalencePct,
         medianWorstVpt: median(worstFootVpt),
-        cancellationPct: started ? Math.round((cancelled.length / started) * 100) : null,
       },
       prevalence,
       byModality,
