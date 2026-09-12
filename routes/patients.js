@@ -189,6 +189,14 @@ router.post('/:uhid/blood-sugar', authenticate, authorize('patient', 'doctor', '
 // ------------------------------------
 router.get('/:uhid/blood-sugar', authenticate, authorize('doctor', 'nurse', 'admin', 'patient', PERMISSIONS.CLINICAL_VIEW), findPatient, logPatientAccess('blood-sugar'), bloodSugarController.get);
 
+// ------------------------------------
+// /api/patients/:uhid/glucose/* — Glucose Management Centre (home-meter import
+// over Bluetooth, unified summary, per-patient targets). Its own router so the
+// slice stays in one file; mounted here so :uhid flows through findPatient
+// exactly like the logbook routes above. See routes/glucose.js.
+// ------------------------------------
+router.use('/:uhid/glucose', require('./glucose'));
+
 // ====================================
 // MEDICAL EQUIPMENT ENDPOINTS
 // ====================================

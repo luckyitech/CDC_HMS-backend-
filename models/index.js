@@ -75,6 +75,11 @@ const UltrasoundImage          = require('./UltrasoundImage');
 const NeuropathyStudy          = require('./NeuropathyStudy');
 const NeuropathyReading        = require('./NeuropathyReading');
 
+// --- Glucose Management Centre (home-meter import over Bluetooth) ---
+const GlucoseMeterReading      = require('./GlucoseMeterReading');
+const PatientMeter             = require('./PatientMeter');
+const PatientGlucoseTarget     = require('./PatientGlucoseTarget');
+
 // --- Lab request form: test bundles ---
 const LabPackage               = require('./LabPackage');
 const LabPackageItem           = require('./LabPackageItem');
@@ -403,6 +408,19 @@ NeuropathyStudy.belongsTo(User, { as: 'cancelledBy', foreignKey: 'cancelledById'
 NeuropathyStudy.hasMany(NeuropathyReading, { onDelete: 'CASCADE' });
 NeuropathyReading.belongsTo(NeuropathyStudy);
 
+// --- Glucose Management Centre: meter readings → patient (required) and →
+//     the meter link they came through; who imported / excluded them. One
+//     serial↔patient link row per meter; one optional targets row per patient.
+Patient.hasMany(GlucoseMeterReading);      GlucoseMeterReading.belongsTo(Patient);
+PatientMeter.hasMany(GlucoseMeterReading); GlucoseMeterReading.belongsTo(PatientMeter);
+GlucoseMeterReading.belongsTo(User, { as: 'importedBy', foreignKey: 'importedById' });
+GlucoseMeterReading.belongsTo(User, { as: 'excludedBy', foreignKey: 'excludedById' });
+Patient.hasMany(PatientMeter);             PatientMeter.belongsTo(Patient);
+PatientMeter.belongsTo(User, { as: 'linkedBy',  foreignKey: 'linkedById' });
+PatientMeter.belongsTo(User, { as: 'retiredBy', foreignKey: 'retiredById' });
+Patient.hasOne(PatientGlucoseTarget);      PatientGlucoseTarget.belongsTo(Patient);
+PatientGlucoseTarget.belongsTo(User, { as: 'setBy', foreignKey: 'setById' });
+
 Admission.hasMany(FluidBalanceEntry);   FluidBalanceEntry.belongsTo(Admission);
 Patient.hasMany(FluidBalanceEntry);     FluidBalanceEntry.belongsTo(Patient);
 FluidBalanceEntry.belongsTo(User, { as: 'recordedByUser', foreignKey: 'recordedById' });
@@ -477,6 +495,10 @@ const db = {
   // --- Neuropathy Studio ---
   NeuropathyStudy,
   NeuropathyReading,
+  // --- Glucose Management Centre ---
+  GlucoseMeterReading,
+  PatientMeter,
+  PatientGlucoseTarget,
 };
 
 module.exports = db;

@@ -71,6 +71,22 @@ const clinicClockTime = (options = {}, now = new Date()) =>
     timeZone: CLINIC_TZ,
   });
 
+// The clinic's wall-clock date AND time at an instant, as 'YYYY-MM-DD HH:mm:ss'.
+// For laying a timestamp column (recordedAt, createdAt) on the same naive
+// wall-clock axis as records that carry no timezone at all — a home glucose
+// meter's readings, say — without ever converting those.
+const clinicDateTime = (now = new Date()) => {
+  const parts = Object.fromEntries(
+    new Intl.DateTimeFormat('en-CA', {
+      timeZone: CLINIC_TZ, hour12: false,
+      year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit', second: '2-digit',
+    }).formatToParts(now).filter((p) => p.type !== 'literal').map((p) => [p.type, p.value])
+  );
+  const hh = parts.hour === '24' ? '00' : parts.hour;
+  return `${parts.year}-${parts.month}-${parts.day} ${hh}:${parts.minute}:${parts.second}`;
+};
+
 // How far the clinic's wall clock is ahead of UTC at a given instant, in ms.
 const offsetMsAt = (date) => {
   const parts = Object.fromEntries(
@@ -113,6 +129,7 @@ module.exports = {
   clinicDatePlusDays,
   clinicMonthStart,
   clinicClockTime,
+  clinicDateTime,
   clinicMidnight,
   clinicStartOfDay,
   CLINIC_TZ,

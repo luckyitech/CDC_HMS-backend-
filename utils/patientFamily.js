@@ -34,4 +34,10 @@ const resolvePatient = async (uhid) => {
   return { patient, patientIds, isDeactivated };
 };
 
-module.exports = { resolvePatient };
+// A patient may only act on their own record; every clinical role may act on
+// any patient (the route's authorize() already decided who reaches the
+// handler). For controllers behind findPatient — req.patient is set.
+const canActForPatient = (req) =>
+  req.user?.role !== 'patient' || (req.patient && req.patient.UserId === req.user.id);
+
+module.exports = { resolvePatient, canActForPatient };
