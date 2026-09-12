@@ -41,7 +41,9 @@ router.post('/meter/preflight', authenticate, authorize(...WRITE), findPatient, 
 
 router.post('/meter/import', authenticate, authorize(...WRITE), findPatient, [
   body('device').isObject().withMessage('device is required'),
-  body('readings').isArray({ min: 1 }).withMessage('readings must be a non-empty array'),
+  // An empty array is a legitimate result — the meter had nothing new since
+  // the last download (or holds nothing). The controller records the sync.
+  body('readings').isArray().withMessage('readings must be an array'),
   body('readings.*.sequenceNumber').isInt({ min: 0 }).withMessage('sequenceNumber must be an integer'),
   body('readings.*.measuredAt').isString().withMessage('measuredAt must be YYYY-MM-DD HH:mm:ss'),
   body('readings.*.glucoseMgdl').isFloat({ min: 0 }).withMessage('glucoseMgdl must be a number'),

@@ -241,7 +241,6 @@ const importMeter = async (req, res) => {
     const serial = String(device.serial || G.serialFromAdvertisedName(device.name) || '').trim();
     if (!serial) return error(res, 'Meter serial is required', 400);
     const readings = Array.isArray(req.body.readings) ? req.body.readings : [];
-    if (!readings.length) return error(res, 'No readings to import', 400);
 
     const isPatient = req.user.role === 'patient';
     const importedByRole = isPatient ? 'patient' : 'clinic';
@@ -257,6 +256,26 @@ const importMeter = async (req, res) => {
     const wanted = req.body.link || null;
     let meter = link.mine;
     const modelName = G.meterModelName(device.modelId);
+
+    // ---- nothing new: the meter was asked for records after the last one on
+    // file and returned none (or it holds nothing at all). Not an error — the
+    // normal second-visit outcome. A linked meter still records the sync so
+    // "downloaded today" and the clock check stay true; an unlinked meter is
+    // NOT linked here (a link is never created without readings behind it).
+    if (!readings.length) {
+      if (meter) {
+        Object.assign(meter, { lastSyncAt: now, lastClockDeltaSec: clockDeltaSec });
+        if (device.firmware && meter.firmware !== device.firmware) meter.firmware = device.firmware;
+        await meter.save();
+      }
+      return success(res, {
+        batchId: null, inserted: 0, excluded: 0, duplicates: 0, skippedBeforeUsedFrom: 0, invalid: 0,
+        nothingNew: true, linked: !!meter,
+        clockDeltaSec,
+        clockDriftWarn: clockDeltaSec !== null && Math.abs(clockDeltaSec) > G.CLOCK_DRIFT.warnSec,
+        meter: meter ? formatMeter(await PatientMeter.findByPk(meter.id, { include: [userInclude('linkedBy')] })) : null,
+      });
+    }
 
     if (link.state === 'conflict' || (link.state === 'unlinked' && !wanted)) {
       if (link.state === 'conflict' && !wanted) {

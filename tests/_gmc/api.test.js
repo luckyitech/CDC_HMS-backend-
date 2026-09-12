@@ -57,6 +57,8 @@ const meterRow = (seq, at, mgdl, extra = {}) => ({
     ];
     r = await call(N, 'POST', '/patients/CDC-A/glucose/meter/import', { device, readings, hostTime: '2026-09-12 12:36:00', meterTime: '2026-09-12 09:34:00' });
     check('import refuses unlinked', r.status === 409 && r.code === 'METER_UNLINKED', String(r.status));
+    r = await call(N, 'POST', '/patients/CDC-A/glucose/meter/import', { device, readings: [], hostTime: '2026-09-12 12:36:00', meterTime: '2026-09-12 09:34:00' });
+    check('empty meter, unlinked: nothingNew, no link created', r.status === 200 && r.data.nothingNew === true && r.data.linked === false && r.data.meter === null, JSON.stringify(r.data));
 
     // 3. link + import, flagging the 16 mg/dL row
     r = await call(N, 'POST', '/patients/CDC-A/glucose/meter/import', { device, readings, hostTime: '2026-09-12 12:36:00', meterTime: '2026-09-12 09:34:00', link: { action: 'link' }, excludeSequenceNumbers: [5] });
@@ -69,6 +71,10 @@ const meterRow = (seq, at, mgdl, extra = {}) => ({
     check('preflight linked + lastSeq', r.data?.link === 'linked' && r.data.lastSequenceNumber === 8, JSON.stringify([r.data?.link, r.data?.lastSequenceNumber]));
     r = await call(N, 'POST', '/patients/CDC-A/glucose/meter/import', { device, readings: readings.slice(0, 3), hostTime: '2026-09-12 12:40:00', meterTime: '2026-09-12 09:38:00' });
     check('re-import is idempotent', r.status === 201 && r.data.inserted === 0 && r.data.duplicates === 3);
+    r = await call(N, 'POST', '/patients/CDC-A/glucose/meter/import', { device, readings: [], hostTime: '2026-09-12 12:45:00', meterTime: '2026-09-12 09:43:00' });
+    check('nothing new on a linked meter records the sync', r.status === 200 && r.data.nothingNew === true && r.data.linked === true && r.data.meter?.lastSequenceNumber === 8 && r.data.clockDriftWarn === true, JSON.stringify(r.data && { n: r.data.nothingNew, l: r.data.linked, seq: r.data.meter?.lastSequenceNumber }));
+    r = await call(N, 'GET', '/patients/CDC-A/glucose/meters');
+    check('lastSyncAt moved on the empty sync', !!r.data?.[0]?.lastSyncAt && new Date(r.data[0].lastSyncAt) > new Date(Date.now() - 60000), r.data?.[0]?.lastSyncAt);
 
     // 5. summary — window covering the recent rows; merged-dup logbook + clinic RBS included
     r = await call(D, 'GET', '/patients/CDC-A/glucose/summary?from=2026-09-08&to=2026-09-12');
