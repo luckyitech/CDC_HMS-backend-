@@ -158,6 +158,26 @@ const LOGBOOK_SLOTS = Object.freeze({
 });
 
 // ---------------------------------------------------------------------
+// Diary time-matching (Phase 2). A meter reading is tagged pre-/post-meal
+// against the patient's diary within these windows (utils/glucoseMatching.js);
+// activity and dose events are shown alongside on the chart, not written onto
+// the reading. All in minutes.
+// ---------------------------------------------------------------------
+const MATCH = Object.freeze({
+  preMealMin: 60, postMealMinLow: 60, postMealMinHigh: 180, activityMin: 90, doseMin: 30,
+});
+
+// A reading's tag -> its meal relation ('pre' | 'post' | null), for the
+// meal-relative glucose breakdown in summarise(). Covers both the matched
+// tags (pre-<meal> / post-<meal>) and the manual logbook slots.
+const mealRelationForTag = (tag) => {
+  const s = String(tag || '').toLowerCase();
+  if (/^pre-/.test(s) || s === 'fasting' || s === 'beforelunch' || s === 'beforedinner') return 'pre';
+  if (/^post-/.test(s) || s === 'breakfast' || s === 'afterlunch' || s === 'afterdinner') return 'post';
+  return null;
+};
+
+// ---------------------------------------------------------------------
 // Summary maths. Pure: takes the unified reading list the controller builds
 // (every row { mgdl, hour, dayKey, countable }) plus the effective targets, and
 // returns the §6 metrics. Nothing here touches the database.
@@ -199,6 +219,16 @@ const summarise = (rows, targets) => {
     .filter((r) => r.mgdl < t.tirLowMgdl)
     .map((r) => ({ at: r.at, mgdl: r.mgdl, level: r.mgdl < t.tbrLevel2Mgdl ? 2 : 1, source: r.source }));
 
+  // Meal-relative glucose (from matched meter tags + the manual logbook slots).
+  const inRangePctOf = (xs) => (xs.length ? pct(xs.filter((x) => x >= t.tirLowMgdl && x <= t.tirHighMgdl).length, xs.length) : null);
+  const preMeal  = counted.filter((r) => mealRelationForTag(r.tag) === 'pre').map((r) => r.mgdl);
+  const postMeal = counted.filter((r) => mealRelationForTag(r.tag) === 'post').map((r) => r.mgdl);
+  const mealTags = {
+    matched: counted.filter((r) => r.tagSource === 'matched').length,
+    pre:  { n: preMeal.length,  meanMgdl: round1(mean(preMeal)),  inRangePct: inRangePctOf(preMeal) },
+    post: { n: postMeal.length, meanMgdl: round1(mean(postMeal)), inRangePct: inRangePctOf(postMeal) },
+  };
+
   return {
     readings: n,
     days,
@@ -218,6 +248,7 @@ const summarise = (rows, targets) => {
     hypoLevel2Count: hypos.filter((h) => h.level === 2).length,
     hypos,
     fasting: { n: fasting.length, inBandPct: fasting.length ? pct(fastingInBand, fasting.length) : null },
+    mealTags,
     timeOfDay: byBucket,
     targets: t,
   };
@@ -230,5 +261,6 @@ module.exports = {
   SENSOR_STATUS_BITS, EXCLUDING_STATUS_MASK, statusFlags, SAMPLE_TYPE_CONTROL_SOLUTION,
   METER_MODELS, meterModelName, serialFromAdvertisedName,
   TIME_OF_DAY, bucketForHour, LOGBOOK_SLOTS,
+  MATCH, mealRelationForTag,
   summarise,
 };

@@ -6,6 +6,7 @@ const findPatient = require('../middleware/findPatient');
 const logPatientAccess = require('../middleware/logPatientAccess');
 const { PERMISSIONS } = require('../constants/permissions');
 const glucose = require('../controllers/glucoseController');
+const diary = require('../controllers/diaryController');
 
 // Glucose Management Centre — mounted by routes/patients.js at
 //   /api/patients/:uhid/glucose
@@ -68,5 +69,19 @@ router.put('/targets', authenticate, authorize(...CLINICIAN), findPatient, [
   body('rationale').notEmpty().withMessage('A rationale is required'),
   validate,
 ], glucose.putTargets);
+
+// ---------------------------------------------------------------------
+// Patient diary (Phase 2) — meals / activity / insulin / oral med / symptom /
+// note. Reads for anyone who can see the record; writes for the clinic and the
+// patient (own record). A meal change re-runs the time-matcher (diaryController).
+// ---------------------------------------------------------------------
+router.get('/diary', authenticate, authorize(...READ), findPatient, logPatientAccess('glucose'), diary.listDiary);
+router.post('/diary', authenticate, authorize(...WRITE), findPatient, [
+  body('eventType').isString(),
+  body('occurredAt').isString().withMessage('occurredAt must be YYYY-MM-DD HH:mm:ss'),
+  validate,
+], diary.createDiary);
+router.put('/diary/:id', authenticate, authorize(...WRITE), findPatient, diary.updateDiary);
+router.delete('/diary/:id', authenticate, authorize(...WRITE), findPatient, diary.deleteDiary);
 
 module.exports = router;

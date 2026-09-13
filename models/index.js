@@ -79,6 +79,7 @@ const NeuropathyReading        = require('./NeuropathyReading');
 const GlucoseMeterReading      = require('./GlucoseMeterReading');
 const PatientMeter             = require('./PatientMeter');
 const PatientGlucoseTarget     = require('./PatientGlucoseTarget');
+const PatientDiaryEvent        = require('./PatientDiaryEvent');
 
 // --- Lab request form: test bundles ---
 const LabPackage               = require('./LabPackage');
@@ -420,6 +421,8 @@ PatientMeter.belongsTo(User, { as: 'linkedBy',  foreignKey: 'linkedById' });
 PatientMeter.belongsTo(User, { as: 'retiredBy', foreignKey: 'retiredById' });
 Patient.hasOne(PatientGlucoseTarget);      PatientGlucoseTarget.belongsTo(Patient);
 PatientGlucoseTarget.belongsTo(User, { as: 'setBy', foreignKey: 'setById' });
+Patient.hasMany(PatientDiaryEvent);        PatientDiaryEvent.belongsTo(Patient);
+PatientDiaryEvent.belongsTo(User, { as: 'enteredBy', foreignKey: 'enteredById' });
 
 Admission.hasMany(FluidBalanceEntry);   FluidBalanceEntry.belongsTo(Admission);
 Patient.hasMany(FluidBalanceEntry);     FluidBalanceEntry.belongsTo(Patient);
@@ -499,6 +502,7 @@ const db = {
   GlucoseMeterReading,
   PatientMeter,
   PatientGlucoseTarget,
+  PatientDiaryEvent,
 };
 
 module.exports = db;

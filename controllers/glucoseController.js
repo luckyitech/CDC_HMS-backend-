@@ -4,11 +4,12 @@ const { success, error } = require('../utils/response');
 const { canActForPatient } = require('../utils/patientFamily');
 const { clinicToday, clinicDatePlusDays, clinicDateTime, clinicMidnight } = require('../utils/clinicTime');
 const { naiveToDate, dateToNaive, naiveDay, naiveHour, naiveDayStart, naiveDayEnd } = require('../utils/glucoseTime');
+const { matchWindow } = require('../utils/glucoseMatching');
 const G = require('../constants/glucose');
 const db = require('../models');
 
 const {
-  GlucoseMeterReading, PatientMeter, PatientGlucoseTarget,
+  GlucoseMeterReading, PatientMeter, PatientGlucoseTarget, PatientDiaryEvent,
   BloodSugarReading, PatientVital, Patient, User,
 } = db;
 
@@ -30,6 +31,12 @@ const {
 // ====================================
 
 const num = (v) => (v === null || v === undefined ? null : Number(v));
+// MariaDB returns JSON columns as strings; parse defensively (see diaryController).
+const parseDetail = (d) => {
+  if (d === null || d === undefined) return null;
+  if (typeof d === 'object') return d;
+  try { const o = JSON.parse(d); return o && typeof o === 'object' ? o : null; } catch { return null; }
+};
 const userName = (u) => (u ? `${u.role === 'doctor' ? 'Dr. ' : ''}${u.firstName} ${u.lastName}` : null);
 const userInclude = (as) => ({ model: User, as, attributes: ['firstName', 'lastName', 'role'] });
 
@@ -397,6 +404,15 @@ const importMeter = async (req, res) => {
     meter.lastClockDeltaSec = clockDeltaSec;
     await meter.save();
 
+    // Phase 2: time-match the just-imported readings to the diary (pre-/post-
+    // meal tags). Best-effort — a matcher failure must not fail the import.
+    if (rows.length) {
+      try {
+        const times = rows.map((x) => dateToNaive(x.measuredAt)).filter(Boolean).sort();
+        if (times.length) await matchWindow(req.patientIds, times[0], times[times.length - 1]);
+      } catch (e) { console.error('Glucose.import matcher error:', e); }
+    }
+
     return success(res, {
       batchId,
       inserted: rows.length,
@@ -586,7 +602,7 @@ const summary = async (req, res) => {
       });
       for (const r of rows) {
         const f = formatReading(r);
-        series.push({ ...f, dayKey: f.at.slice(0, 10), hour: naiveHour(r.measuredAt), bucket: r.contextTag || G.bucketForHour(naiveHour(r.measuredAt)) });
+        series.push({ ...f, dayKey: f.at.slice(0, 10), hour: naiveHour(r.measuredAt), bucket: G.bucketForHour(naiveHour(r.measuredAt)) });
       }
     }
 
@@ -629,6 +645,14 @@ const summary = async (req, res) => {
       }
     }
 
+    // Diary events in the window — meal tags drive matching (above); activity,
+    // dose, symptom and note events are shown alongside on the chart.
+    const diaryRows = await PatientDiaryEvent.findAll({
+      where: { PatientId: pid, status: 'Active', occurredAt: { [Op.between]: [naiveDayStart(win.from), naiveDayEnd(win.to)] } },
+      order: [['occurredAt', 'ASC']],
+    });
+    const diary = diaryRows.map((e) => ({ id: e.id, eventType: e.eventType, at: dateToNaive(e.occurredAt), label: e.label || null, detail: parseDetail(e.detail) }));
+
     series.sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0));
     const metrics = G.summarise(series, tgt.targets);
 
@@ -645,6 +669,7 @@ const summary = async (req, res) => {
       targets: { ...tgt, consensus: G.CONSENSUS_TARGETS, presets: G.TARGET_PRESETS },
       hba1c,
       meters: meters.map(formatMeter),
+      diary,
       readings: series.map(({ dayKey, hour, ...r }) => r),
       timeOfDay: G.TIME_OF_DAY,
       unitsFactor: G.MGDL_PER_MMOL,
