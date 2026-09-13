@@ -5,6 +5,7 @@ const { canActForPatient } = require('../utils/patientFamily');
 const { clinicToday, clinicDatePlusDays, clinicDateTime, clinicMidnight } = require('../utils/clinicTime');
 const { naiveToDate, dateToNaive, naiveDay, naiveHour, naiveDayStart, naiveDayEnd } = require('../utils/glucoseTime');
 const { matchWindow } = require('../utils/glucoseMatching');
+const { parseJsonColumn: parseDetail } = require('../utils/jsonColumn');
 const G = require('../constants/glucose');
 const db = require('../models');
 
@@ -31,12 +32,6 @@ const {
 // ====================================
 
 const num = (v) => (v === null || v === undefined ? null : Number(v));
-// MariaDB returns JSON columns as strings; parse defensively (see diaryController).
-const parseDetail = (d) => {
-  if (d === null || d === undefined) return null;
-  if (typeof d === 'object') return d;
-  try { const o = JSON.parse(d); return o && typeof o === 'object' ? o : null; } catch { return null; }
-};
 const userName = (u) => (u ? `${u.role === 'doctor' ? 'Dr. ' : ''}${u.firstName} ${u.lastName}` : null);
 const userInclude = (as) => ({ model: User, as, attributes: ['firstName', 'lastName', 'role'] });
 
@@ -232,7 +227,6 @@ const preflight = async (req, res) => {
 //   meterTime: 'YYYY-MM-DD HH:mm:ss' | null (the meter's clock, 0x2A08, naive),
 //   batchId?: string,
 //   link?:    { action: 'link' | 'reassign' | 'share', usedFromDate?, reason? },
-//   excludeSequenceNumbers?: [n, …]  (rows the clinician flagged in the preview)
 // }
 // Safety rules (plan §8): nothing is filed without a resolved link; a serial
 // Active on another patient is a hard stop unless `link` says how to resolve
@@ -345,7 +339,6 @@ const importMeter = async (req, res) => {
 
     // ---- file the readings
     const usedFrom = meter.usedFromDate ? naiveDayStart(meter.usedFromDate) : null;
-    const excludeSet = new Set((req.body.excludeSequenceNumbers || []).map(Number));
     const batchId = String(req.body.batchId || `b-${clinicToday()}-${crypto.randomBytes(3).toString('hex')}`).slice(0, 40);
 
     const existing = await GlucoseMeterReading.findAll({
@@ -355,7 +348,7 @@ const importMeter = async (req, res) => {
     const have = new Set(existing.map((e) => e.sequenceNumber));
 
     const rows = [];
-    let duplicates = 0, skippedBeforeUsedFrom = 0, invalid = 0, excluded = 0, maxSeq = meter.lastSequenceNumber || 0;
+    let duplicates = 0, skippedBeforeUsedFrom = 0, invalid = 0, maxSeq = meter.lastSequenceNumber || 0;
     for (const r of readings) {
       const seq = Number(r.sequenceNumber);
       const at = naiveToDate(r.measuredAt);
@@ -363,8 +356,6 @@ const importMeter = async (req, res) => {
       if (!Number.isInteger(seq) || !at || !Number.isFinite(mgdl)) { invalid++; continue; }
       if (have.has(seq)) { duplicates++; continue; }
       if (usedFrom && at < usedFrom) { skippedBeforeUsedFrom++; continue; }
-      const flagged = excludeSet.has(seq);
-      if (flagged) excluded++;
       if (seq > maxSeq) maxSeq = seq;
       rows.push({
         PatientId: req.patient.id,
@@ -386,10 +377,10 @@ const importMeter = async (req, res) => {
         importedByRole,
         hostClockDeltaSec: clockDeltaSec,
         rawHex: r.rawHex ? String(r.rawHex).slice(0, 64) : null,
-        status: flagged ? 'Excluded' : 'Active',
-        excludeReason: flagged ? 'Flagged at import (implausible value)' : null,
-        excludedById: flagged ? req.user.id : null,
-        excludedAt: flagged ? now : null,
+        status: 'Active',
+        excludeReason: null,
+        excludedById: null,
+        excludedAt: null,
       });
     }
 
@@ -416,7 +407,6 @@ const importMeter = async (req, res) => {
     return success(res, {
       batchId,
       inserted: rows.length,
-      excluded,
       duplicates,
       skippedBeforeUsedFrom,
       invalid,
@@ -656,11 +646,13 @@ const summary = async (req, res) => {
     series.sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0));
     const metrics = G.summarise(series, tgt.targets);
 
-    // Latest HbA1c for the overlay: triage first, then the patient record.
-    const lastA1c = await PatientVital.findOne({ where: { PatientId: pid, hba1c: { [Op.ne]: null } }, order: [['recordedAt', 'DESC']], attributes: ['hba1c', 'recordedAt'] });
-    const hba1c = lastA1c
-      ? { value: num(lastA1c.hba1c), at: clinicDateTime(lastA1c.recordedAt), source: 'triage' }
-      : (req.patient.hba1c ? { value: num(req.patient.hba1c) || null, at: null, source: 'record' } : null);
+    // HbA1c for the overlay + full history for the Indices tab: triage records
+    // first (newest-first, so [0] is the latest), then the patient record as a
+    // fallback. One query — the Indices HbA1c card and the header both read it.
+    const a1cRows = await PatientVital.findAll({ where: { PatientId: pid, hba1c: { [Op.ne]: null } }, order: [['recordedAt', 'DESC']], attributes: ['hba1c', 'recordedAt'], limit: 24 });
+    const hba1cHistory = a1cRows.map((r) => ({ value: num(r.hba1c), at: clinicDateTime(r.recordedAt), source: 'triage' }));
+    if (!hba1cHistory.length && req.patient.hba1c) hba1cHistory.push({ value: num(req.patient.hba1c) || null, at: null, source: 'record' });
+    const hba1c = hba1cHistory[0] || null;
 
     return success(res, {
       window: win,
@@ -668,6 +660,7 @@ const summary = async (req, res) => {
       metrics,
       targets: { ...tgt, consensus: G.CONSENSUS_TARGETS, presets: G.TARGET_PRESETS },
       hba1c,
+      hba1cHistory,
       meters: meters.map(formatMeter),
       diary,
       readings: series.map(({ dayKey, hour, ...r }) => r),

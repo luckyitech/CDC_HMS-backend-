@@ -26,7 +26,7 @@ const mmolToMgdl = (mmol) => (mmol === null || mmol === undefined ? null : Math.
 // Consensus targets, in mg/dL. Keys match PatientGlucoseTargets columns so an
 // override row can be spread straight over these defaults.
 const CONSENSUS_TARGETS = Object.freeze({
-  tirLowMgdl:      70,   // 3.9 mmol/L  — in-range floor
+  tirLowMgdl:      72,   // 4.0 mmol/L  — in-range floor (clinic default; consensus is 3.9)
   tirHighMgdl:     180,  // 10.0 mmol/L — in-range ceiling
   tbrLevel2Mgdl:   54,   // 3.0 mmol/L  — level-2 hypoglycaemia
   tarLevel2Mgdl:   250,  // 13.9 mmol/L — level-2 hyperglycaemia

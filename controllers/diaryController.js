@@ -4,6 +4,7 @@ const { canActForPatient } = require('../utils/patientFamily');
 const { clinicToday, clinicDatePlusDays } = require('../utils/clinicTime');
 const { naiveToDate, dateToNaive } = require('../utils/glucoseTime');
 const { matchWindow } = require('../utils/glucoseMatching');
+const { parseJsonColumn: parseDetail } = require('../utils/jsonColumn');
 const db = require('../models');
 
 const { PatientDiaryEvent, User } = db;
@@ -26,14 +27,6 @@ const EVENT_TYPES = ['meal', 'activity', 'insulin', 'oral_med', 'symptom', 'note
 const userName = (u) => (u ? `${u.role === 'doctor' ? 'Dr. ' : ''}${u.firstName} ${u.lastName}` : null);
 const userInclude = { model: User, as: 'enteredBy', attributes: ['firstName', 'lastName', 'role'] };
 
-// MariaDB returns JSON columns as strings (MySQL 8 returns parsed objects), so
-// parse defensively — `detail` must always reach the client and the matcher as
-// an object, never a string.
-const parseDetail = (d) => {
-  if (d === null || d === undefined) return null;
-  if (typeof d === 'object') return d;
-  try { const o = JSON.parse(d); return o && typeof o === 'object' ? o : null; } catch { return null; }
-};
 
 const formatEvent = (e) => ({
   id: e.id,

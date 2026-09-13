@@ -88,7 +88,13 @@ const matchWindow = async (patientIds, fromNaive, toNaive) => {
 
   const meals = mealRows.map((m) => ({ ms: new Date(m.occurredAt).getTime(), label: m.label }));
 
-  let matched = 0, cleared = 0, updated = 0;
+  // Decide each reading's tag, then write in as few statements as possible:
+  // group the rows that need the SAME (tag, source) and issue one UPDATE per
+  // group inside a transaction, instead of one UPDATE per row. A full 720-row
+  // import collapses to a handful of statements (one per distinct tag) rather
+  // than hundreds of round-trips. The per-reading decision is unchanged.
+  let matched = 0, cleared = 0;
+  const groups = new Map();                          // "tag\u0000source" -> [id, …] (changed rows only)
   for (const r of readings) {
     if (r.contextSource === 'manual') continue;      // a human set this tag — never override
     const driftOut = r.hostClockDeltaSec !== null && Math.abs(r.hostClockDeltaSec) > G.CLOCK_DRIFT.noMatchSec;
@@ -102,9 +108,20 @@ const matchWindow = async (patientIds, fromNaive, toNaive) => {
     if (newSource === 'clock' && r.contextSource === 'matched') cleared++;
 
     if (r.contextTag !== newTag || r.contextSource !== newSource) {
-      await r.update({ contextTag: newTag, contextSource: newSource });
-      updated++;
+      const key = `${newTag}\u0000${newSource}`;
+      (groups.get(key) || groups.set(key, []).get(key)).push(r.id);
     }
+  }
+
+  let updated = 0;
+  if (groups.size) {
+    await db.sequelize.transaction(async (transaction) => {
+      for (const [key, ids] of groups) {
+        const [contextTag, contextSource] = key.split('\u0000');
+        await GlucoseMeterReading.update({ contextTag, contextSource }, { where: { id: { [Op.in]: ids } }, transaction });
+        updated += ids.length;
+      }
+    });
   }
   return { scanned: readings.length, matched, cleared, updated };
 };
