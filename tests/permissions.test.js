@@ -5,7 +5,7 @@ const { Op } = require('sequelize');
 const db = require('../models');
 const {
   PERMISSIONS, ALL_PERMISSIONS, PERMISSIBLE_ROLES,
-  effectivePermissions, hasPermission, isTrueAdmin, sanitizePermissions,
+  effectivePermissions, hasPermission, isTrueAdmin, sanitizePermissions, typeDefaultPermissions,
 } = require('../constants/permissions');
 const { authorize, requirePermission, requireTrueAdmin } = require('../middleware/auth');
 const userController = require('../controllers/userController');
@@ -233,9 +233,14 @@ describe('role is still the identity', () => {
   });
 
   test('effectivePermissions copes with missing or malformed data', () => {
+    // A bare staff account is clinical by default (see TYPE_DEFAULT_PERMISSIONS),
+    // so "copes" means: never throws, and nothing BEYOND the type bundle is
+    // granted whatever shape the stored column is in.
+    const bundle = new Set(typeDefaultPermissions({ role: 'staff' }));
     assert.equal(effectivePermissions(null).size, 0);
-    assert.equal(effectivePermissions({ role: 'staff' }).size, 0);
-    assert.equal(effectivePermissions({ role: 'staff', permissions: null }).size, 0);
-    assert.equal(effectivePermissions({ role: 'staff', permissions: 'nope' }).size, 0);
+    assert.deepEqual(effectivePermissions({ role: 'staff' }), bundle);
+    assert.deepEqual(effectivePermissions({ role: 'staff', permissions: null }), bundle);
+    assert.deepEqual(effectivePermissions({ role: 'staff', permissions: 'nope' }), bundle);
+    assert.deepEqual(effectivePermissions({ role: 'staff', permissions: '[not json' }), bundle);
   });
 });

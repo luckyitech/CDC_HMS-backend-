@@ -105,6 +105,16 @@ const PERMISSIONS = {
   LAB_VIEW:  'lab.view',
   LAB_WRITE: 'lab.write',
 
+  // Lab Inbox — external lab-report PDFs pulled from the clinic mailbox and
+  // paired to patients. VIEW is seeing the inbox and opening a staged PDF;
+  // WRITE is pulling the mailbox, pairing a report (which files a
+  // MedicalDocument as Pending Review) and discarding a wrong pull. Front desk
+  // and the lab hold both by role; a doctor or nurse can be granted them.
+  // Connecting the mailbox itself is system configuration (CONFIG_WRITE, and
+  // a real admin for the credentials) — not part of this.
+  LABINBOX_VIEW:  'labinbox.view',
+  LABINBOX_WRITE: 'labinbox.write',
+
   // --- Clinical ---
   // The clinical record itself, as opposed to the patient's identity and
   // administration. Reception legitimately needs to know who a patient is,
@@ -180,6 +190,7 @@ const IMPLIED_BY = {
   [PERMISSIONS.STOCK_WRITE]:        PERMISSIONS.STOCK_ACCESS,
   [PERMISSIONS.INPATIENT_WRITE]:    PERMISSIONS.INPATIENT_ACCESS,
   [PERMISSIONS.LAB_WRITE]:          PERMISSIONS.LAB_VIEW,
+  [PERMISSIONS.LABINBOX_WRITE]:     PERMISSIONS.LABINBOX_VIEW,
   [PERMISSIONS.USERS_WRITE]:        PERMISSIONS.USERS_VIEW,
   [PERMISSIONS.APPOINTMENTS_WRITE]: PERMISSIONS.APPOINTMENTS_VIEW,
   [PERMISSIONS.CLINICAL_RECORD]:    PERMISSIONS.CLINICAL_VIEW,
@@ -318,6 +329,8 @@ const ADMIN_ACCESS_COVERS = [
   PERMISSIONS.INPATIENT_ACCESS,
   PERMISSIONS.INPATIENT_WRITE,
   PERMISSIONS.LAB_VIEW,
+  PERMISSIONS.LABINBOX_VIEW,
+  PERMISSIONS.LABINBOX_WRITE,
   PERMISSIONS.MONITORING_VIEW,
   PERMISSIONS.PATIENTS_MERGE,
   PERMISSIONS.PATIENTS_WRITE,
@@ -481,6 +494,15 @@ const PERMISSION_GROUPS = [
         access: PERMISSIONS.LAB_VIEW, write: PERMISSIONS.LAB_WRITE,
         accessLabel: 'Can view results', writeLabel: 'Can enter and amend results',
         roleDefault: 'Lab technicians, doctors' },
+      { key: 'lab-inbox', name: 'Lab Inbox (emailed lab reports)', appliesIn: 'Staff, Lab, Doctor',
+        description: 'External lab reports pulled from the clinic mailbox, waiting to be '
+          + 'paired to a patient. Pairing files the report into the patient\'s Diagnostics '
+          + 'as Pending Review. Connecting the mailbox itself is under "Catalog, wards and '
+          + 'settings" below.',
+        access: PERMISSIONS.LABINBOX_VIEW, write: PERMISSIONS.LABINBOX_WRITE,
+        accessLabel: 'Can view the inbox and open reports',
+        writeLabel: 'Can pull the mailbox, pair and discard reports',
+        roleDefault: 'Front desk, lab technicians' },
     ],
   },
   {

@@ -72,7 +72,11 @@ const scanRoutes = () => {
     for (const chunk of text.split(/(?=router\.(?:get|post|put|patch|delete)\()/)) {
       const head = chunk.match(/^router\.(get|post|put|patch|delete)\(\s*'([^']*)'/);
       if (!head) continue;
-      const caps = capsIn(chunk);
+      // Only what is inside authorize(...) is a gate. A validator's field name
+      // (`body('link.action')`) or any other dotted string in the route body is
+      // not a capability, and reading the whole chunk reported it as a typo.
+      const gateTexts = [...chunk.matchAll(/authorize\(([\s\S]*?)\)/g)].map((m) => m[1]).join(', ');
+      const caps = capsIn(gateTexts);
       // The full gate text, spreads resolved, so a later test can ask whether
       // this route admits admins without re-finding the chunk by hand.
       let gate = (chunk.match(/authorize\(([\s\S]*?)\)/) || [, ''])[1];

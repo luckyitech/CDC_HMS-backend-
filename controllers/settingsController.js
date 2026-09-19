@@ -10,6 +10,7 @@ const {
   dueSoonWhere,
 } = require('../utils/passwordRotation');
 const { notifyStaffOfRotationPolicy } = require('../services/passwordRotationNotifier');
+const { recordSettingChanges } = require('../services/settingChangeLog');
 const db = require('../models');
 
 const { User } = db;
@@ -84,8 +85,18 @@ const updatePasswordRotation = async (req, res) => {
       );
     }
 
-    const wasEnabled = (await getRotationConfig()).enabled;
+    const before = await getRotationConfig();
+    const wasEnabled = before.enabled;
     const config = await setRotationConfig({ enabled, interval });
+
+    // Audit trail → Activity Log ('setting_changed'). Fire-and-forget.
+    recordSettingChanges({
+      user: req.user, area: 'Password policy', before, after: config,
+      fields: {
+        enabled:  { key: 'passwordRotationEnabled',  label: 'Scheduled password rotation' },
+        interval: { key: 'passwordRotationInterval', label: 'Rotation interval' },
+      },
+    });
 
     // Announce the policy the moment it is switched on, so staff hear it from
     // their inbox rather than from being locked out mid-shift. Only on the
@@ -153,7 +164,29 @@ const updateLabInbox = async (req, res) => {
       return error(res, 'The mailbox must be a valid email address.', 400);
     }
 
+    const before = await getLabInboxConfig({ redact: true });
     const cfg = await setLabInboxConfig(changes);
+
+    // Audit trail → Activity Log ('setting_changed'). The password is logged
+    // only as "(changed)" — never its value. Fire-and-forget.
+    recordSettingChanges({
+      user: req.user, area: 'Lab Inbox', before, after: cfg,
+      secretsChanged: changes.password ? ['password'] : [],
+      fields: {
+        user:            { key: 'labInbox.user',            label: 'Mailbox address' },
+        host:            { key: 'labInbox.host',            label: 'IMAP host' },
+        port:            { key: 'labInbox.port',            label: 'IMAP port' },
+        secure:          { key: 'labInbox.secure',          label: 'SSL/TLS' },
+        password:        { key: 'labInbox.password',        label: 'Mailbox password' },
+        mailbox:         { key: 'labInbox.mailbox',         label: 'Folder' },
+        enabled:         { key: 'labInbox.enabled',         label: 'Auto-import' },
+        pollIntervalMin: { key: 'labInbox.pollIntervalMin', label: 'Check interval (min)' },
+        afterImport:     { key: 'labInbox.afterImport',     label: 'After importing' },
+        moveFolder:      { key: 'labInbox.moveFolder',      label: 'Move-to folder' },
+        allowlist:       { key: 'labInbox.allowlist',       label: 'Lab sender allowlist' },
+      },
+    });
+
     return success(res, cfg);
   } catch (err) {
     console.error('updateLabInbox error:', err.message);

@@ -1,6 +1,7 @@
 const { Op } = require('sequelize');
 const { success, error } = require('../utils/response');
 const { DRUG_CLASS_VALUES } = require('../constants/drugClasses');
+const { recordSettingChanges } = require('../services/settingChangeLog');
 const db = require('../models');
 
 const { CatalogItem, Setting, User } = db;
@@ -268,8 +269,16 @@ const setSource = async (req, res) => {
     }
     const key = sourceKey(req.catalogType);
     const existing = await Setting.findOne({ where: { key } });
+    const previous = existing ? existing.value : null;
     if (existing) await existing.update({ value: source });
     else await Setting.create({ key, value: source });
+
+    // Audit trail → Activity Log ('setting_changed'). Fire-and-forget.
+    recordSettingChanges({
+      user: req.user, area: 'Clinical catalog',
+      before: { source: previous }, after: { source },
+      fields: { source: { key, label: `${req.catalogType} suggestion source` } },
+    });
 
     return success(res, { type: req.catalogType, source });
   } catch (err) {

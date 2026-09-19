@@ -2,7 +2,7 @@ const { Op } = require('sequelize');
 const { success } = require('../utils/response');
 const db = require('../models');
 
-const { Queue, Patient, MedicalDocument, MedicalEquipment, EquipmentHistory, User, Prescription, LabTest, TreatmentPlan, ConsultationNote, PhysicalExamination, InitialAssessment, UserLoginLog, Appointment, DoctorBlock, BarcodeScan, NeuropathyStudy } = db;
+const { Queue, Patient, MedicalDocument, MedicalEquipment, EquipmentHistory, User, Prescription, LabTest, TreatmentPlan, ConsultationNote, PhysicalExamination, InitialAssessment, UserLoginLog, Appointment, DoctorBlock, BarcodeScan, NeuropathyStudy, LabInboxItem, SettingChangeLog } = db;
 
 // ── Shared event shape ────────────────────────────────────────────────────────
 
@@ -77,6 +77,9 @@ const SUMMARY_KEYS = {
   neuropathy_started:      'neuropathyStarted',
   neuropathy_completed:    'neuropathyCompleted',
   neuropathy_cancelled:    'neuropathyCancelled',
+  lab_report_paired:       'labReportPaired',
+  lab_report_discarded:    'labReportDiscarded',
+  setting_changed:         'settingChanged',
 };
 
 const buildSummary = (events) => {
@@ -517,6 +520,69 @@ const getNeuropathyEvents = async (dateFilter) => {
 
 
 // Every activity event across the system, in one array. Exported so per-staff
+// ── Lab Inbox — external lab reports paired / discarded ──────────────────────
+//
+// Pairing also creates a MedicalDocument, so the same act appears once more as
+// 'document_uploaded' by the same person. That is deliberate: the document
+// event is the record entering the chart; this one says it came from the
+// mailbox, from which lab, and that a human paired it.
+
+const userName = (u) => (u ? `${u.firstName} ${u.lastName}` : 'Unknown');
+const patientName = (p) => (p ? `${p.firstName} ${p.lastName}` : null);
+
+const getLabInboxEvents = async (dateFilter) => {
+  const actor = (as) => ({ model: User, as, attributes: ['firstName', 'lastName', 'role'] });
+  const patient = (as) => ({ model: Patient, as, attributes: ['uhid', 'firstName', 'lastName'] });
+
+  const [paired, discarded] = await Promise.all([
+    LabInboxItem.findAll({
+      where: { status: 'Matched', matchedAt: dateFilter },
+      include: [actor('matchedBy'), patient('matchedPatient')],
+    }),
+    LabInboxItem.findAll({
+      where: { status: 'Discarded', discardedAt: dateFilter },
+      include: [actor('discardedBy')],
+    }),
+  ]);
+
+  return [
+    ...paired.map((it) => makeEvent(
+      'lab_report_paired', 'Paired Lab Report',
+      userName(it.matchedBy), patientName(it.matchedPatient), it.matchedPatient?.uhid || null,
+      it.matchedAt,
+      [it.fileName, it.senderName || it.senderEmail].filter(Boolean).join(' · '),
+      it.matchedBy?.role || null,
+    )),
+    ...discarded.map((it) => makeEvent(
+      'lab_report_discarded', 'Discarded Lab Report',
+      userName(it.discardedBy), null, null,
+      it.discardedAt,
+      [it.fileName, it.senderName || it.senderEmail, it.discardReason].filter(Boolean).join(' · '),
+      it.discardedBy?.role || null,
+    )),
+  ];
+};
+
+// ── Settings — clinic-wide configuration changes ─────────────────────────────
+// Stored rows (services/settingChangeLog.js), one per changed field. Secrets
+// arrive already redacted ("(set)" → "(changed)").
+
+const getSettingChangeEvents = async (dateFilter) => {
+  const rows = await SettingChangeLog.findAll({
+    where: { changedAt: dateFilter },
+    attributes: ['area', 'label', 'oldValue', 'newValue', 'changedByName', 'changedByRole', 'changedAt'],
+    order: [['changedAt', 'DESC']],
+  });
+
+  return rows.map((r) => makeEvent(
+    'setting_changed', 'Changed Setting',
+    r.changedByName, null, null,
+    r.changedAt,
+    `${r.area} · ${r.label}: ${r.oldValue ?? '—'} → ${r.newValue ?? '—'}`,
+    r.changedByRole || null,
+  ));
+};
+
 // views (the Staff File Activity tab) reuse the exact same derivation instead of
 // duplicating it — one source of truth for "what counts as activity".
 const collectAllEvents = async (dateFilter = resolveDateFilter()) => (
@@ -535,6 +601,8 @@ const collectAllEvents = async (dateFilter = resolveDateFilter()) => (
     getDoctorBlockEvents(dateFilter),
     getBarcodeEvents(dateFilter),
     getNeuropathyEvents(dateFilter),
+    getLabInboxEvents(dateFilter),
+    getSettingChangeEvents(dateFilter),
   ])
 ).flat();
 

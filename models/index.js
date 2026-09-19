@@ -26,6 +26,7 @@ const ConsultationNote    = require('./ConsultationNote');
 const NursingNote         = require('./NursingNote');
 const MedicalDocument     = require('./MedicalDocument');
 const LabInboxItem        = require('./LabInboxItem');
+const SettingChangeLog    = require('./SettingChangeLog');
 const Appointment         = require('./Appointment');
 const MedicalEquipment    = require('./MedicalEquipment');
 const EquipmentHistory    = require('./EquipmentHistory');
@@ -195,6 +196,9 @@ LabInboxItem.belongsTo(Patient, { as: 'matchedPatient',   foreignKey: 'matchedPa
 LabInboxItem.belongsTo(MedicalDocument, { as: 'matchedDocument', foreignKey: 'matchedDocumentId' });
 LabInboxItem.belongsTo(User, { as: 'matchedBy',   foreignKey: 'matchedById'   });
 LabInboxItem.belongsTo(User, { as: 'discardedBy', foreignKey: 'discardedById' });
+
+// Setting change audit — who changed which clinic-wide setting (Activity Log).
+SettingChangeLog.belongsTo(User, { as: 'changedBy', foreignKey: 'changedById' });
 
 Patient.hasMany(Appointment);
 Appointment.belongsTo(Patient);
@@ -462,6 +466,7 @@ const db = {
   NursingNote,
   MedicalDocument,
   LabInboxItem,
+  SettingChangeLog,
   Appointment,
   MedicalEquipment,
   EquipmentHistory,

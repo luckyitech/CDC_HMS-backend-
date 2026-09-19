@@ -5,31 +5,32 @@ const validate = require('../middleware/validate');
 const { authenticate, authorize } = require('../middleware/auth');
 const labInbox = require('../controllers/labInboxController');
 
-// External lab-report inbox. Operated by front-desk staff, the lab role and
-// admins. Built permission-aware ('labinbox.write') so the operator set can be
-// widened/narrowed later without touching routes — same two-layer pattern as
-// the rest of the app (coarse gate here, specifics inline in the controller).
-const OPERATE = ['staff', 'lab', 'admin', 'labinbox.write'];
+// External lab-report inbox. Front desk and the lab hold both capabilities by
+// role; a doctor or nurse can be granted them; either can be withdrawn from
+// anyone on the Permissions tab. Two-layer as everywhere else: the coarse gate
+// here, specifics (merge rule, already-paired, etc.) inline in the controller.
+const VIEW  = ['staff', 'lab', 'admin', 'labinbox.view'];
+const WRITE = ['staff', 'lab', 'admin', 'labinbox.write'];
 
 // GET /api/lab-inbox?status=New — list items
-router.get('/', authenticate, authorize(...OPERATE), labInbox.list);
+router.get('/', authenticate, authorize(...VIEW), labInbox.list);
 
-// GET /api/lab-inbox/count — badge count of New items
-router.get('/count', authenticate, authorize(...OPERATE), labInbox.count);
+// GET /api/lab-inbox/count — badge count of New items + sync status
+router.get('/count', authenticate, authorize(...VIEW), labInbox.count);
 
 // GET /api/lab-inbox/:id/file — serve the staged PDF (authenticated, not static)
-router.get('/:id/file', authenticate, authorize(...OPERATE), labInbox.serveFile);
+router.get('/:id/file', authenticate, authorize(...VIEW), labInbox.serveFile);
 
 // POST /api/lab-inbox/poll — manual "Pull now"
-router.post('/poll', authenticate, authorize(...OPERATE), labInbox.poll);
+router.post('/poll', authenticate, authorize(...WRITE), labInbox.poll);
 
 // POST /api/lab-inbox/:id/match — pair to a patient -> creates a MedicalDocument
-router.post('/:id/match', authenticate, authorize(...OPERATE), [
+router.post('/:id/match', authenticate, authorize(...WRITE), [
   body('uhid').notEmpty().withMessage('Patient UHID is required'),
   validate,
 ], labInbox.match);
 
 // POST /api/lab-inbox/:id/discard — soft-delete a wrong pull
-router.post('/:id/discard', authenticate, authorize(...OPERATE), labInbox.discard);
+router.post('/:id/discard', authenticate, authorize(...WRITE), labInbox.discard);
 
 module.exports = router;
