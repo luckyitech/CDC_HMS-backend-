@@ -107,4 +107,83 @@ const updatePasswordRotation = async (req, res) => {
   }
 };
 
-module.exports = { getPasswordRotation, updatePasswordRotation };
+// =====================================================================
+// Lab Inbox — mailbox connection + import policy (System Settings → Lab Inbox)
+// =====================================================================
+const {
+  getLabInboxConfig,
+  setLabInboxConfig,
+  AFTER_IMPORT,
+} = require('../utils/labInboxConfig');
+
+/**
+ * GET /api/settings/lab-inbox
+ * The connection + policy WITHOUT the password (only `hasPassword`), plus the
+ * last poll result for the status line.
+ * Authorization: admin / config.write
+ */
+const getLabInbox = async (req, res) => {
+  try {
+    return success(res, await getLabInboxConfig({ redact: true }));
+  } catch (err) {
+    console.error('getLabInbox error:', err.message);
+    return error(res, 'Failed to load the Lab Inbox settings', 500);
+  }
+};
+
+/**
+ * PUT /api/settings/lab-inbox
+ * Any subset of: host, port, secure, user, password, mailbox, enabled,
+ * pollIntervalMin, afterImport, moveFolder, allowlist[].
+ * A blank password leaves the stored one unchanged. Nothing ships pre-filled.
+ * Authorization: a real admin account (credentials) — see routes/settings.js
+ */
+const updateLabInbox = async (req, res) => {
+  try {
+    const allowed = ['host', 'port', 'secure', 'user', 'password', 'mailbox', 'enabled',
+      'pollIntervalMin', 'afterImport', 'moveFolder', 'allowlist'];
+    const changes = {};
+    for (const k of allowed) if (req.body[k] !== undefined) changes[k] = req.body[k];
+    if (!Object.keys(changes).length) return error(res, 'Nothing to update.', 400);
+
+    if (changes.afterImport !== undefined && !AFTER_IMPORT.includes(changes.afterImport)) {
+      return error(res, `afterImport must be one of ${AFTER_IMPORT.join(', ')}`, 400);
+    }
+    if (changes.user !== undefined && changes.user && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(changes.user)) {
+      return error(res, 'The mailbox must be a valid email address.', 400);
+    }
+
+    const cfg = await setLabInboxConfig(changes);
+    return success(res, cfg);
+  } catch (err) {
+    console.error('updateLabInbox error:', err.message);
+    // Validation errors from the config layer are user-facing.
+    const userFacing = /must be|not a valid|required|between/i.test(err.message || '');
+    return error(res, userFacing ? err.message : 'Failed to update the Lab Inbox settings', userFacing ? 400 : 500);
+  }
+};
+
+/**
+ * POST /api/settings/lab-inbox/test
+ * Tries the connection with the submitted (possibly unsaved) values; the
+ * stored password is used when none is sent. Never persists anything.
+ * Authorization: admin / config.write
+ */
+const testLabInbox = async (req, res) => {
+  try {
+    const { testConnection } = require('../services/labInboxPoller');
+    const result = await testConnection(req.body || {});
+    return success(res, result);
+  } catch (err) {
+    console.error('testLabInbox error:', err.message);
+    return error(res, `Connection failed: ${err.message}`, 400);
+  }
+};
+
+module.exports = {
+  getPasswordRotation,
+  updatePasswordRotation,
+  getLabInbox,
+  updateLabInbox,
+  testLabInbox,
+};

@@ -27,6 +27,15 @@ sequelize.authenticate()
     console.log('Models synced.');
     app.listen(PORT, () => {
       console.log(`CDC HMS API running on http://localhost:${PORT}`);
+
+      // Lab Inbox auto-import. The scheduler only ticks a config check every
+      // minute; it polls the mailbox only when an admin has enabled it in
+      // System Settings → Lab Inbox. A failure here must never affect the API.
+      try {
+        require('./services/labInboxPoller').startScheduler();
+      } catch (err) {
+        console.error('[LabInbox] scheduler not started:', err.message);
+      }
     });
   })
   .catch((err) => {

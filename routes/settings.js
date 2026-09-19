@@ -25,4 +25,16 @@ router.put('/password-rotation', authenticate, requireTrueAdmin, [
   validate,
 ], settings.updatePasswordRotation);
 
+// Lab Inbox — the clinic mailbox the labs email reports to, and the import
+// policy. Read/test with the normal admin gate; WRITING credentials is held to
+// a real admin account, like the password policy above.
+router.get('/lab-inbox', authenticate, authorize('admin', 'config.write'), settings.getLabInbox);
+router.post('/lab-inbox/test', authenticate, authorize('admin', 'config.write'), settings.testLabInbox);
+router.put('/lab-inbox', authenticate, requireTrueAdmin, [
+  body('enabled').optional().isBoolean().withMessage("'enabled' must be true or false").toBoolean(),
+  body('secure').optional().isBoolean().withMessage("'secure' must be true or false").toBoolean(),
+  body('allowlist').optional().isArray().withMessage("'allowlist' must be an array"),
+  validate,
+], settings.updateLabInbox);
+
 module.exports = router;

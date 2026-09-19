@@ -25,6 +25,7 @@ const InitialAssessment   = require('./InitialAssessment');
 const ConsultationNote    = require('./ConsultationNote');
 const NursingNote         = require('./NursingNote');
 const MedicalDocument     = require('./MedicalDocument');
+const LabInboxItem        = require('./LabInboxItem');
 const Appointment         = require('./Appointment');
 const MedicalEquipment    = require('./MedicalEquipment');
 const EquipmentHistory    = require('./EquipmentHistory');
@@ -184,6 +185,16 @@ NursingNote.belongsTo(User, { as: 'deletedByUser', foreignKey: 'deletedBy' });
 Patient.hasMany(MedicalDocument);
 MedicalDocument.belongsTo(Patient);
 MedicalDocument.belongsTo(User, { as: 'uploader', foreignKey: 'uploadedById' });
+
+// Lab Inbox — staging rows for external lab-report PDFs pulled from the clinic
+// mailbox. Aliased camelCase FKs (A4). Patient/user refs are nullable + SET NULL
+// so a merged/removed patient never orphans the audit row; matchedDocument links
+// to the MedicalDocument created on pairing.
+LabInboxItem.belongsTo(Patient, { as: 'suggestedPatient', foreignKey: 'suggestedPatientId' });
+LabInboxItem.belongsTo(Patient, { as: 'matchedPatient',   foreignKey: 'matchedPatientId'   });
+LabInboxItem.belongsTo(MedicalDocument, { as: 'matchedDocument', foreignKey: 'matchedDocumentId' });
+LabInboxItem.belongsTo(User, { as: 'matchedBy',   foreignKey: 'matchedById'   });
+LabInboxItem.belongsTo(User, { as: 'discardedBy', foreignKey: 'discardedById' });
 
 Patient.hasMany(Appointment);
 Appointment.belongsTo(Patient);
@@ -450,6 +461,7 @@ const db = {
   ConsultationNote,
   NursingNote,
   MedicalDocument,
+  LabInboxItem,
   Appointment,
   MedicalEquipment,
   EquipmentHistory,
