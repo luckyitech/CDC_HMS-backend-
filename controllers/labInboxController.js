@@ -1,14 +1,14 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
-const { Op } = require('sequelize');
 const { success, error } = require('../utils/response');
 const { resolvePatient } = require('../utils/patientFamily');
 const { clinicToday } = require('../utils/clinicTime');
-const { createMedicalDocument, formatFileSize } = require('../utils/medicalDocumentCreate');
+const { createMedicalDocument } = require('../utils/medicalDocumentCreate');
+const { getLabInboxConfig } = require('../utils/labInboxConfig');
 const db = require('../models');
 
-const { LabInboxItem, Patient, User, MedicalDocument } = db;
+const { LabInboxItem, Patient, User } = db;
 
 const DOCUMENTS_DIR = path.join(__dirname, '..', 'uploads', 'documents');
 const DEFAULT_CATEGORY = 'Lab Report - External';
@@ -90,11 +90,20 @@ const list = async (req, res) => {
   }
 };
 
-// GET /api/lab-inbox/count — badge count of New items
+// GET /api/lab-inbox/count — badge count of New items + the sync status line.
+// The status comes from the redacted config (no credentials) so front-desk
+// staff can see "last synced / not set up" without admin rights.
 const count = async (req, res) => {
   try {
     const n = await LabInboxItem.count({ where: { status: 'New' } });
-    return success(res, { count: n });
+    const cfg = await getLabInboxConfig({ redact: true });
+    return success(res, {
+      count: n,
+      lastPoll: cfg.lastPoll,
+      isConfigured: cfg.isConfigured,
+      autoImport: cfg.enabled,
+      pollIntervalMin: cfg.pollIntervalMin,
+    });
   } catch (err) {
     console.error('LabInbox.count error:', err);
     return error(res, 'Failed to count inbox items.', 500);
