@@ -213,10 +213,127 @@ const testLabInbox = async (req, res) => {
   }
 };
 
+// =====================================================================
+// Communications Inbox — WhatsApp (System Settings → WhatsApp)
+// =====================================================================
+const { getCommsConfig, setCommsConfig } = require('../utils/commsConfig');
+const { getRateCard, setRateCard } = require('../utils/commsCosts');
+
+/** GET /api/settings/comms — redacted config + rate card + configured numbers. */
+const getComms = async (req, res) => {
+  try {
+    const cfg = await getCommsConfig({ redact: true });
+    const [rateCard, channels] = await Promise.all([
+      getRateCard(),
+      db.MessagingChannel.findAll({ where: {}, order: [['id', 'ASC']], attributes: ['id', 'channel', 'externalId', 'displayPhone', 'label', 'wabaId', 'isActive', 'qualityRating', 'lastInboundAt', 'lastOutboundAt'] }),
+    ]);
+    return success(res, { ...cfg, rateCard, channels });
+  } catch (err) {
+    console.error('getComms error:', err.message);
+    return error(res, 'Failed to load the WhatsApp settings', 500);
+  }
+};
+
+/**
+ * PUT /api/settings/comms — connection + behaviour. Credentials are held to a
+ * real admin (routes/settings.js). A blank secret leaves the stored one.
+ */
+const updateComms = async (req, res) => {
+  try {
+    const allowed = ['wabaId', 'appId', 'appSecret', 'accessToken', 'verifyToken', 'graphVersion',
+      'autoLink', 'markReadOnOpen', 'warnNoConsent', 'archiveUnlinkedDays', 'mediaMaxMb', 'monthlyBudgetKes'];
+    const changes = {};
+    for (const k of allowed) if (req.body[k] !== undefined) changes[k] = req.body[k];
+    if (!Object.keys(changes).length) return error(res, 'Nothing to update.', 400);
+
+    const before = await getCommsConfig({ redact: true });
+    const cfg = await setCommsConfig(changes);
+
+    const secretsChanged = ['appSecret', 'accessToken', 'verifyToken'].filter((k) => changes[k]);
+    recordSettingChanges({
+      user: req.user, area: 'WhatsApp', before, after: cfg, secretsChanged,
+      fields: {
+        wabaId:              { key: 'comms.wabaId',              label: 'WhatsApp Business Account ID' },
+        appId:               { key: 'comms.appId',               label: 'Meta App ID' },
+        appSecret:           { key: 'comms.appSecret',           label: 'Meta App Secret' },
+        accessToken:         { key: 'comms.accessToken',         label: 'Access token' },
+        verifyToken:         { key: 'comms.verifyToken',         label: 'Webhook verify token' },
+        graphVersion:        { key: 'comms.graphVersion',        label: 'Graph API version' },
+        autoLink:            { key: 'comms.autoLink',            label: 'Auto-link on a unique phone match' },
+        markReadOnOpen:      { key: 'comms.markReadOnOpen',      label: 'Send read receipts on open' },
+        warnNoConsent:       { key: 'comms.warnNoConsent',       label: 'Warn when messaging without consent' },
+        archiveUnlinkedDays: { key: 'comms.archiveUnlinkedDays', label: 'Archive unlinked threads after (days)' },
+        mediaMaxMb:          { key: 'comms.mediaMaxMb',          label: 'Media size cap (MB)' },
+        monthlyBudgetKes:    { key: 'comms.monthlyBudgetKes',    label: 'Monthly budget (KES)' },
+      },
+    });
+    return success(res, cfg);
+  } catch (err) {
+    console.error('updateComms error:', err.message);
+    const userFacing = /must be|not a valid|required|between|too large/i.test(err.message || '');
+    return error(res, userFacing ? err.message : 'Failed to update the WhatsApp settings', userFacing ? 400 : 500);
+  }
+};
+
+/**
+ * POST /api/settings/comms/test — subscribe our app to the WABA and pull the
+ * numbers, upserting a MessagingChannel per number so the Inbox can route.
+ */
+const testComms = async (req, res) => {
+  try {
+    const cfg = await getCommsConfig({ redact: false });
+    const wabaId = (req.body && req.body.wabaId) || cfg.wabaId;
+    if (!wabaId) return error(res, 'Enter the WhatsApp Business Account ID first.', 400);
+    if (!cfg.accessToken) return error(res, 'Save the access token first.', 400);
+    const whatsappApi = require('../services/whatsappApi');
+    await whatsappApi.subscribeApp(wabaId).catch((e) => { throw new Error(e.userMessage || e.message); });
+    const numbers = await whatsappApi.getPhoneNumbers(wabaId);
+    for (const n of numbers) {
+      await db.MessagingChannel.findOrCreate({
+        where: { externalId: String(n.id) },
+        defaults: { channel: 'whatsapp', externalId: String(n.id), displayPhone: n.display_phone_number, label: n.verified_name, wabaId, qualityRating: n.quality_rating, isActive: true },
+      }).then(([row, created]) => (created ? row : row.update({ displayPhone: n.display_phone_number, label: n.verified_name, wabaId, qualityRating: n.quality_rating })));
+    }
+    return success(res, { ok: true, numbers: numbers.map((n) => ({ id: n.id, displayPhone: n.display_phone_number, name: n.verified_name, quality: n.quality_rating })) });
+  } catch (err) {
+    console.error('testComms error:', err.message);
+    return error(res, `Connection failed: ${err.message}`, 400);
+  }
+};
+
+/** PUT /api/settings/comms/costs — the rate card + monthly budget. */
+const updateCommsCosts = async (req, res) => {
+  try {
+    const before = await getCommsConfig({ redact: true });
+    if (Array.isArray(req.body.rateCard)) await setRateCard(req.body.rateCard);
+    let after = before;
+    if (req.body.monthlyBudgetKes !== undefined) after = await setCommsConfig({ monthlyBudgetKes: req.body.monthlyBudgetKes });
+    recordSettingChanges({
+      user: req.user, area: 'WhatsApp', before, after,
+      fields: { monthlyBudgetKes: { key: 'comms.monthlyBudgetKes', label: 'Monthly budget (KES)' } },
+    });
+    // The rate card itself is logged as one change line (values are prices, not secrets).
+    recordSettingChanges({
+      user: req.user, area: 'WhatsApp',
+      before: { rateCard: '(previous)' }, after: { rateCard: `${(req.body.rateCard || []).length} row(s) updated` },
+      fields: { rateCard: { key: 'comms.rateCard', label: 'WhatsApp rate card' } },
+    });
+    return success(res, { rateCard: await getRateCard(), monthlyBudgetKes: (await getCommsConfig()).monthlyBudgetKes });
+  } catch (err) {
+    console.error('updateCommsCosts error:', err.message);
+    const userFacing = /must|row|large|effective/i.test(err.message || '');
+    return error(res, userFacing ? err.message : 'Failed to update the WhatsApp costs', userFacing ? 400 : 500);
+  }
+};
+
 module.exports = {
   getPasswordRotation,
   updatePasswordRotation,
   getLabInbox,
   updateLabInbox,
   testLabInbox,
+  getComms,
+  updateComms,
+  testComms,
+  updateCommsCosts,
 };

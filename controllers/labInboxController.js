@@ -26,6 +26,7 @@ const patientBrief = (p) =>
 const formatItem = (it) => ({
   id: it.id,
   status: it.status,
+  source: it.source || 'email',
   senderEmail: it.senderEmail,
   senderName: it.senderName,
   subject: it.subject,
@@ -75,6 +76,9 @@ const list = async (req, res) => {
     const status = req.query.status || 'New';
     const where = {};
     if (status !== 'All') where.status = status;
+    // The Communications Inbox mirrors WhatsApped lab reports into this same
+    // queue; the Lab reports tab can filter by where a report came from.
+    if (req.query.source === 'email' || req.query.source === 'whatsapp') where.source = req.query.source;
 
     const items = await LabInboxItem.findAll({
       where,
@@ -194,6 +198,16 @@ const match = async (req, res) => {
       matchedById: req.user.id,
       matchedAt: new Date(),
     });
+
+    // A WhatsApped report: stamp the originating message so the thread shows the
+    // report was filed and to whom (patient snapshot + the created document).
+    if (item.source === 'whatsapp' && item.sourceMessageId) {
+      const { ConversationMessage } = db;
+      await ConversationMessage.update(
+        { patientId: patient.id, medicalDocumentId: document.id },
+        { where: { id: item.sourceMessageId } },
+      ).catch((e) => console.error('LabInbox.match: stamping comms message failed (non-fatal):', e.message));
+    }
 
     return success(res, {
       item: formatItem(await LabInboxItem.findByPk(item.id, withAssociations)),

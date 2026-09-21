@@ -87,6 +87,16 @@ const PatientDiaryEvent        = require('./PatientDiaryEvent');
 const LabPackage               = require('./LabPackage');
 const LabPackageItem           = require('./LabPackageItem');
 
+// --- Communications Inbox (WhatsApp; Messenger/Instagram later) ---
+const MessagingChannel            = require('./MessagingChannel');
+const ExternalOrganisation        = require('./ExternalOrganisation');
+const ExternalOrganisationContact = require('./ExternalOrganisationContact');
+const Conversation                = require('./Conversation');
+const ConversationMessage         = require('./ConversationMessage');
+const ConversationEscalation      = require('./ConversationEscalation');
+const ConversationReminder        = require('./ConversationReminder');
+const MessageTemplate             = require('./MessageTemplate');
+
 // =============================================
 // ASSOCIATIONS
 // =============================================
@@ -443,6 +453,54 @@ Admission.hasMany(FluidBalanceEntry);   FluidBalanceEntry.belongsTo(Admission);
 Patient.hasMany(FluidBalanceEntry);     FluidBalanceEntry.belongsTo(Patient);
 FluidBalanceEntry.belongsTo(User, { as: 'recordedByUser', foreignKey: 'recordedById' });
 
+// --- Communications Inbox (WhatsApp; channel-generic for Messenger/Instagram) ---
+// All FKs are the explicitly-aliased camelCase kind (A4). A conversation belongs
+// to a channel (aliased 'messagingChannel' — the model also has a 'channel' ENUM
+// column, so the association must not reuse that name) and, once linked, to the
+// canonical patient; a lab/organisation thread points at an ExternalOrganisation
+// instead. Messages/escalations/reminders hang off the conversation; message
+// rows carry a patientId snapshot and cross-links to a filed document / booked
+// appointment. LabInboxItem gains a link back to the WhatsApp message a lab
+// report arrived on.
+MessagingChannel.hasMany(Conversation, { foreignKey: 'channelId' });
+Conversation.belongsTo(MessagingChannel, { as: 'messagingChannel', foreignKey: 'channelId' });
+
+ExternalOrganisation.hasMany(ExternalOrganisationContact, { as: 'contacts', foreignKey: 'organisationId', onDelete: 'CASCADE' });
+ExternalOrganisationContact.belongsTo(ExternalOrganisation, { as: 'organisation', foreignKey: 'organisationId' });
+Conversation.belongsTo(ExternalOrganisation, { as: 'organisation', foreignKey: 'contactOrgId' });
+
+Patient.hasMany(Conversation, { foreignKey: 'patientId' });
+Conversation.belongsTo(Patient, { as: 'patient', foreignKey: 'patientId' });
+Conversation.belongsTo(User, { as: 'linkedBy',   foreignKey: 'linkedById' });
+Conversation.belongsTo(User, { as: 'assignedTo', foreignKey: 'assignedToId' });
+Conversation.belongsTo(User, { as: 'pinnedBy',   foreignKey: 'pinnedById' });
+
+Conversation.hasMany(ConversationMessage, { as: 'messages', foreignKey: 'conversationId', onDelete: 'CASCADE' });
+ConversationMessage.belongsTo(Conversation, { foreignKey: 'conversationId' });
+ConversationMessage.belongsTo(Patient, { as: 'patient', foreignKey: 'patientId' });
+ConversationMessage.belongsTo(User, { as: 'sentBy',     foreignKey: 'sentById' });
+ConversationMessage.belongsTo(User, { as: 'resolvedBy', foreignKey: 'resolvedById' });
+ConversationMessage.belongsTo(User, { as: 'reopenedBy', foreignKey: 'reopenedById' });
+ConversationMessage.belongsTo(MedicalDocument, { as: 'medicalDocument', foreignKey: 'medicalDocumentId' });
+ConversationMessage.belongsTo(Appointment,     { as: 'appointment',     foreignKey: 'appointmentId' });
+
+Conversation.hasMany(ConversationEscalation, { as: 'escalations', foreignKey: 'conversationId', onDelete: 'CASCADE' });
+ConversationEscalation.belongsTo(Conversation, { foreignKey: 'conversationId' });
+ConversationEscalation.belongsTo(ConversationMessage, { as: 'noteMessage', foreignKey: 'messageId' });
+ConversationEscalation.belongsTo(User, { as: 'escalatedBy', foreignKey: 'escalatedById' });
+ConversationEscalation.belongsTo(User, { as: 'escalatedTo', foreignKey: 'escalatedToId' });
+ConversationEscalation.belongsTo(User, { as: 'resolvedBy',  foreignKey: 'resolvedById' });
+
+Conversation.hasMany(ConversationReminder, { as: 'reminders', foreignKey: 'conversationId', onDelete: 'CASCADE' });
+ConversationReminder.belongsTo(Conversation, { foreignKey: 'conversationId' });
+ConversationReminder.belongsTo(Patient, { as: 'patient', foreignKey: 'patientId' });
+ConversationReminder.belongsTo(User, { as: 'setBy',   foreignKey: 'setById' });
+ConversationReminder.belongsTo(User, { as: 'forUser', foreignKey: 'forUserId' });
+ConversationReminder.belongsTo(User, { as: 'doneBy',  foreignKey: 'doneById' });
+
+// A WhatsApped lab report mirrored into the Lab Inbox links back to its message.
+LabInboxItem.belongsTo(ConversationMessage, { as: 'sourceMessage', foreignKey: 'sourceMessageId' });
+
 const db = {
   sequelize,
   Sequelize,
@@ -520,6 +578,15 @@ const db = {
   PatientMeter,
   PatientGlucoseTarget,
   PatientDiaryEvent,
+  // --- Communications Inbox (WhatsApp; Messenger/Instagram later) ---
+  MessagingChannel,
+  ExternalOrganisation,
+  ExternalOrganisationContact,
+  Conversation,
+  ConversationMessage,
+  ConversationEscalation,
+  ConversationReminder,
+  MessageTemplate,
 };
 
 module.exports = db;

@@ -126,6 +126,17 @@ const Patient = defineModel('Patient', {
     defaultValue: false,
   },
 
+  // --- WhatsApp / messaging consent (Communications Inbox) ---
+  // Phase 1 uses this to WARN, not block: staff can still message a patient who
+  // has not opted in, but the composer flags it. Set when the patient agrees.
+  whatsappOptIn: {
+    type:         DataTypes.BOOLEAN,
+    allowNull:    false,
+    defaultValue: false,
+  },
+  whatsappOptInAt:     { type: DataTypes.DATE,   allowNull: true },
+  whatsappOptInSource: { type: DataTypes.STRING, allowNull: true },   // 'reception', 'reply', …
+
   // Set when this patient is merged into another — points to the canonical patient's PK.
   // null means this is an active, canonical record.
   mergedIntoId: {

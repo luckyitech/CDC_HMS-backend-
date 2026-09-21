@@ -34,6 +34,13 @@ app.use(helmet({
 // SSE — registered before rate limiter (long-lived connection, counts as 1 request)
 app.use('/api/sse', require('./routes/sse'));
 
+// Communications Inbox webhook (Meta WhatsApp) — MUST be mounted BEFORE the
+// general limiter and express.json(): Meta signs the RAW body, so the route
+// parses it with express.raw() and verifies the signature over the exact bytes.
+// It has its own limiter (webhookLimiter). The authenticated /api/comms API is
+// mounted further down with the rest of the routes.
+app.use('/api/comms/webhook', require('./routes/commsWebhook'));
+
 // Rate limiting — Prevent brute force and DoS attacks
 // Applied to ALL endpoints: 1000 requests per 15 minutes per IP
 // (matches generalLimiter in middleware/rateLimiter.js and the README)
@@ -77,6 +84,7 @@ app.use('/api/users',              require('./routes/users'));
 app.use('/api/staff',              require('./routes/staff'));
 app.use('/api/documents',          require('./routes/documents'));
 app.use('/api/lab-inbox',          require('./routes/labInbox'));
+app.use('/api/comms',              require('./routes/comms'));
 app.use('/api/reports',            require('./routes/reports'));
 app.use('/api/analytics',          require('./routes/analytics'));
 app.use('/api/dashboard',          require('./routes/dashboard'));

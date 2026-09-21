@@ -115,6 +115,16 @@ const PERMISSIONS = {
   LABINBOX_VIEW:  'labinbox.view',
   LABINBOX_WRITE: 'labinbox.write',
 
+  // Communications Inbox — patient messages on the clinic's WhatsApp number
+  // (and later Facebook / Instagram — the capability is channel-agnostic). VIEW
+  // is reading threads and opening attachments; WRITE is replying, linking a
+  // thread to a patient, filing an attachment, booking from chat, escalating
+  // and setting reminders. Front desk, doctors and nurses hold both by role; a
+  // lab technician can be granted them. Emailed/WhatsApped LAB reports are the
+  // separate Lab Inbox capability above.
+  COMMS_VIEW:  'comms.view',
+  COMMS_WRITE: 'comms.write',
+
   // --- Clinical ---
   // The clinical record itself, as opposed to the patient's identity and
   // administration. Reception legitimately needs to know who a patient is,
@@ -191,6 +201,7 @@ const IMPLIED_BY = {
   [PERMISSIONS.INPATIENT_WRITE]:    PERMISSIONS.INPATIENT_ACCESS,
   [PERMISSIONS.LAB_WRITE]:          PERMISSIONS.LAB_VIEW,
   [PERMISSIONS.LABINBOX_WRITE]:     PERMISSIONS.LABINBOX_VIEW,
+  [PERMISSIONS.COMMS_WRITE]:        PERMISSIONS.COMMS_VIEW,
   [PERMISSIONS.USERS_WRITE]:        PERMISSIONS.USERS_VIEW,
   [PERMISSIONS.APPOINTMENTS_WRITE]: PERMISSIONS.APPOINTMENTS_VIEW,
   [PERMISSIONS.CLINICAL_RECORD]:    PERMISSIONS.CLINICAL_VIEW,
@@ -324,6 +335,8 @@ const ADMIN_ACCESS_COVERS = [
   PERMISSIONS.APPOINTMENTS_WRITE,
   PERMISSIONS.CLINICAL_RECORD,
   PERMISSIONS.CLINICAL_VIEW,
+  PERMISSIONS.COMMS_VIEW,
+  PERMISSIONS.COMMS_WRITE,
   PERMISSIONS.CONFIG_WRITE,
   PERMISSIONS.DOCUMENTS_WRITE,
   PERMISSIONS.INPATIENT_ACCESS,
@@ -503,6 +516,15 @@ const PERMISSION_GROUPS = [
         accessLabel: 'Can view the inbox and open reports',
         writeLabel: 'Can pull the mailbox, pair and discard reports',
         roleDefault: 'Front desk, lab technicians' },
+      { key: 'comms-inbox', name: 'Inbox (WhatsApp & social messages)', appliesIn: 'Staff, Doctor, Nurse, Lab',
+        description: 'Patient messages on the clinic\'s WhatsApp number (and later Facebook / '
+          + 'Instagram): read threads, reply, link to a patient, file attachments, book from '
+          + 'chat, escalate, set reminders. Lab reports emailed or WhatsApped by labs are the '
+          + 'separate "Lab Inbox" capability.',
+        access: PERMISSIONS.COMMS_VIEW, write: PERMISSIONS.COMMS_WRITE,
+        accessLabel: 'Can read conversations and open attachments',
+        writeLabel: 'Can reply, link, file, book, escalate and set reminders',
+        roleDefault: 'Front desk, doctors, nurses' },
     ],
   },
   {

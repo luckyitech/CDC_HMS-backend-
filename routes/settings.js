@@ -37,4 +37,20 @@ router.put('/lab-inbox', authenticate, requireTrueAdmin, [
   validate,
 ], settings.updateLabInbox);
 
+// Communications Inbox — WhatsApp (Meta Cloud API) connection + behaviour +
+// costs. Reading/testing uses the normal admin gate; WRITING the credentials is
+// held to a real admin account, like the mailbox and the password policy.
+router.get('/comms',       authenticate, authorize('admin', 'config.write'), settings.getComms);
+router.post('/comms/test', authenticate, authorize('admin', 'config.write'), settings.testComms);
+router.put('/comms', authenticate, requireTrueAdmin, [
+  body('autoLink').optional().isBoolean().toBoolean(),
+  body('markReadOnOpen').optional().isBoolean().toBoolean(),
+  body('warnNoConsent').optional().isBoolean().toBoolean(),
+  validate,
+], settings.updateComms);
+router.put('/comms/costs', authenticate, authorize('admin', 'config.write'), [
+  body('rateCard').optional().isArray().withMessage("'rateCard' must be an array"),
+  validate,
+], settings.updateCommsCosts);
+
 module.exports = router;

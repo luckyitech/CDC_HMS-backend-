@@ -2,7 +2,7 @@ const { Op } = require('sequelize');
 const { success } = require('../utils/response');
 const db = require('../models');
 
-const { Queue, Patient, MedicalDocument, MedicalEquipment, EquipmentHistory, User, Prescription, LabTest, TreatmentPlan, ConsultationNote, PhysicalExamination, InitialAssessment, UserLoginLog, Appointment, DoctorBlock, BarcodeScan, NeuropathyStudy, LabInboxItem, SettingChangeLog } = db;
+const { Queue, Patient, MedicalDocument, MedicalEquipment, EquipmentHistory, User, Prescription, LabTest, TreatmentPlan, ConsultationNote, PhysicalExamination, InitialAssessment, UserLoginLog, Appointment, DoctorBlock, BarcodeScan, NeuropathyStudy, LabInboxItem, SettingChangeLog, ConversationMessage, Conversation, ConversationEscalation } = db;
 
 // ── Shared event shape ────────────────────────────────────────────────────────
 
@@ -79,6 +79,11 @@ const SUMMARY_KEYS = {
   neuropathy_cancelled:    'neuropathyCancelled',
   lab_report_paired:       'labReportPaired',
   lab_report_discarded:    'labReportDiscarded',
+  whatsapp_sent:           'whatsappSent',
+  comms_linked:            'commsLinked',
+  comms_query_completed:   'commsQueryCompleted',
+  comms_escalated:         'commsEscalated',
+  comms_filed:             'commsFiled',
   setting_changed:         'settingChanged',
 };
 
@@ -563,6 +568,34 @@ const getLabInboxEvents = async (dateFilter) => {
   ];
 };
 
+// ── Communications Inbox (WhatsApp) ──────────────────────────────────────────
+// Derived like the Lab Inbox events: sent messages, manual patient links,
+// completed patient queries (with the resolution note), escalations to a
+// doctor, and attachments filed into the record. Internal notes are not logged.
+
+const getCommsEvents = async (dateFilter) => {
+  const actor = (as) => ({ model: User, as, attributes: ['firstName', 'lastName', 'role'] });
+  const convPatient = { model: Conversation, attributes: ['id'], include: [{ model: Patient, as: 'patient', attributes: ['uhid', 'firstName', 'lastName'] }] };
+
+  const [sent, linked, completed, escalations, filed] = await Promise.all([
+    ConversationMessage.findAll({ where: { direction: 'out', sentById: { [Op.ne]: null }, createdAt: dateFilter }, include: [actor('sentBy'), convPatient], limit: 2000 }),
+    Conversation.findAll({ where: { linkMethod: 'manual', linkedAt: dateFilter, linkedById: { [Op.ne]: null } }, include: [actor('linkedBy'), { model: Patient, as: 'patient', attributes: ['uhid', 'firstName', 'lastName'] }] }),
+    ConversationMessage.findAll({ where: { direction: 'in', queryStatus: 'completed', resolvedAt: dateFilter, resolvedById: { [Op.ne]: null } }, include: [actor('resolvedBy'), convPatient], limit: 2000 }),
+    ConversationEscalation.findAll({ where: { createdAt: dateFilter, escalatedById: { [Op.ne]: null } }, include: [actor('escalatedBy'), { model: User, as: 'escalatedTo', attributes: ['firstName', 'lastName'] }] }),
+    ConversationMessage.findAll({ where: { medicalDocumentId: { [Op.ne]: null }, createdAt: dateFilter }, include: [convPatient, { model: MedicalDocument, as: 'medicalDocument', attributes: ['fileName', 'documentCategory'], include: [{ model: User, as: 'uploader', attributes: ['firstName', 'lastName', 'role'] }] }], limit: 2000 }),
+  ]);
+
+  const convP = (m) => (m.Conversation && m.Conversation.patient) || null;
+
+  return [
+    ...sent.map((m) => makeEvent('whatsapp_sent', 'Sent WhatsApp message', userName(m.sentBy), patientName(convP(m)), convP(m)?.uhid || null, m.createdAt, (m.body || m.caption || `[${m.type}]`).slice(0, 80), m.sentBy?.role || null)),
+    ...linked.map((c) => makeEvent('comms_linked', 'Linked conversation', userName(c.linkedBy), patientName(c.patient), c.patient?.uhid || null, c.linkedAt, 'WhatsApp thread linked to patient', c.linkedBy?.role || null)),
+    ...completed.map((m) => makeEvent('comms_query_completed', 'Completed query', userName(m.resolvedBy), patientName(convP(m)), convP(m)?.uhid || null, m.resolvedAt, [m.resolutionKind, m.resolutionNote].filter(Boolean).join(' · ').slice(0, 120), m.resolvedBy?.role || null)),
+    ...escalations.map((e) => makeEvent('comms_escalated', 'Escalated conversation', userName(e.escalatedBy), null, null, e.createdAt, e.escalatedTo ? `to ${e.escalatedTo.firstName} ${e.escalatedTo.lastName}` : null, e.escalatedBy?.role || null)),
+    ...filed.filter((m) => m.medicalDocument).map((m) => makeEvent('comms_filed', 'Filed WhatsApp attachment', userName(m.medicalDocument.uploader), patientName(convP(m)), convP(m)?.uhid || null, m.createdAt, m.medicalDocument.fileName || null, m.medicalDocument.uploader?.role || null)),
+  ];
+};
+
 // ── Settings — clinic-wide configuration changes ─────────────────────────────
 // Stored rows (services/settingChangeLog.js), one per changed field. Secrets
 // arrive already redacted ("(set)" → "(changed)").
@@ -602,6 +635,7 @@ const collectAllEvents = async (dateFilter = resolveDateFilter()) => (
     getBarcodeEvents(dateFilter),
     getNeuropathyEvents(dateFilter),
     getLabInboxEvents(dateFilter),
+    getCommsEvents(dateFilter),
     getSettingChangeEvents(dateFilter),
   ])
 ).flat();

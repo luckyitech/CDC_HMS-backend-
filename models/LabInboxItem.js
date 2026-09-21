@@ -23,6 +23,21 @@ const { defineModel, DataTypes } = require('../utils/defineModel');
 // ---------------------------------------------------------------------------
 
 const LabInboxItem = defineModel('LabInboxItem', {
+  // --- Where this report came from ---
+  // 'email' (the original IMAP mailbox path) or 'whatsapp' (a lab that sent the
+  // report over WhatsApp — the Communications Inbox mirrors it here so the Lab
+  // reports tab stays the single queue for external results). sourceMessageId
+  // links back to the ConversationMessage when source is 'whatsapp'.
+  source: {
+    type: DataTypes.ENUM('email', 'whatsapp'),
+    allowNull: false,
+    defaultValue: 'email',
+  },
+  sourceMessageId: {
+    type: DataTypes.INTEGER,         // FK -> ConversationMessages.id (whatsapp source)
+    allowNull: true,
+  },
+
   // --- Source message / dedup ---
   mailbox: {
     type: DataTypes.STRING,          // folder the message was read from, e.g. "INBOX"

@@ -110,6 +110,22 @@ const publicBookingLimiter = rateLimit({
 });
 
 // ------------------------------------
+// WhatsApp Webhook Rate Limiter
+// ------------------------------------
+// For the PUBLIC Meta webhook. Meta can burst several events per second on a
+// busy number, so this is generous — 600 requests per minute per IP — but still
+// caps an unauthenticated flood. Its own limiter because the webhook is mounted
+// before the general limiter (raw body, signature verification).
+const webhookLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 600,
+  message: { success: false, message: 'Too many requests.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator,
+});
+
+// ------------------------------------
 // EXPORTS
 // ------------------------------------
 module.exports = {
@@ -118,4 +134,5 @@ module.exports = {
   strictLimiter,
   sseLimiter,
   publicBookingLimiter,
+  webhookLimiter,
 };

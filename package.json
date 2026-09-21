@@ -10,6 +10,8 @@
     "migrate:undo": "sequelize-cli db:migrate:undo",
     "test": "node --test \"tests/*.test.js\"",
     "test:gmc": "node --test \"tests/_gmc/*.test.js\"",
+    "test:comms": "node tests/_comms/inbound.test.js",
+    "test:comms:api": "node tests/_comms/controller.test.js",
     "seed": "node seeders/seed.js",
     "set-password": "node scripts/set-password.js"
   },
@@ -18,6 +20,7 @@
   "license": "ISC",
   "type": "commonjs",
   "dependencies": {
+    "@jspawn/qpdf-wasm": "0.0.2",
     "bcryptjs": "^3.0.3",
     "cors": "^2.8.6",
     "dotenv": "^17.2.3",
