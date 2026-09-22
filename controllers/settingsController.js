@@ -241,6 +241,7 @@ const getComms = async (req, res) => {
 const updateComms = async (req, res) => {
   try {
     const allowed = ['wabaId', 'appId', 'appSecret', 'accessToken', 'verifyToken', 'graphVersion',
+      'pageId', 'igId', 'pageAccessToken',
       'autoLink', 'markReadOnOpen', 'warnNoConsent', 'archiveUnlinkedDays', 'mediaMaxMb', 'monthlyBudgetKes'];
     const changes = {};
     for (const k of allowed) if (req.body[k] !== undefined) changes[k] = req.body[k];
@@ -249,7 +250,23 @@ const updateComms = async (req, res) => {
     const before = await getCommsConfig({ redact: true });
     const cfg = await setCommsConfig(changes);
 
-    const secretsChanged = ['appSecret', 'accessToken', 'verifyToken'].filter((k) => changes[k]);
+    // Register the Messenger (Facebook Page) and Instagram channels so the
+    // webhook can route inbound events to them. The Page/IG id is the routable
+    // identity; the page token (sends both) lives in Settings, not here.
+    if (cfg.pageId) {
+      await db.MessagingChannel.findOrCreate({
+        where: { externalId: String(cfg.pageId) },
+        defaults: { channel: 'messenger', externalId: String(cfg.pageId), label: 'Facebook Page', isActive: true },
+      }).then(([row]) => (row.channel === 'messenger' ? null : row.update({ channel: 'messenger' })));
+    }
+    if (cfg.igId) {
+      await db.MessagingChannel.findOrCreate({
+        where: { externalId: String(cfg.igId) },
+        defaults: { channel: 'instagram', externalId: String(cfg.igId), label: 'Instagram', isActive: true },
+      }).then(([row]) => (row.channel === 'instagram' ? null : row.update({ channel: 'instagram' })));
+    }
+
+    const secretsChanged = ['appSecret', 'accessToken', 'verifyToken', 'pageAccessToken'].filter((k) => changes[k]);
     recordSettingChanges({
       user: req.user, area: 'WhatsApp', before, after: cfg, secretsChanged,
       fields: {
@@ -258,6 +275,9 @@ const updateComms = async (req, res) => {
         appSecret:           { key: 'comms.appSecret',           label: 'Meta App Secret' },
         accessToken:         { key: 'comms.accessToken',         label: 'Access token' },
         verifyToken:         { key: 'comms.verifyToken',         label: 'Webhook verify token' },
+        pageId:              { key: 'comms.pageId',              label: 'Facebook Page ID' },
+        igId:                { key: 'comms.igId',                label: 'Instagram account ID' },
+        pageAccessToken:     { key: 'comms.pageAccessToken',     label: 'Page access token' },
         graphVersion:        { key: 'comms.graphVersion',        label: 'Graph API version' },
         autoLink:            { key: 'comms.autoLink',            label: 'Auto-link on a unique phone match' },
         markReadOnOpen:      { key: 'comms.markReadOnOpen',      label: 'Send read receipts on open' },

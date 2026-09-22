@@ -11,6 +11,7 @@ const { getCommsConfig } = require('../utils/commsConfig');
 const { createMedicalDocument } = require('../utils/medicalDocumentCreate');
 const pdfUnlock = require('../utils/pdfUnlock');
 const whatsappApi = require('../services/whatsappApi');
+const metaMessagingApi = require('../services/metaMessagingApi');
 const commsAnalytics = require('../services/commsAnalytics');
 const appointmentController = require('./appointmentController');
 const db = require('../models');
@@ -42,9 +43,12 @@ const windowOpen = (conv) => !!(conv.windowExpiresAt && new Date(conv.windowExpi
 const formatConversation = (c) => ({
   id: c.id,
   channelId: c.channelId,
-  channel: c.messagingChannel ? { id: c.messagingChannel.id, label: c.messagingChannel.label, displayPhone: c.messagingChannel.displayPhone } : null,
+  channel: c.messagingChannel ? { id: c.messagingChannel.id, channel: c.messagingChannel.channel, label: c.messagingChannel.label, displayPhone: c.messagingChannel.displayPhone } : null,
   externalUserId: c.externalUserId,
-  displayNumber: display(c.externalUserId),
+  // externalUserId is a phone (WhatsApp) or a PSID/IGSID (Messenger/Instagram).
+  // Only the phone is meaningful to a human, so format it for WhatsApp only —
+  // a PSID run through the phone formatter would read as a fake number.
+  displayNumber: (!c.messagingChannel || c.messagingChannel.channel === 'whatsapp') ? display(c.externalUserId) : null,
   profileName: c.profileName,
   contactType: c.contactType,
   organisation: c.organisation ? { id: c.organisation.id, name: c.organisation.name, type: c.organisation.type } : null,
@@ -95,7 +99,7 @@ const formatMessage = (m) => ({
 });
 
 const CONV_INCLUDE = [
-  { model: MessagingChannel, as: 'messagingChannel', attributes: ['id', 'label', 'displayPhone'] },
+  { model: MessagingChannel, as: 'messagingChannel', attributes: ['id', 'channel', 'label', 'displayPhone'] },
   { model: Patient, as: 'patient', attributes: ['id', 'uhid', 'firstName', 'lastName', 'phone', 'whatsappOptIn'] },
   { model: ExternalOrganisation, as: 'organisation', attributes: ['id', 'name', 'type'] },
   { model: User, as: 'assignedTo', attributes: ['id', 'firstName', 'lastName', 'role'] },
@@ -126,30 +130,51 @@ const defaultChannel = async () => MessagingChannel.findOne({ where: { channel: 
  * message, or throws { code: 'windowClosed' } / a normalised Meta error.
  */
 const deliverMessage = async (conv, channel, payload, user) => {
+  const isMeta = channel.channel === 'messenger' || channel.channel === 'instagram';
   const isTemplate = payload.kind === 'template';
+  // Templates are a WhatsApp-only, out-of-window mechanism. Messenger/Instagram
+  // have no template equivalent — they can only reply inside the 24-hour window.
+  if (isMeta && isTemplate) {
+    const e = new Error('Templates are a WhatsApp feature. Messenger and Instagram can only reply within the 24-hour window.');
+    e.code = 'templateUnsupported';
+    throw e;
+  }
   if (!isTemplate && !windowOpen(conv)) {
-    const e = new Error('This chat is outside the 24-hour window — send an approved template instead.');
+    const e = new Error(isMeta
+      ? 'This chat is outside the 24-hour window — you can only reply within 24 hours of the last message.'
+      : 'This chat is outside the 24-hour window — send an approved template instead.');
     e.code = 'windowClosed';
     throw e;
   }
   const to = conv.externalUserId;
   let apiRes;
   let row = {
-    conversationId: conv.id, channel: 'whatsapp', direction: 'out', patientId: conv.patientId || null,
+    conversationId: conv.id, channel: channel.channel, direction: 'out', patientId: conv.patientId || null,
     sentById: user.id, status: 'sent', statusAt: new Date(),
   };
 
   if (payload.kind === 'text') {
-    apiRes = await whatsappApi.sendText(channel.externalId, to, payload.text);
+    apiRes = isMeta
+      ? await metaMessagingApi.sendText(to, payload.text)
+      : await whatsappApi.sendText(channel.externalId, to, payload.text);
     row = { ...row, type: 'text', body: payload.text };
   } else if (payload.kind === 'template') {
     apiRes = await whatsappApi.sendTemplate(channel.externalId, to, payload.name, payload.language || 'en', payload.components || []);
     row = { ...row, type: 'template', templateName: payload.name, templateParams: payload.params || null, body: payload.preview || `[template: ${payload.name}]` };
   } else if (payload.kind === 'media') {
+    // Outbound media on Messenger/Instagram needs the attachment-upload API —
+    // not built yet, so fail with a clear message (inbound media still works).
+    if (isMeta) {
+      const e = new Error('Sending attachments on Messenger/Instagram is not supported yet — reply with text.');
+      e.code = 'mediaUnsupported';
+      throw e;
+    }
     apiRes = await whatsappApi.sendMedia(channel.externalId, to, { buffer: payload.buffer, mime: payload.mime, filename: payload.filename, caption: payload.caption, kind: (payload.mime || '').startsWith('image/') ? 'image' : 'document' });
     row = { ...row, type: (payload.mime || '').startsWith('image/') ? 'image' : 'document', caption: payload.caption || null, mediaPath: payload.storedPath, mediaMime: payload.mime, mediaFileName: payload.filename, mediaSize: payload.size };
   }
-  row.externalMessageId = (apiRes && apiRes.messages && apiRes.messages[0] && apiRes.messages[0].id) || `out-${crypto.randomUUID()}`;
+  row.externalMessageId = isMeta
+    ? ((apiRes && apiRes.message_id) || `out-${crypto.randomUUID()}`)
+    : ((apiRes && apiRes.messages && apiRes.messages[0] && apiRes.messages[0].id) || `out-${crypto.randomUUID()}`);
 
   const message = await ConversationMessage.create(row);
   const now = new Date();
@@ -212,11 +237,18 @@ const FILTER_WHERE = (filter, userId) => {
 
 const list = async (req, res) => {
   try {
-    const { channelId, filter = 'all', search } = req.query;
+    const { channelId, channel, filter = 'all', search } = req.query;
     const page = Math.max(1, parseInt(req.query.page, 10) || 1);
     const limit = 30;
     const where = FILTER_WHERE(filter, req.user.id);
     if (channelId) where.channelId = Number(channelId);
+    // Filter by channel TYPE (whatsapp / messenger / instagram) — the Inbox tab
+    // strip uses this. Resolve the type to its channel ids; -1 matches nothing
+    // so an as-yet-unconnected channel shows an empty (not a full) list.
+    if (channel && ['whatsapp', 'messenger', 'instagram'].includes(channel)) {
+      const chans = await MessagingChannel.findAll({ where: { channel }, attributes: ['id'] });
+      where.channelId = { [Op.in]: chans.length ? chans.map((c) => c.id) : [-1] };
+    }
     if (search) {
       const like = { [Op.like]: `%${String(search).replace(/[%_]/g, '')}%` };
       where[Op.or] = [{ profileName: like }, { externalUserId: like }, { topic: like }, { lastMessagePreview: like }];

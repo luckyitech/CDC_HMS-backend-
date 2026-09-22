@@ -27,6 +27,9 @@ const K = {
   accessToken:        'comms.accessToken',       // encrypted — System User token (sends)
   verifyToken:        'comms.verifyToken',       // encrypted — our webhook handshake token
   graphVersion:       'comms.graphVersion',      // Graph API version, e.g. v25.0
+  pageId:             'comms.pageId',             // Facebook Page id — Messenger channel + webhook routing
+  igId:               'comms.igId',               // Instagram account id — IG channel + webhook routing
+  pageAccessToken:    'comms.pageAccessToken',    // encrypted — Page access token (sends Messenger + Instagram)
   autoLink:           'comms.autoLink',           // link a thread to a patient on a unique phone match
   markReadOnOpen:     'comms.markReadOnOpen',     // send Meta read receipts when staff open a thread
   warnNoConsent:      'comms.warnNoConsent',      // warn (not block) when sending to a non-opted-in patient
@@ -39,6 +42,8 @@ const K = {
 const DEFAULTS = {
   wabaId: '',
   appId: '',
+  pageId: '',
+  igId: '',
   graphVersion: 'v25.0',
   autoLink: true,
   markReadOnOpen: true,
@@ -50,7 +55,7 @@ const DEFAULTS = {
 
 // Which stored keys are secrets — never returned to the browser, logged as
 // "(changed)" by the settings audit.
-const SECRET_FIELDS = ['appSecret', 'accessToken', 'verifyToken'];
+const SECRET_FIELDS = ['appSecret', 'accessToken', 'verifyToken', 'pageAccessToken'];
 
 // Lazy so a missing CARELINK_ENCRYPTION_KEY fails with a clear message when a
 // secret is saved/used, not by crashing the API at boot.
@@ -88,6 +93,8 @@ const getCommsConfig = async ({ redact = true } = {}) => {
   const cfg = {
     wabaId:              m[K.wabaId] || DEFAULTS.wabaId,
     appId:               m[K.appId] || DEFAULTS.appId,
+    pageId:              m[K.pageId] || DEFAULTS.pageId,
+    igId:                m[K.igId] || DEFAULTS.igId,
     graphVersion:        m[K.graphVersion] || DEFAULTS.graphVersion,
     autoLink:            bool(m[K.autoLink], DEFAULTS.autoLink),
     markReadOnOpen:      bool(m[K.markReadOnOpen], DEFAULTS.markReadOnOpen),
@@ -98,16 +105,23 @@ const getCommsConfig = async ({ redact = true } = {}) => {
     hasAppSecret:        !!m[K.appSecret],
     hasAccessToken:      !!m[K.accessToken],
     hasVerifyToken:      !!m[K.verifyToken],
+    hasPageAccessToken:  !!m[K.pageAccessToken],
     lastWebhookAt:       m[K.lastWebhookAt] || null,
   };
   // Enough to receive (verify + secret) and send (token). Numbers are added
   // separately as MessagingChannels; "connected" here means the credentials.
   cfg.isConfigured = !!(cfg.hasAppSecret && cfg.hasAccessToken && cfg.hasVerifyToken);
+  // Messenger / Instagram share the app secret + verify token (one webhook) but
+  // send through a Facebook Page access token. A channel is "connectable" once
+  // its id and the page token are present (business verification aside).
+  cfg.isMessengerConfigured  = !!(cfg.hasAppSecret && cfg.hasVerifyToken && cfg.hasPageAccessToken && cfg.pageId);
+  cfg.isInstagramConfigured  = !!(cfg.hasAppSecret && cfg.hasVerifyToken && cfg.hasPageAccessToken && cfg.igId);
   if (!redact) {
     const c = cryptoUtil();
-    cfg.appSecret   = m[K.appSecret]   ? c.decrypt(m[K.appSecret])   : '';
-    cfg.accessToken = m[K.accessToken] ? c.decrypt(m[K.accessToken]) : '';
-    cfg.verifyToken = m[K.verifyToken] ? c.decrypt(m[K.verifyToken]) : '';
+    cfg.appSecret       = m[K.appSecret]       ? c.decrypt(m[K.appSecret])       : '';
+    cfg.accessToken     = m[K.accessToken]     ? c.decrypt(m[K.accessToken])     : '';
+    cfg.verifyToken     = m[K.verifyToken]     ? c.decrypt(m[K.verifyToken])     : '';
+    cfg.pageAccessToken = m[K.pageAccessToken] ? c.decrypt(m[K.pageAccessToken]) : '';
   }
   return cfg;
 };
@@ -122,6 +136,9 @@ const setCommsConfig = async (changes = {}) => {
 
   if (changes.wabaId !== undefined)       await write(K.wabaId, changes.wabaId.trim());
   if (changes.appId !== undefined)        await write(K.appId, changes.appId.trim());
+  if (changes.pageId !== undefined)       await write(K.pageId, changes.pageId.trim());
+  if (changes.igId !== undefined)         await write(K.igId, changes.igId.trim());
+  if (changes.pageAccessToken)            await write(K.pageAccessToken, cryptoUtil().encrypt(changes.pageAccessToken));
   if (changes.graphVersion !== undefined) await write(K.graphVersion, changes.graphVersion.trim() || DEFAULTS.graphVersion);
   if (changes.appSecret)                  await write(K.appSecret, cryptoUtil().encrypt(changes.appSecret));
   if (changes.accessToken)                await write(K.accessToken, cryptoUtil().encrypt(changes.accessToken));

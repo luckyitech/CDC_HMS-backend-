@@ -4,7 +4,8 @@ const crypto = require('crypto');
 const router = express.Router();
 const { verifySignature } = require('../utils/webhookSignature');
 const { getCommsConfig } = require('../utils/commsConfig');
-const { processWebhook } = require('../services/whatsappInbound');
+const { processWebhook: processWhatsapp } = require('../services/whatsappInbound');
+const { processWebhook: processMeta } = require('../services/metaMessagingInbound');
 const { webhookLimiter } = require('../middleware/rateLimiter');
 
 // ---------------------------------------------------------------------------
@@ -77,7 +78,19 @@ router.post('/', webhookLimiter, express.raw({ type: '*/*', limit: '1mb' }), asy
   setImmediate(async () => {
     try {
       const payload = JSON.parse(raw.toString('utf8'));
-      await processWebhook(payload);
+      // One webhook, one app secret, three products. Route by the payload's
+      // `object`: WhatsApp and the Messenger platform (Facebook Pages +
+      // Instagram) send different shapes to the same URL.
+      switch (payload.object) {
+        case 'whatsapp_business_account':
+          await processWhatsapp(payload); break;
+        case 'page':
+          await processMeta(payload, 'messenger'); break;
+        case 'instagram':
+          await processMeta(payload, 'instagram'); break;
+        default:
+          notice(`webhook object not handled: ${payload.object}`);
+      }
     } catch (err) {
       console.error('[Comms] webhook processing error:', err.message);
     }
