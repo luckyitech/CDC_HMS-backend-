@@ -8,8 +8,12 @@ const Setting = defineModel('Setting', {
     allowNull: false,
     unique: true,
   },
+  // TEXT, not STRING: this store also holds encrypted credentials (Meta App
+  // Secret, WhatsApp System User token, Facebook Page token) whose encrypted
+  // form is ~2× the plaintext — a long-lived token overflows VARCHAR(255).
+  // Widened by migration 20260922000003.
   value: {
-    type: DataTypes.STRING,
+    type: DataTypes.TEXT,
     allowNull: false,
   },
 });
