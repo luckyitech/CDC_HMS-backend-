@@ -1,6 +1,7 @@
 const { Op, fn, col } = require('sequelize');
 const { success, error } = require('../utils/response');
-const { clinicToday } = require('../utils/clinicTime');
+const { clinicToday, clinicClockTime, clinicMidnight } = require('../utils/clinicTime');
+const { parseJsonColumn } = require('../utils/jsonColumn');
 const db = require('../models');
 
 // Shared utilities — eliminates duplication across controllers
@@ -826,6 +827,202 @@ const getPatientVisits = async (req, res) => {
   }
 };
 
+/**
+ * GET /api/reports/attendance
+ * Per-visit attendance register over a date range: one row per queue entry
+ * (visit), with the patient, the doctor(s) who saw them, the visit's charge
+ * sheet (services), and the follow-up appointment booked during that visit.
+ *
+ * Read-only over existing tables — no schema change.
+ *
+ * Query params: from, to — YYYY-MM-DD, inclusive
+ * Authorization: doctor, staff, admin
+ */
+const getAttendance = async (req, res) => {
+  try {
+    const { from, to } = req.query;
+
+    const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+    if (!from || !to || !DATE_RE.test(from) || !DATE_RE.test(to)) {
+      return error(res, "Both 'from' and 'to' dates are required in YYYY-MM-DD format", 400);
+    }
+    if (from > to) {
+      return error(res, "'from' date must be on or before 'to' date", 400);
+    }
+    // Guard against unbounded queries — one year of a per-visit list is plenty
+    if (new Date(to) - new Date(from) > 366 * 24 * 60 * 60 * 1000) {
+      return error(res, 'Date range too large. Maximum is 1 year per attendance export.', 400);
+    }
+
+    const { Queue, Appointment, Patient, User } = db;
+
+    // Clinic-wall-clock day boundaries, so a visit lands on the day it happened
+    // regardless of the server's timezone (mirrors how the date column is built).
+    const dayAfter = (isoDate) => {
+      const [y, m, d] = isoDate.split('-').map(Number);
+      const a = new Date(Date.UTC(y, m - 1, d, 12)); // noon anchor — DST-safe
+      a.setUTCDate(a.getUTCDate() + 1);
+      return a.toISOString().slice(0, 10);
+    };
+    const startInstant = clinicMidnight(from);
+    const endInstant = clinicMidnight(dayAfter(to)); // exclusive upper bound
+
+    const visits = await Queue.findAll({
+      attributes: [
+        'id', 'PatientId', 'assignedDoctorId', 'createdAt', 'status', 'destination', 'service',
+        'consultationSessions',
+        'finalCharges', 'finalProcedures', 'finalSupplies',
+        'selectedCharges', 'selectedProcedures',
+      ],
+      where: { createdAt: { [Op.gte]: startInstant, [Op.lt]: endInstant } },
+      include: [
+        { model: Patient, attributes: ['id', 'uhid', 'firstName', 'lastName'] },
+        { model: User, as: 'assignedDoctor', attributes: ['id', 'firstName', 'lastName'] },
+      ],
+      order: [['createdAt', 'ASC']],
+    });
+
+    const patientIds = [...new Set(visits.map((v) => v.PatientId).filter((id) => id != null))];
+
+    // One appointment fetch covers both needs:
+    //  - booked-vs-walk-in: a non-cancelled appointment DATED on the visit day
+    //  - follow-up: a non-cancelled appointment BOOKED on the visit day
+    const appointments = patientIds.length
+      ? await Appointment.findAll({
+          attributes: ['PatientId', 'date', 'bookedAt', 'status'],
+          where: {
+            PatientId: { [Op.in]: patientIds },
+            status: { [Op.ne]: 'cancelled' },
+            [Op.or]: [
+              { date: { [Op.between]: [from, to] } },
+              { bookedAt: { [Op.gte]: startInstant, [Op.lt]: endInstant } },
+            ],
+          },
+          raw: true,
+        })
+      : [];
+
+    // Booked (patient had an appointment dated that day) vs walk-in
+    const bookedKeys = new Set(
+      appointments
+        .filter((a) => a.date && a.date >= from && a.date <= to)
+        .map((a) => `${a.PatientId}_${a.date}`)
+    );
+
+    // Follow-ups grouped by the day the booking was MADE: patientId_bookedDay -> [dates]
+    const followUpsByBookedDay = new Map();
+    for (const a of appointments) {
+      if (!a.bookedAt || !a.date) continue;
+      const bookedDay = clinicToday(new Date(a.bookedAt));
+      const key = `${a.PatientId}_${bookedDay}`;
+      if (!followUpsByBookedDay.has(key)) followUpsByBookedDay.set(key, []);
+      followUpsByBookedDay.get(key).push(a.date);
+    }
+
+    // The follow-up booked during a visit = earliest appointment, booked that
+    // day, dated on/after the visit day. Blank if none was booked at the visit.
+    const followUpFor = (patientId, visitDate) => {
+      if (patientId == null) return null;
+      const candidates = (followUpsByBookedDay.get(`${patientId}_${visitDate}`) || [])
+        .filter((d) => d >= visitDate)
+        .sort();
+      return candidates.length ? candidates[0] : null;
+    };
+
+    // The visit's charge sheet in one list. Prefer the final (discharge) bill;
+    // fall back to the doctor's selected charges when the visit isn't billed yet.
+    const buildServices = (v) => {
+      const asList = (col2) => {
+        const parsed = parseJsonColumn(col2);
+        return Array.isArray(parsed) ? parsed : [];
+      };
+      const supplyLabel = (s) => {
+        const name = (s && (s.name || s.label)) || '';
+        const qty = s && Number(s.quantity);
+        return qty > 1 ? `${name} ×${qty}` : name;
+      };
+
+      const finalItems = [
+        ...asList(v.finalCharges),
+        ...asList(v.finalProcedures),
+        ...asList(v.finalSupplies).map(supplyLabel),
+      ].filter((s) => typeof s === 'string' && s.trim());
+
+      if (finalItems.length) return { items: finalItems, billed: true };
+
+      const selected = [
+        ...asList(v.selectedCharges),
+        ...asList(v.selectedProcedures),
+      ].filter((s) => typeof s === 'string' && s.trim());
+
+      return { items: selected, billed: false };
+    };
+
+    // The doctor(s) who saw the patient this visit — every doctor from the
+    // consultation sessions (internal referrals included), in order; falls back
+    // to the assigned doctor.
+    const doctorsFor = (v) => {
+      const sessions = parseJsonColumn(v.consultationSessions);
+      const names = [];
+      if (Array.isArray(sessions)) {
+        for (const s of sessions) {
+          const n = s && s.doctorName;
+          if (n && !names.includes(n)) names.push(n);
+        }
+      }
+      if (!names.length && v.assignedDoctor) {
+        const n = formatDoctorName(v.assignedDoctor);
+        if (n) names.push(n);
+      }
+      return names;
+    };
+
+    const uniquePatients = new Set();
+    let booked = 0;
+    let walkIn = 0;
+
+    const rows = visits.map((v) => {
+      const created = new Date(v.createdAt);
+      const date = clinicToday(created);
+      const patientId = v.PatientId;
+      const isBooked = patientId != null && bookedKeys.has(`${patientId}_${date}`);
+      if (isBooked) booked += 1; else walkIn += 1;
+      if (patientId != null) uniquePatients.add(patientId);
+
+      const svc = buildServices(v);
+
+      return {
+        id: v.id,
+        createdAt: created.toISOString(), // sort key for the client
+        date,
+        time: clinicClockTime({ hour12: false }, created), // "08:42"
+        patientName: v.Patient ? formatPatientName(v.Patient) : '—',
+        uhid: v.Patient ? v.Patient.uhid : null,
+        type: isBooked ? 'Booked' : 'Walk-in',
+        doctors: doctorsFor(v),
+        services: svc.items.join(', '),
+        billed: svc.billed,
+        followUp: followUpFor(patientId, date),
+      };
+    });
+
+    return success(res, {
+      from,
+      to,
+      rows,
+      totals: {
+        visits: rows.length,
+        uniquePatients: uniquePatients.size,
+        booked,
+        walkIn,
+      },
+    });
+  } catch (err) {
+    console.error('Report.getAttendance error:', err);
+    return error(res, 'Failed to generate attendance register', 500);
+  }
+};
+
 // ====================================
 // EXPORTS
 // ====================================
@@ -837,4 +1034,5 @@ module.exports = {
   getHighRiskPatients,
   getClinicOverview,
   getPatientVisits,
+  getAttendance,
 };

@@ -112,4 +112,16 @@ router.get(
   reportController.getPatientVisits
 );
 
+// ------------------------------------
+// GET /api/reports/attendance — Per-visit attendance register over a range
+// ------------------------------------
+// Authorization: Doctor, Staff, Admin
+// Query params: from, to (YYYY-MM-DD, required — validated in controller)
+router.get(
+  '/attendance',
+  authenticate,
+  authorize('doctor', 'staff', 'admin'),
+  reportController.getAttendance
+);
+
 module.exports = router;
