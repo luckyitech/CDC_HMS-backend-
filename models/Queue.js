@@ -37,6 +37,20 @@ const Queue = defineModel('Queue', {
     defaultValue: null,
   },
 
+  // --- Booking priority (added by 20260923000001) ---
+  // The same-day non-cancelled appointment this visit is for (null = walk-in),
+  // and the slot's clinic-wall-clock start instant. Set at add-to-queue time.
+  // Drive the queue ordering in utils/queuePriority.js. MUST be declared here or
+  // Sequelize silently drops them on write.
+  appointmentId: {
+    type: DataTypes.INTEGER,
+    defaultValue: null,
+  },
+  scheduledTime: {
+    type: DataTypes.DATE,
+    defaultValue: null,
+  },
+
   // Set by the controller when triage starts / ends. Start = the row moves to
   // 'In Triage' (the nurse opens the vitals form); end = vitals are saved for
   // this visit (patientController.recordVitals), or, failing that, the row

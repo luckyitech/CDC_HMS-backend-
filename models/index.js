@@ -154,6 +154,9 @@ BloodSugarReading.belongsTo(Patient);
 Patient.hasMany(Queue);
 Queue.belongsTo(Patient);
 Queue.belongsTo(User, { as: 'assignedDoctor', foreignKey: 'assignedDoctorId' });
+// The booking this visit came from (null = walk-in). Ordering reads the
+// denormalised Queue.scheduledTime; this link is for traceability/auto check-in.
+Queue.belongsTo(Appointment, { as: 'appointment', foreignKey: 'appointmentId' });
 
 Patient.hasMany(Prescription);
 Prescription.belongsTo(Patient);

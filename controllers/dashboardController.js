@@ -6,6 +6,7 @@ const db = require('../models');
 // Reuse existing utilities
 const { getTodayISO, formatPatientName, formatDoctorName } = require('../utils/formatters');
 const { classifyHbA1c } = require('../utils/medicalConstants');
+const { compareQueueItems } = require('../utils/queuePriority');
 
 const {
   User,
@@ -104,12 +105,14 @@ const getDoctorStats = async (doctorId) => {
     Queue.count({ where: { assignedDoctorId: doctorId, createdAt: todayRange, status: 'Completed' } }),
   ]);
 
-  // Next patient in queue (Urgent first, then oldest arrival)
-  const nextPatient = await Queue.findOne({
+  // Next patient in queue — booking-priority order (utils/queuePriority):
+  // Urgent, then on-time booked by slot, then late booked, then walk-ins.
+  const awaitingDoctor = await Queue.findAll({
     where: { assignedDoctorId: doctorId, createdAt: todayRange, status: 'Awaiting Doctor' },
     include: [{ model: Patient, attributes: ['uhid', 'firstName', 'lastName'] }],
-    order: [['priority', 'DESC'], ['createdAt', 'ASC']],
   });
+  awaitingDoctor.sort(compareQueueItems);
+  const nextPatient = awaitingDoctor[0] || null;
 
   return {
     myPatients: myPatientIds.length,

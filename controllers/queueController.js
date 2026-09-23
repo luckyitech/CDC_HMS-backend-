@@ -1,10 +1,11 @@
 const { Op } = require('sequelize');
 const { success, error } = require('../utils/response');
 const { broadcast } = require('../utils/sseManager');
-const { clinicStartOfDay } = require('../utils/clinicTime');
+const { clinicStartOfDay, clinicToday } = require('../utils/clinicTime');
+const { compareQueueItems, bookingState, slotInstant } = require('../utils/queuePriority');
 const db = require('../models');
 
-const { Queue, Patient, User } = db;
+const { Queue, Patient, User, Appointment } = db;
 
 // Statuses in which the patient is with nursing, not a doctor. Leaving one of
 // these for 'Awaiting Doctor' is the nurse → doctor dispatch (sentToDoctorAt).
@@ -84,6 +85,11 @@ const formatItem = (item, position) => {
     arrivalTime:           formatTime(q.createdAt),
     createdAt:             q.createdAt,
     priority:              q.priority,
+    // Booking priority (utils/queuePriority): 'urgent' | 'booked-on-time' |
+    // 'booked-late' | 'booked-walkin' | 'walk-in'. scheduledTime is the slot start.
+    bookingState:          bookingState(q),
+    scheduledTime:         q.scheduledTime || null,
+    appointmentId:         q.appointmentId || null,
     status:                q.status,
     reason:                q.reason,
     destination:           q.destination || 'Outpatient',
@@ -178,6 +184,33 @@ const add = async (req, res) => {
     // and the matching visitType check in PatientSearch.jsx → handleConfirmAddToQueue()
     const initialStatus = isReview ? 'Awaiting Doctor' : 'Awaiting Triage';
 
+    // Booking link: if this patient has a non-cancelled appointment today, this
+    // visit is "booked" — capture the earliest slot's start instant so the queue
+    // can prioritise them (utils/queuePriority). No appointment today = walk-in.
+    let appointmentId = null;
+    let scheduledTime = null;
+    const todaysAppts = await Appointment.findAll({
+      where: {
+        PatientId: { [Op.in]: family.patientIds },
+        date:      clinicToday(),
+        status:    { [Op.ne]: 'cancelled' },
+      },
+      raw: true,
+    });
+    if (todaysAppts.length) {
+      const withInstant = todaysAppts
+        .map((a) => ({ id: a.id, t: slotInstant(a.date, a.timeSlot) }))
+        .filter((x) => x.t)
+        .sort((p, q) => p.t - q.t);
+      if (withInstant.length) {
+        appointmentId = withInstant[0].id;
+        scheduledTime = withInstant[0].t;
+      } else {
+        // Booking exists but the slot string was unparseable — still link it.
+        appointmentId = todaysAppts[0].id;
+      }
+    }
+
     const item = await Queue.create({
       PatientId:        patient.id,
       priority,
@@ -186,6 +219,8 @@ const add = async (req, res) => {
       destination,
       service:          destination === 'Radiology' ? service : null,
       assignedDoctorId: isReview ? assignedDoctorId : null,
+      appointmentId,
+      scheduledTime,
       addedBy:          req.user.name || 'Unknown',
     });
 
@@ -197,9 +232,9 @@ const add = async (req, res) => {
     if (initialStatus === 'Awaiting Triage') {
       const waitingItems = await Queue.findAll({
         where:      { status: 'Awaiting Triage' },
-        order:      [['priority', 'DESC'], ['createdAt', 'ASC']],
-        attributes: ['id'],
+        attributes: ['id', 'priority', 'scheduledTime', 'createdAt'],
       });
+      waitingItems.sort(compareQueueItems); // booking-priority order
       position = waitingItems.findIndex(w => w.id === item.id) + 1;
     }
 
@@ -231,8 +266,11 @@ const list = async (req, res) => {
         ],
       },
       include: queueIncludes,
-      order:   [['priority', 'DESC'], ['createdAt', 'ASC']], // Urgent first, then arrival
     });
+
+    // Booking-priority order (utils/queuePriority): Urgent, then on-time booked by
+    // slot, then late booked, then walk-ins — all consumers share this comparator.
+    items.sort(compareQueueItems);
 
     // Assign sequential positions only to Waiting items (already in correct order)
     let waitingPos = 0;
@@ -374,12 +412,13 @@ const stats = async (req, res) => {
 // ------------------------------------
 const callNext = async (req, res) => {
   try {
-    // First Waiting item: Urgent patients before Normal, oldest first within each
-    const next = await Queue.findOne({
+    // First Waiting item under booking-priority order (utils/queuePriority)
+    const waiting = await Queue.findAll({
       where:   { status: 'Awaiting Triage' },
-      order:   [['priority', 'DESC'], ['createdAt', 'ASC']],
       include: queueIncludes,
     });
+    waiting.sort(compareQueueItems);
+    const next = waiting[0];
 
     if (!next) return error(res, 'No patients waiting', 404);
 
