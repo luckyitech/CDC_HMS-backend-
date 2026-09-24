@@ -6,6 +6,7 @@
 const { Op } = require('sequelize');
 const { success, error } = require('../utils/response');
 const { countLeaveDays, datesInRange, rangesOverlap } = require('../utils/leaveDays');
+const { PERMISSIONS, passesAdminGate } = require('../constants/permissions');
 const db = require('../models');
 const sequelize = require('../config/database');
 
@@ -19,6 +20,19 @@ const ALL_DAY = 'ALL_DAY';
 
 // Only these count against entitlement, and only these are shown as "taken".
 const COUNTS_AS_TAKEN = new Set(['Approved']);
+
+/**
+ * May this person decide (approve/reject) leave for this staff member?
+ *
+ * The same answer the PATCH …/leaves/:id gate gives — authorize('admin',
+ * 'users.write'), admin.access included — with one rule on top: nobody
+ * decides their own leave. Recording your own leave is always a request,
+ * whoever you are (decision, Emu, 24 Sep 2026). Used both when leave is
+ * recorded (approve on the spot, or file as pending) and when it is decided
+ * later, so the two paths cannot disagree.
+ */
+const canDecideLeaveFor = (actingUser, staffUser) =>
+  passesAdminGate(actingUser, PERMISSIONS.USERS_WRITE) && actingUser.id !== staffUser.id;
 
 const formatLeave = (leave) => ({
   id:          leave.id,
@@ -99,10 +113,12 @@ const list = async (req, res) => {
 
 /**
  * POST /api/staff/:employeeId/leaves
- * Records leave. An admin's entry is approved immediately; a staff member
- * requesting their own leave creates a pending request.
+ * Records leave. Someone who may approve leave for this person approves it on
+ * the spot; anyone else — including a manager recording their OWN leave —
+ * creates a pending request for someone else to decide.
  *
- * Authorization: Admin, or the staff member themselves
+ * Authorization: anyone who may view staff (users.view), or the staff member
+ * themselves — see adminOrSelf in routes/staff.js.
  */
 const create = async (req, res) => {
   const { leaveType, startDate, endDate, reason, excludeWeekends } = req.body;
@@ -132,7 +148,7 @@ const create = async (req, res) => {
       );
     }
 
-    const isAdmin = req.user.role === 'admin';
+    const isAdmin = canDecideLeaveFor(req.user, user);
 
     const leave = await StaffLeave.create({
       UserId:    user.id,
@@ -202,11 +218,18 @@ const applyApprovalSideEffects = async (leave, staffUser, actingUser) => {
  * PATCH /api/staff/:employeeId/leaves/:id
  * Approve, reject or cancel.
  *
- * Authorization: Admin only
+ * Authorization: users.write at the route. Approving or rejecting your OWN
+ * leave is refused here whatever you hold — the route gate cannot know whose
+ * record it is. Cancelling your own request is still allowed: withdrawing a
+ * request is not deciding it.
  */
 const decide = async (req, res) => {
   const { status, decisionNote } = req.body;
   const staffUser = req.staffUser;
+
+  if (status !== 'Cancelled' && !canDecideLeaveFor(req.user, staffUser)) {
+    return error(res, 'You cannot approve or reject your own leave', 403);
+  }
 
   try {
     const leave = await StaffLeave.findOne({ where: { id: req.params.id, UserId: staffUser.id } });
@@ -317,4 +340,4 @@ const setBalances = async (req, res) => {
   }
 };
 
-module.exports = { list, create, decide, setBalances, LEAVE_TYPES };
+module.exports = { list, create, decide, setBalances, LEAVE_TYPES, canDecideLeaveFor };

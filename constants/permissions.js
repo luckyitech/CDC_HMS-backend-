@@ -199,6 +199,17 @@ const PERMISSIONS = {
   HR_CHECKIN: 'hr.checkin',
   HR_VIEW:    'hr.view',
   HR_WRITE:   'hr.write',
+
+  // Confidential staff documents — a contract, an appraisal, a disciplinary
+  // letter, anything on a staff file marked "Admin only", and the archived
+  // files. Like PERMISSIONS_GRANT this is deliberately NOT covered by
+  // admin.access (tests/permissionVocabulary.test.js enforces the exclusion)
+  // and held by nobody by role: being an administrator runs the clinic; reading
+  // a colleague's contract is a separate, explicitly granted trust. The true
+  // 'admin' account remains a fallback holder, as for every capability. Seeded
+  // to a named account by migration 20260923000010. Decision (Emu, 24 Sep 2026):
+  // "even an admin cannot see confidential data if the gate is not checked".
+  HR_CONFIDENTIAL: 'hr.confidential',
 };
 
 const ALL_PERMISSIONS = Object.values(PERMISSIONS);
@@ -629,6 +640,16 @@ const PERMISSION_GROUPS = [
         access: PERMISSIONS.USERS_VIEW, write: PERMISSIONS.USERS_WRITE,
         accessLabel: 'Can view users', writeLabel: 'Can create and edit users',
         roleDefault: 'Administrators' },
+      { key: 'users-confidential', name: 'Confidential staff documents', appliesIn: 'Admin, HR Suite',
+        description: 'Contracts, appraisals, disciplinary letters — anything on a staff file '
+          + 'marked "Admin only", and the archived files. Not part of full administrator '
+          + 'access: an administrator can manage the file without reading what is in the '
+          + 'confidential drawer.',
+        access: PERMISSIONS.HR_CONFIDENTIAL, accessLabel: 'Can see and classify confidential staff documents',
+        roleDefault: 'Nobody by role — must be granted',
+        warning: 'This person will be able to read every confidential document on every '
+          + 'staff file, and to mark documents confidential or share them with the staff '
+          + 'member. Full administrator access does not include this.' },
       { key: 'config', name: 'Catalog, wards and settings', appliesIn: 'Admin',
         access: null, write: PERMISSIONS.CONFIG_WRITE,
         writeLabel: 'Can change clinical catalog, wards and system settings',
@@ -713,6 +734,35 @@ const isTrueAdmin = (user) => user?.role === 'admin';
  */
 const canGrantPermissions = (user) =>
   isTrueAdmin(user) || hasPermission(user, PERMISSIONS.PERMISSIONS_GRANT);
+
+/**
+ * Exactly what authorize('admin', capability) would answer, for use INSIDE a
+ * controller or a bespoke middleware.
+ *
+ * Three ways in — the true admin account, a holder of admin.access, or a holder
+ * of the capability itself — unless the capability has been withdrawn from this
+ * person, which beats everything (the same order authorize() checks in).
+ * hasPermission() alone does NOT know about the admin.access bypass, so a
+ * doctor + admin.access (the way the clinic intends to run once the true admin
+ * account is benched) would be refused by it. Mirrors the frontend helper of
+ * the same name in cdc-hms/src/utils/permissions.js. Never gate on
+ * `role === 'admin'` in new code; use this.
+ */
+const passesAdminGate = (user, capability) =>
+  !isDenied(user, capability)
+  && (isTrueAdmin(user)
+      || hasPermission(user, PERMISSIONS.ADMIN_ACCESS)
+      || hasPermission(user, capability));
+
+/**
+ * May this person open the confidential drawer of a staff file?
+ *
+ * An explicit grant of hr.confidential, or the true admin account. NOT
+ * satisfied by admin.access — see HR_CONFIDENTIAL. A withdrawal still wins.
+ */
+const canViewConfidential = (user) =>
+  !isDenied(user, PERMISSIONS.HR_CONFIDENTIAL)
+  && (isTrueAdmin(user) || hasPermission(user, PERMISSIONS.HR_CONFIDENTIAL));
 
 /**
  * A JSON-array column, as a real array.
@@ -892,6 +942,8 @@ module.exports = {
   canOpenPortal,
   isTrueAdmin,
   canGrantPermissions,
+  passesAdminGate,
+  canViewConfidential,
   sanitizePermissions,
   sanitizeDeniedPermissions,
 };

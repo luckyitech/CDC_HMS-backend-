@@ -38,6 +38,10 @@ const CHECKED_ELSEWHERE = {
     'middleware/auth.js requireTrueAdmin via canGrantPermissions() — the right to '
     + 'grant capabilities; deliberately not an authorize() argument so admin.access '
     + 'can never satisfy it (tests/permissionsGrant.test.js)',
+  [PERMISSIONS.HR_CONFIDENTIAL]:
+    'controllers/staffDocumentController.js via canViewConfidential() — the '
+    + 'confidential drawer of a staff file; deliberately not an authorize() '
+    + 'argument so admin.access can never satisfy it (tests/adminLiteralGates.test.js)',
 };
 
 // Portal capabilities gate the frontend shell. A portal is a set of screens,

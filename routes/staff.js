@@ -3,6 +3,8 @@ const router = express.Router();
 const { body, param } = require('express-validator');
 const validate = require('../middleware/validate');
 const { authenticate, authorize, requireTrueAdmin } = require('../middleware/auth');
+const { PERMISSIONS, passesAdminGate } = require('../constants/permissions');
+const { error } = require('../utils/response');
 const findStaff = require('../middleware/findStaff');
 const uploadStaffDocument = require('../middleware/uploadStaffDocument');
 const staffController = require('../controllers/staffController');
@@ -14,13 +16,20 @@ const EMPLOYMENT_TYPES    = ['Full-time', 'Part-time', 'Contract', 'Consultant',
 const LEAVE_TYPES         = leaveController.LEAVE_TYPES;
 const LEAVE_DECISIONS     = ['Approved', 'Rejected', 'Cancelled'];
 
-// Lets a staff member reach their own record, and anyone with admin access
+// Lets a staff member reach their own record, and anyone who may view staff
 // reach any record. Declared here rather than inside the controllers so the
 // route file still says who may call each endpoint.
+//
+// "May view staff" is exactly what authorize('admin', 'users.view') admits —
+// the gate on the list this file is opened from — so whoever can see the
+// directory can open a file, and nobody can open a file they could not list.
+// It used to test `role === 'admin'`, which refused a doctor holding
+// admin.access (403 on every file but their own) while every WRITE on the same
+// file already went through authorize('admin', 'users.write') and let them in.
 const adminOrSelf = (req, res, next) => {
-  if (req.user.role === 'admin') return next();
+  if (passesAdminGate(req.user, PERMISSIONS.USERS_VIEW)) return next();
   if (req.staffUser && req.staffUser.id === req.user.id) return next();
-  return res.status(403).json({ success: false, message: 'Access denied' });
+  return error(res, 'Access denied', 403);
 };
 
 // Multer rejects an oversized or wrong-typed file by throwing, which Express
@@ -145,3 +154,6 @@ router.patch('/:employeeId/documents/:id/restore', authenticate, authorize('admi
   staffDocumentController.restore);
 
 module.exports = router;
+// Exposed for tests/adminLiteralGates.test.js, which exercises the gate with a
+// fake req/res and no database.
+module.exports.adminOrSelf = adminOrSelf;

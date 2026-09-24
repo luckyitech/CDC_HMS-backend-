@@ -7,6 +7,7 @@ const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
 const { success, error } = require('../utils/response');
+const { canViewConfidential } = require('../constants/permissions');
 const db = require('../models');
 
 const { StaffDocument, User } = db;
@@ -20,6 +21,19 @@ const CATEGORIES = [
 ];
 
 const VISIBILITIES = ['Staff', 'Admin only'];
+
+// The confidential drawer of a staff file: every document marked 'Admin only',
+// and every archived document (archived ones are the most likely to be
+// sensitive). Reading it, filling it, or moving a document in or out of it
+// needs hr.confidential — an explicit grant that full administrator access
+// does NOT carry (constants/permissions.js HR_CONFIDENTIAL). users.write still
+// lets someone manage the rest of the file: rename a CV's category, archive a
+// certificate, set an expiry.
+//
+// Used to be `role === 'admin'`, which both refused a doctor holding
+// admin.access and let ANY admin read every contract. Now the two questions
+// are separate on purpose.
+const isConfidential = (document) => document.visibility !== 'Staff' || document.isArchived;
 
 const formatSize = (bytes) => {
   if (!bytes && bytes !== 0) return null;
@@ -74,22 +88,23 @@ const discard = (file) => {
 
 /**
  * GET /api/staff/:employeeId/documents
- * Admins see everything; a staff member viewing their own file sees only what
- * is marked visible to them — a contract or disciplinary letter is not theirs
- * to read from here.
+ * A holder of hr.confidential sees everything; anyone else who may open the
+ * file — an administrator without that grant, or the staff member viewing
+ * their own file — sees only what is marked visible to staff. A contract or
+ * disciplinary letter is not theirs to read from here.
  *
- * Authorization: Admin, or the staff member themselves
+ * Authorization: users.view, or the staff member themselves (adminOrSelf)
  */
 const list = async (req, res) => {
-  const isAdmin = req.user.role === 'admin';
+  const confidential = canViewConfidential(req.user);
 
   try {
-    // Archived documents are hidden by default and only an admin can ask for
-    // them — they are the ones most likely to be sensitive.
-    const wantsArchived = isAdmin && req.query.archived === 'true';
+    // Archived documents are hidden by default and only a confidential-drawer
+    // holder can ask for them — they are the ones most likely to be sensitive.
+    const wantsArchived = confidential && req.query.archived === 'true';
 
     const where = { UserId: req.staffUser.id, isArchived: wantsArchived };
-    if (!isAdmin) where.visibility = 'Staff';
+    if (!confidential) where.visibility = 'Staff';
 
     const documents = await StaffDocument.findAll({
       where,
@@ -109,13 +124,13 @@ const list = async (req, res) => {
  * Multipart upload. uploadStaffDocument has already validated extension and
  * MIME type and written the file.
  *
- * Authorization: Admin, or the staff member themselves
+ * Authorization: users.view, or the staff member themselves (adminOrSelf)
  */
 const upload = async (req, res) => {
   if (!req.file) return error(res, 'No file uploaded', 400);
 
   const { category, notes, expiryDate } = req.body;
-  const isAdmin = req.user.role === 'admin';
+  const confidential = canViewConfidential(req.user);
 
   try {
     if (category && !CATEGORIES.includes(category)) {
@@ -130,11 +145,12 @@ const upload = async (req, res) => {
       return error(res, 'Expiry date must be in YYYY-MM-DD format', 400);
     }
 
-    // Only an admin chooses visibility. Anything a staff member uploads about
-    // themselves is visible to them by definition; letting them set it would
-    // also let them mark their own document admin-only and lose sight of it.
+    // Only a confidential-drawer holder chooses visibility. Anything anyone
+    // else uploads — a staff member about themselves, an administrator without
+    // the grant — is visible to the staff member by definition; letting them
+    // file into the drawer would let them create a document they cannot see.
     let visibility = 'Admin only';
-    if (isAdmin) {
+    if (confidential) {
       if (req.body.visibility && !VISIBILITIES.includes(req.body.visibility)) {
         discard(req.file);
         return error(res, 'Invalid visibility', 400);
@@ -172,7 +188,10 @@ const upload = async (req, res) => {
  * PATCH /api/staff/:employeeId/documents/:id
  * Reclassify a document or change who can see it.
  *
- * Authorization: Admin only
+ * Authorization: users.write at the route. A document in the confidential
+ * drawer, and any change of visibility, additionally needs hr.confidential —
+ * without that, "share with staff" would be a one-click way to read a
+ * contract the caller cannot otherwise see.
  */
 const update = async (req, res) => {
   const { category, visibility, notes, expiryDate } = req.body;
@@ -182,6 +201,10 @@ const update = async (req, res) => {
       where: { id: req.params.id, UserId: req.staffUser.id },
     });
     if (!document) return error(res, 'Document not found', 404);
+
+    if ((isConfidential(document) || visibility !== undefined) && !canViewConfidential(req.user)) {
+      return error(res, 'Only a holder of confidential staff documents can do that', 403);
+    }
 
     const updates = {};
     if (category !== undefined) {
@@ -221,7 +244,8 @@ const update = async (req, res) => {
  * Archives the row and leaves the file on disk, matching how patient documents
  * behave. A contract removed by mistake is recoverable.
  *
- * Authorization: Admin only
+ * Authorization: users.write at the route; hr.confidential on top for a
+ * confidential document.
  */
 const archive = async (req, res) => {
   const { reason } = req.body || {};
@@ -231,6 +255,9 @@ const archive = async (req, res) => {
       where: { id: req.params.id, UserId: req.staffUser.id },
     });
     if (!document) return error(res, 'Document not found', 404);
+    if (isConfidential(document) && !canViewConfidential(req.user)) {
+      return error(res, 'Only a holder of confidential staff documents can do that', 403);
+    }
     if (document.isArchived) return error(res, 'This document is already archived', 400);
     if (reason && reason.length > 5000) return error(res, 'Reason is too long. Maximum 5000 characters.', 400);
 
@@ -253,7 +280,8 @@ const archive = async (req, res) => {
  * Undoes an archive. Archiving without a way back makes admins reluctant to
  * tidy up, which leaves the wrong documents on file.
  *
- * Authorization: Admin only
+ * Authorization: users.write at the route; hr.confidential on top, because
+ * the archive is part of the confidential drawer.
  */
 const restore = async (req, res) => {
   try {
@@ -261,6 +289,9 @@ const restore = async (req, res) => {
       where: { id: req.params.id, UserId: req.staffUser.id },
     });
     if (!document) return error(res, 'Document not found', 404);
+    if (!canViewConfidential(req.user)) {
+      return error(res, 'Only a holder of confidential staff documents can do that', 403);
+    }
     if (!document.isArchived) return error(res, 'This document is not archived', 400);
 
     await document.update({
@@ -284,18 +315,18 @@ const restore = async (req, res) => {
  * upload directory statically — otherwise anyone holding a URL could read an
  * employment contract without logging in.
  *
- * Authorization: Admin, or the staff member themselves for documents marked
- * visible to staff
+ * Authorization: users.view or the staff member themselves (adminOrSelf);
+ * a confidential document additionally needs hr.confidential
  */
 const serveFile = async (req, res) => {
-  const isAdmin = req.user.role === 'admin';
+  const confidential = canViewConfidential(req.user);
 
   try {
     const document = await StaffDocument.findOne({
       where: { id: req.params.id, UserId: req.staffUser.id },
     });
     if (!document) return error(res, 'Document not found', 404);
-    if (!isAdmin && document.visibility !== 'Staff') return error(res, 'Access denied', 403);
+    if (!confidential && isConfidential(document)) return error(res, 'Access denied', 403);
 
     // Resolve and confirm the file is inside the upload directory before
     // reading it, so a tampered filePath cannot be used to read other files.
@@ -313,4 +344,4 @@ const serveFile = async (req, res) => {
   }
 };
 
-module.exports = { list, upload, update, archive, restore, serveFile, CATEGORIES, VISIBILITIES };
+module.exports = { list, upload, update, archive, restore, serveFile, CATEGORIES, VISIBILITIES, isConfidential };
