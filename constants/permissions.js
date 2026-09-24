@@ -80,6 +80,15 @@ const PERMISSIONS = {
   CONFIG_WRITE:    'config.write',
   MONITORING_VIEW: 'monitoring.view',
 
+  // The right to grant and withdraw capabilities on OTHER people — the one
+  // power that must not propagate. Deliberately NOT covered by ADMIN_ACCESS
+  // (tests/permissionVocabulary.test.js enforces the exclusion): holding full
+  // administrator access lets you run the clinic, not mint new administrators.
+  // Cannot be self-granted. Seeded to a named account by migration
+  // 20260923000009; the true 'admin' account remains a fallback holder.
+  // Decision of record: claude/session-2026-09-24-permissions-grant-decision.md
+  PERMISSIONS_GRANT: 'permissions.grant',
+
   // --- Patient administration ---
   PATIENTS_WRITE:     'patients.write',
   QUEUE_WRITE:        'queue.write',
@@ -607,6 +616,15 @@ const PERMISSION_GROUPS = [
         access: PERMISSIONS.ADMIN_ACCESS, accessLabel: 'Can do everything an admin can',
         roleDefault: 'Administrators',
         warning: 'They will be able to do everything an administrator can, except grant permissions to others.' },
+      { key: 'permissions-grant', name: 'Grant permissions to others', appliesIn: 'Admin',
+        description: 'The right to change what other people can do — including making '
+          + 'someone an administrator. Not part of full administrator access: an '
+          + 'administrator runs the clinic, a permissions administrator decides who else may.',
+        access: PERMISSIONS.PERMISSIONS_GRANT, accessLabel: 'Can grant and withdraw permissions',
+        roleDefault: 'Nobody by role — must be granted by an existing holder',
+        warning: 'This person will be able to make anyone an administrator, and to take '
+          + 'that away. Only someone who already holds this can grant it, and nobody can '
+          + 'grant it to themselves. Every change is recorded against their name.' },
       { key: 'users', name: 'Users and staff files', appliesIn: 'Admin',
         access: PERMISSIONS.USERS_VIEW, write: PERMISSIONS.USERS_WRITE,
         accessLabel: 'Can view users', writeLabel: 'Can create and edit users',
@@ -685,6 +703,16 @@ const displayedPermissions = (user) => {
 };
 
 const isTrueAdmin = (user) => user?.role === 'admin';
+
+/**
+ * May this person grant or withdraw capabilities on someone else?
+ *
+ * Holds the key (permissions.grant) OR is the true admin account — the latter
+ * is the deliberate no-lockout fallback. NOT satisfied by admin.access alone:
+ * that is the whole point of the capability. See PERMISSIONS_GRANT.
+ */
+const canGrantPermissions = (user) =>
+  isTrueAdmin(user) || hasPermission(user, PERMISSIONS.PERMISSIONS_GRANT);
 
 /**
  * A JSON-array column, as a real array.
@@ -863,6 +891,7 @@ module.exports = {
   isDenied,
   canOpenPortal,
   isTrueAdmin,
+  canGrantPermissions,
   sanitizePermissions,
   sanitizeDeniedPermissions,
 };

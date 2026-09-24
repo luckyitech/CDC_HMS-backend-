@@ -1,6 +1,6 @@
 const { success, error } = require('../utils/response');
 const {
-  PERMISSIONS, PERMISSIBLE_ROLES, isTrueAdmin, sanitizePermissions, hasPermission, toList,
+  PERMISSIONS, PERMISSIBLE_ROLES, canGrantPermissions, sanitizePermissions, hasPermission, toList,
 } = require('../constants/permissions');
 const db = require('../models');
 const sequelize = require('../config/database');
@@ -460,31 +460,44 @@ const updateUser = async (req, res) => {
     });
 
     // ── Permissions ──────────────────────────────────────────────────────────
-    // Restricted to a REAL admin account, even though this route now admits
-    // anyone holding admin.access. If a granted user could grant, the
+    // Restricted to a PERMISSIONS ADMINISTRATOR (a permissions.grant holder, or
+    // the true admin account as fallback), even though this route now admits
+    // anyone holding admin.access. If a merely-granted user could grant, the
     // capability would propagate on its own and could never be reliably taken
-    // back — see middleware/auth.js requireTrueAdmin.
+    // back — the same rule as staffController.updatePermissions and
+    // middleware/auth.js requireTrueAdmin, so the two granting screens (Manage
+    // Users here, the Staff File there) can never disagree.
+    // Decision: claude/session-2026-09-24-permissions-grant-decision.md
     //
     // Both branches write `permissions`, never canManageStock, so there is one
     // source of truth. Anything pushed into userFields is picked up by the
     // UserEditLog audit below, so grants and revokes are recorded with who did
     // them — which matters more for admin access than for anything else here.
     if (updates.permissions !== undefined) {
-      if (!isTrueAdmin(req.user)) {
-        return error(res, 'Only an administrator account can change permissions', 403);
+      if (!canGrantPermissions(req.user)) {
+        return error(res, 'Only a permissions administrator can change permissions', 403);
       }
       if (!PERMISSIBLE_ROLES.includes(user.role)) {
         return error(res, `Permissions cannot be granted to a ${user.role} account`, 400);
       }
+      const nextGranted = sanitizePermissions(updates.permissions);
+      // permissions.grant must not propagate: only a holder may hand it out
+      // (already true of the caller here) and nobody may grant it to
+      // themselves — mirrors staffController.updatePermissions exactly.
+      const grantsKey   = nextGranted.includes(PERMISSIONS.PERMISSIONS_GRANT);
+      const alreadyHeld = toList(user.permissions).includes(PERMISSIONS.PERMISSIONS_GRANT);
+      if (grantsKey && !alreadyHeld && user.id === req.user.id) {
+        return error(res, 'You cannot grant yourself the right to manage permissions', 403);
+      }
       userFields.push('permissions');
-      userUpdates.permissions = sanitizePermissions(updates.permissions);
+      userUpdates.permissions = nextGranted;
 
     // Back-compat: the Manage Users screen still sends a canManageStock
     // boolean. Translated into the permission rather than stored separately,
     // so the two can never disagree.
     } else if (updates.canManageStock !== undefined && PERMISSIBLE_ROLES.includes(user.role)) {
-      if (!isTrueAdmin(req.user)) {
-        return error(res, 'Only an administrator account can change permissions', 403);
+      if (!canGrantPermissions(req.user)) {
+        return error(res, 'Only a permissions administrator can change permissions', 403);
       }
       // The screen's single boolean predates the access/write split and still
       // means what it always meant: full stock management. Setting it grants

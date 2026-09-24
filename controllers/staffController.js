@@ -16,7 +16,7 @@ const sequelize = require('../config/database');
 const { STAFF_ROLES } = require('../constants/staffRoles');
 const {
   PERMISSIONS, ALL_PERMISSIONS, PERMISSION_GROUPS, PERMISSIBLE_ROLES, STAFF_TYPES,
-  hasPermission, isTrueAdmin, sanitizePermissions, sanitizeDeniedPermissions, toList,
+  hasPermission, isTrueAdmin, canGrantPermissions, sanitizePermissions, sanitizeDeniedPermissions, toList,
   effectivePermissions, ROLE_DEFAULT_PORTALS, displayedPermissions, ADMIN_ACCESS_COVERS,
 } = require('../constants/permissions');
 
@@ -496,6 +496,26 @@ const updatePermissions = async (req, res) => {
     // Unknown names are dropped rather than stored, so a typo grants nothing
     // instead of persisting a string that is never checked.
     const nextGranted = sanitizePermissions(permissions);
+
+    // permissions.grant is the one capability that must not propagate. Two
+    // rules keep the set of key-holders closed and every grant traceable:
+    //   1. Only a current holder (or the true admin fallback) may hand it out.
+    //      The route gate already requires that of the CALLER to be here at
+    //      all, but re-checking against the payload stops a holder of mere
+    //      admin.access from ever slipping it through.
+    //   2. Nobody may grant it to THEMSELVES — the key is only ever received
+    //      from someone else, so "who gave you this" always has an answer.
+    // Decision: claude/session-2026-09-24-permissions-grant-decision.md
+    const grantsKey = nextGranted.includes(PERMISSIONS.PERMISSIONS_GRANT);
+    const alreadyHeld = toList(user.permissions).includes(PERMISSIONS.PERMISSIONS_GRANT);
+    if (grantsKey && !alreadyHeld) {
+      if (!canGrantPermissions(req.user)) {
+        return error(res, 'Only a permissions administrator can grant the right to manage permissions', 403);
+      }
+      if (user.id === req.user.id) {
+        return error(res, 'You cannot grant yourself the right to manage permissions', 403);
+      }
+    }
 
     // Denials are optional in the payload: a caller that sends only
     // `permissions` (the pre-split API, and the Manage Users screen) leaves the

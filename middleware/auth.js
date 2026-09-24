@@ -3,7 +3,7 @@ const { error } = require('../utils/response');
 const { isTokenBlacklisted } = require('../controllers/authController');
 const { getRotationStatus } = require('../utils/passwordRotation');
 const db = require('../models');
-const { PERMISSIONS, hasPermission, isDenied, isTrueAdmin } = require('../constants/permissions');
+const { PERMISSIONS, hasPermission, isDenied, canGrantPermissions } = require('../constants/permissions');
 const { User } = db;
 
 // Endpoints a staff member with an expired password may still reach. Enough to
@@ -134,13 +134,16 @@ const requirePermission = (permission) => (req, res, next) => {
   return error(res, 'You do not have permission to do that — this has not been granted to your account.', 403);
 };
 
-// Requires the actual admin ACCOUNT, not merely admin capabilities. Reserved
-// for the things that must not be self-propagating: a user granted admin access
-// cannot in turn grant it to anyone else, or to themselves in greater measure.
-// Without this, the permission would spread and could never be reliably revoked.
+// Requires a PERMISSIONS ADMINISTRATOR: someone holding permissions.grant, or
+// the true admin account as the no-lockout fallback. Reserved for the things
+// that must not be self-propagating — chiefly granting capabilities. A user
+// holding admin.access does NOT pass this: they can run the clinic but cannot
+// mint new administrators, so a grant can always be traced to a key-holder and
+// reliably revoked. (Name kept for the call sites; the check is now a
+// capability.) Decision: claude/session-2026-09-24-permissions-grant-decision.md
 const requireTrueAdmin = (req, res, next) => {
-  if (isTrueAdmin(req.user)) return next();
-  return error(res, 'Only an administrator account can do this', 403);
+  if (canGrantPermissions(req.user)) return next();
+  return error(res, 'Only a permissions administrator can do this', 403);
 };
 
 module.exports = { authenticate, authorize, requirePermission, requireTrueAdmin };

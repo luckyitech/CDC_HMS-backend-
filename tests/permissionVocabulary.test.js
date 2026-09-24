@@ -34,6 +34,10 @@ const CHECKED_ELSEWHERE = {
     'routes/stock.js via requirePermission(), as the stockRead middleware',
   [PERMISSIONS.STOCK_WRITE]:
     'routes/stock.js via requirePermission(), as the stockWrite middleware',
+  [PERMISSIONS.PERMISSIONS_GRANT]:
+    'middleware/auth.js requireTrueAdmin via canGrantPermissions() — the right to '
+    + 'grant capabilities; deliberately not an authorize() argument so admin.access '
+    + 'can never satisfy it (tests/permissionsGrant.test.js)',
 };
 
 // Portal capabilities gate the frontend shell. A portal is a set of screens,
