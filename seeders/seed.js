@@ -37,7 +37,8 @@ const bcrypt = require('bcryptjs');
 const db = require('../models');
 const { generatePassphrase, entropyBits, meetsPolicy } = require('../utils/passphrase');
 
-const { User, DoctorProfile, StaffProfile, LabTechProfile, Patient } = db;
+const { User, StaffProfile, Patient } = db;
+const { generateEmployeeId } = require('../utils/generateId');
 
 const skipDemo = process.argv.includes('--no-demo');
 
@@ -98,6 +99,18 @@ async function seed() {
     });
     console.log(`Admin:    ${admin.email}`);
 
+    await StaffProfile.findOrCreate({
+      where: { UserId: admin.id },
+      defaults: {
+        UserId: admin.id,
+        employeeId: await generateEmployeeId(StaffProfile),
+        position: 'System Administrator',
+        department: 'Administration',
+        employmentType: 'Full-time',
+        startDate: new Date('2015-01-01'),
+      },
+    });
+
     // ── 2. Doctor ─────────────────────────────────────────────────────────────
     const doctor = await ensureUser({
       email: 'ahmed.hassan@cdc.com', firstName: 'Ahmed', lastName: 'Hassan',
@@ -105,10 +118,12 @@ async function seed() {
     });
     console.log(`Doctor:   ${doctor.email}`);
 
-    await DoctorProfile.findOrCreate({
+    await StaffProfile.findOrCreate({
       where: { UserId: doctor.id },
       defaults: {
         UserId: doctor.id,
+        employeeId: await generateEmployeeId(StaffProfile),
+        position: 'Consultant Physician',
         specialty: 'Endocrinology',
         department: 'Diabetes & Endocrinology',
         licenseNumber: 'KMD-12345',
@@ -130,8 +145,10 @@ async function seed() {
       where: { UserId: staff.id },
       defaults: {
         UserId: staff.id,
+        employeeId: await generateEmployeeId(StaffProfile),
         position: 'Nurse',
         department: 'Outpatient',
+        employmentType: 'Full-time',
         shift: 'Morning',
         startDate: new Date('2018-03-01'),
       },
@@ -144,14 +161,18 @@ async function seed() {
     });
     console.log(`Lab Tech: ${lab.email}`);
 
-    await LabTechProfile.findOrCreate({
+    await StaffProfile.findOrCreate({
       where: { UserId: lab.id },
       defaults: {
         UserId: lab.id,
-        specialization: 'Clinical Chemistry',
-        certificationNumber: 'KMT-67890',
+        employeeId: await generateEmployeeId(StaffProfile),
+        position: 'Laboratory Technologist',
+        specialty: 'Clinical Chemistry',
+        department: 'Laboratory',
+        licenseNumber: 'KMT-67890',
         qualification: 'BSc Medical Laboratory Sciences',
         yearsExperience: 5,
+        employmentType: 'Full-time',
         shift: 'Morning',
         startDate: new Date('2020-06-01'),
       },
