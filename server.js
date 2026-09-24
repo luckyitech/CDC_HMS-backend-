@@ -36,6 +36,14 @@ sequelize.authenticate()
       } catch (err) {
         console.error('[LabInbox] scheduler not started:', err.message);
       }
+
+      // HR Suite: close forgotten check-outs after the clinic day ends
+      // (marks them missed_checkout for HR to resolve). Never affects the API.
+      try {
+        require('./services/hrAttendanceSweep').startScheduler();
+      } catch (err) {
+        console.error('[HR] missed-checkout sweep not started:', err.message);
+      }
     });
   })
   .catch((err) => {

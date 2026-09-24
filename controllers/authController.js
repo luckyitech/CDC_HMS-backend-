@@ -10,8 +10,9 @@ const {
 const { getRotationStatus } = require('../utils/passwordRotation');
 const db = require('../models');
 
-const { User, StaffProfile, Patient } = db;
+const { User, StaffProfile, Patient, UserDevice } = db;
 const { logLogin } = require('../services/activityLogService');
+const { getHrConfig } = require('../utils/hrConfig');
 const { STAFF_ROLES } = require('../constants/staffRoles');
 
 // Every staff cadre shares one profile table now, so this is a membership test
@@ -98,6 +99,64 @@ const buildUserResponse = async (user) => {
 };
 
 // ------------------------------------
+// Remembered phones (HR Suite, B21)
+//
+// The HMS session is per-tab sessionStorage, so a URL opened from the
+// entrance NFC tag always lands logged out. A member of staff signs in ONCE
+// on their own phone with rememberDevice; the phone keeps a long random
+// token and every later tap exchanges it for a normal JWT here — no login.
+// Only the token's SHA-256 is stored; it rolls forward `deviceDays` on every
+// use and dies when the account is deactivated/archived or HR revokes it.
+// ------------------------------------
+const clientIp = (req) => req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.socket?.remoteAddress || null;
+const sha256 = (s) => crypto.createHash('sha256').update(s).digest('hex');
+const deviceLabel = (ua = '') => {
+  const os = /iPhone/.test(ua) ? 'iPhone' : /iPad/.test(ua) ? 'iPad' : /Android/.test(ua) ? 'Android' : /Windows/.test(ua) ? 'Windows' : /Macintosh/.test(ua) ? 'Mac' : 'Phone';
+  const browser = /CriOS|Chrome/.test(ua) ? 'Chrome' : /FxiOS|Firefox/.test(ua) ? 'Firefox' : /Safari/.test(ua) ? 'Safari' : 'browser';
+  return `${os} · ${browser}`;
+};
+const signSession = (user, extra = {}) => jwt.sign(
+  { id: user.id, email: user.email, role: user.role, name: `${user.firstName} ${user.lastName}`, ...extra },
+  process.env.JWT_SECRET,
+  { expiresIn: process.env.JWT_EXPIRES_IN }
+);
+
+const createRememberedDevice = async (user, req) => {
+  const cfg = await getHrConfig();
+  const raw = crypto.randomBytes(32).toString('base64url');
+  const device = await UserDevice.create({
+    UserId: user.id, tokenHash: sha256(raw), label: deviceLabel(req.headers['user-agent']),
+    lastSeenAt: new Date(), lastIp: clientIp(req),
+    expiresAt: new Date(Date.now() + cfg.deviceDays * 24 * 60 * 60 * 1000),
+  });
+  return { raw, device };
+};
+
+// ------------------------------------
+// POST /api/auth/device-session { deviceToken }
+// ------------------------------------
+const deviceSession = async (req, res) => {
+  try {
+    const raw = String(req.body.deviceToken || '');
+    if (raw.length < 32 || raw.length > 128) return error(res, 'This phone is no longer remembered — please sign in.', 401);
+    const device = await UserDevice.findOne({ where: { tokenHash: sha256(raw), revokedAt: null } });
+    if (!device || new Date(device.expiresAt) < new Date()) return error(res, 'This phone is no longer remembered — please sign in.', 401);
+    const user = await User.findByPk(device.UserId);
+    if (!user || !user.isActive || user.role === 'patient') return error(res, 'This phone is no longer remembered — please sign in.', 401);
+
+    const cfg = await getHrConfig();
+    await device.update({ lastSeenAt: new Date(), lastIp: clientIp(req), expiresAt: new Date(Date.now() + cfg.deviceDays * 24 * 60 * 60 * 1000) });
+    logLogin(user, clientIp(req), 'device');
+    const token = signSession(user, { deviceId: device.id });
+    const userData = await buildUserResponse(user);
+    return success(res, { token, user: userData });
+  } catch (err) {
+    console.error('Auth.deviceSession error:', err.message);
+    return error(res, 'Could not open a session. Please sign in.', 500);
+  }
+};
+
+// ------------------------------------
 // POST /api/auth/login
 // ------------------------------------
 const login = async (req, res) => {
@@ -111,21 +170,30 @@ const login = async (req, res) => {
   const match = await bcrypt.compare(password, user.password);
   if (!match) return error(res, 'Invalid password', 401);
 
-  // 3. Sign JWT
-  const token = jwt.sign(
-    { id: user.id, email: user.email, role: user.role, name: `${user.firstName} ${user.lastName}` },
-    process.env.JWT_SECRET,
-    { expiresIn: process.env.JWT_EXPIRES_IN }
-  );
+  // 3. Remember this phone? Only honoured from the HR tap page, and only for
+  //    internal accounts — a patient never gets a device token.
+  let deviceToken = null;
+  let deviceId = null;
+  if (req.body.rememberDevice === true && req.body.context === 'hr-tap' && user.role !== 'patient') {
+    try {
+      const { raw, device } = await createRememberedDevice(user, req);
+      deviceToken = raw;
+      deviceId = device.id;
+    } catch (err) {
+      console.error('Auth.login rememberDevice error:', err.message);   // login still succeeds
+    }
+  }
 
-  // 4. Record login event (staff / doctor / lab only — fire-and-forget)
-  const ip = req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.socket?.remoteAddress || null;
-  logLogin(user, ip);
+  // 4. Sign JWT (carries the device id so a tap can record which phone sent it)
+  const token = signSession(user, deviceId ? { deviceId } : {});
 
-  // 5. Build response with profile
+  // 5. Record login event (staff / doctor / lab only — fire-and-forget)
+  logLogin(user, clientIp(req));
+
+  // 6. Build response with profile
   const userData = await buildUserResponse(user);
 
-  return success(res, { token, user: userData });
+  return success(res, { token, user: userData, ...(deviceToken ? { deviceToken } : {}) });
 };
 
 // ------------------------------------
@@ -263,6 +331,7 @@ const logout = async (req, res) => {
 
 module.exports = {
   login,
+  deviceSession,
   forgotPassword,
   resetPassword,
   getMe,

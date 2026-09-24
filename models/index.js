@@ -97,6 +97,12 @@ const ConversationEscalation      = require('./ConversationEscalation');
 const ConversationReminder        = require('./ConversationReminder');
 const MessageTemplate             = require('./MessageTemplate');
 
+// --- HR Suite (B21): time & attendance ---
+const StaffAttendance             = require('./StaffAttendance');
+const HrNfcTag                    = require('./HrNfcTag');
+const UserDevice                  = require('./UserDevice');
+const StaffWorkHours              = require('./StaffWorkHours');
+
 // =============================================
 // ASSOCIATIONS
 // =============================================
@@ -504,6 +510,32 @@ ConversationReminder.belongsTo(User, { as: 'doneBy',  foreignKey: 'doneById' });
 // A WhatsApped lab report mirrored into the Lab Inbox links back to its message.
 LabInboxItem.belongsTo(ConversationMessage, { as: 'sourceMessage', foreignKey: 'sourceMessageId' });
 
+// --- HR Suite (B21): time & attendance ---
+// UserId on the three staff tables is the association-generated PascalCase
+// key (like StaffLeave); every other link is an explicitly aliased camelCase
+// key (A4). Tag and device links SET NULL so a session survives a retired tag
+// or a removed phone. Staff accounts are archived, never destroyed, so the
+// User links keep the Sequelize default.
+User.hasMany(StaffAttendance);
+StaffAttendance.belongsTo(User);
+StaffAttendance.belongsTo(User,       { as: 'amendedBy',   foreignKey: 'amendedById' });
+StaffAttendance.belongsTo(User,       { as: 'createdBy',   foreignKey: { name: 'createdById', allowNull: false } });
+StaffAttendance.belongsTo(HrNfcTag,   { as: 'checkInTag',  foreignKey: 'checkInTagId',  onDelete: 'SET NULL' });
+StaffAttendance.belongsTo(HrNfcTag,   { as: 'checkOutTag', foreignKey: 'checkOutTagId', onDelete: 'SET NULL' });
+StaffAttendance.belongsTo(UserDevice, { as: 'device',      foreignKey: 'deviceId',      onDelete: 'SET NULL' });
+
+HrNfcTag.belongsTo(User, { as: 'createdBy', foreignKey: 'createdById' });
+HrNfcTag.belongsTo(User, { as: 'retiredBy', foreignKey: 'retiredById' });
+
+User.hasMany(UserDevice);
+UserDevice.belongsTo(User);
+UserDevice.belongsTo(User, { as: 'revokedBy', foreignKey: 'revokedById' });
+
+User.hasMany(StaffWorkHours);
+StaffWorkHours.belongsTo(User);
+StaffWorkHours.belongsTo(User, { as: 'createdBy', foreignKey: 'createdById' });
+StaffWorkHours.belongsTo(User, { as: 'updatedBy', foreignKey: 'updatedById' });
+
 const db = {
   sequelize,
   Sequelize,
@@ -590,6 +622,11 @@ const db = {
   ConversationEscalation,
   ConversationReminder,
   MessageTemplate,
+  // --- HR Suite (B21) ---
+  StaffAttendance,
+  HrNfcTag,
+  UserDevice,
+  StaffWorkHours,
 };
 
 module.exports = db;

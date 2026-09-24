@@ -27,6 +27,15 @@ const UserLoginLog = defineModel('UserLoginLog', {
     allowNull: false,
     defaultValue: DataTypes.NOW,
   },
+  // How the session was opened: 'password' (the login form) or 'device' (a
+  // remembered phone exchanging its token at the entrance tag — HR Suite,
+  // B21). NULL on rows written before the column existed, which read as
+  // 'password'. Added by migration 20260923000007.
+  method: {
+    type: DataTypes.STRING(16),
+    allowNull: true,
+    defaultValue: null,
+  },
 });
 
 module.exports = UserLoginLog;

@@ -20,8 +20,11 @@ const TRACKED_ROLES = new Set(['staff', 'doctor', 'lab', 'nurse', 'admin']);
  *
  * @param {object} user        - Sequelize User instance (must have id, firstName, lastName, role)
  * @param {string} ipAddress   - Client IP (may be null)
+ * @param {string} [method]    - 'password' (the login form, default) or
+ *                               'device' (a remembered phone at the entrance
+ *                               tag — HR Suite, B21)
  */
-const logLogin = (user, ipAddress) => {
+const logLogin = (user, ipAddress, method = 'password') => {
   if (!TRACKED_ROLES.has(user.role)) return;
 
   UserLoginLog.create({
@@ -30,6 +33,7 @@ const logLogin = (user, ipAddress) => {
     role:      user.role,
     ipAddress: ipAddress || null,
     loginAt:   new Date(),
+    method,
   }).catch(() => {});
 };
 

@@ -404,6 +404,9 @@ const archive = async (req, res) => {
 
     await user.update({ isActive: false }, { transaction });
 
+    // A remembered phone must not outlive the account (HR Suite, B21).
+    await require('../services/hrAttendanceService').revokeUserDevices(user.id, req.user.id, transaction);
+
     await UserEditLog.create({
       targetUserId: user.id,
       editedBy:     req.user.id,

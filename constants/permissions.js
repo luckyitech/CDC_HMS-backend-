@@ -48,6 +48,9 @@ const PERMISSIONS = {
   PORTAL_LAB:       'portal.lab',
   PORTAL_INPATIENT: 'portal.inpatient',
   PORTAL_RADIOLOGY: 'portal.radiology',
+  // HR Suite — staff time & attendance (B21). Every internal role opens it by
+  // default: the portal is where a member of staff sees their own record.
+  PORTAL_HR:        'portal.hr',
 
   // --- Administration ---
   // Passes any endpoint gated by authorize('admin'). Kept as the broad grant it
@@ -173,6 +176,20 @@ const PERMISSIONS = {
   // medication. Off by default and granted per person, for the same reason as
   // RADIOLOGY_WRITE.
   MAR_ADMINISTER: 'mar.administer',
+
+  // --- HR Suite (B21) ---
+  // HR_CHECKIN is tapping the entrance tag, exchanging a remembered-phone token
+  // and reading one's OWN attendance and stars — every internal role holds it
+  // by role (the route gate lists the roles); withdrawing it stops one person
+  // checking in without touching anything else. HR_VIEW is everyone's
+  // attendance: who is in, flags, the register. HR_WRITE is amending a session,
+  // a manual entry, working hours and entrance tags. Both default to the admin
+  // role and are covered by admin.access, so the clinic can bench the true
+  // admin account and run HR on admin.access (decision 5). Tag KEYS and the
+  // settings still need config.write on top, like every other settings write.
+  HR_CHECKIN: 'hr.checkin',
+  HR_VIEW:    'hr.view',
+  HR_WRITE:   'hr.write',
 };
 
 const ALL_PERMISSIONS = Object.values(PERMISSIONS);
@@ -205,6 +222,7 @@ const IMPLIED_BY = {
   [PERMISSIONS.USERS_WRITE]:        PERMISSIONS.USERS_VIEW,
   [PERMISSIONS.APPOINTMENTS_WRITE]: PERMISSIONS.APPOINTMENTS_VIEW,
   [PERMISSIONS.CLINICAL_RECORD]:    PERMISSIONS.CLINICAL_VIEW,
+  [PERMISSIONS.HR_WRITE]:           PERMISSIONS.HR_VIEW,
 };
 
 // Which portals each role reaches without anything being granted.
@@ -217,12 +235,16 @@ const IMPLIED_BY = {
 //
 // Grants add to this list and withdrawals subtract from it, so a portal here is
 // a default rather than a guarantee.
+//
+// PORTAL_HR is on every entry: the HR Suite is where each member of staff sees
+// their own attendance, so it is a default for everyone who works here, and is
+// taken away per person by withdrawal like any other portal.
 const ROLE_DEFAULT_PORTALS = {
-  admin:  [PERMISSIONS.PORTAL_ADMIN],   // a real admin short-circuits below anyway
-  doctor: [PERMISSIONS.PORTAL_DOCTOR, PERMISSIONS.PORTAL_INPATIENT, PERMISSIONS.PORTAL_RADIOLOGY],
-  staff:  [PERMISSIONS.PORTAL_STAFF,  PERMISSIONS.PORTAL_RADIOLOGY],
-  lab:    [PERMISSIONS.PORTAL_LAB],
-  nurse:  [PERMISSIONS.PORTAL_INPATIENT],
+  admin:  [PERMISSIONS.PORTAL_ADMIN, PERMISSIONS.PORTAL_HR],   // a real admin short-circuits below anyway
+  doctor: [PERMISSIONS.PORTAL_DOCTOR, PERMISSIONS.PORTAL_INPATIENT, PERMISSIONS.PORTAL_RADIOLOGY, PERMISSIONS.PORTAL_HR],
+  staff:  [PERMISSIONS.PORTAL_STAFF,  PERMISSIONS.PORTAL_RADIOLOGY, PERMISSIONS.PORTAL_HR],
+  lab:    [PERMISSIONS.PORTAL_LAB, PERMISSIONS.PORTAL_HR],
+  nurse:  [PERMISSIONS.PORTAL_INPATIENT, PERMISSIONS.PORTAL_HR],
 };
 
 // Every role that belongs to the clinic, as opposed to a patient. This is an
@@ -339,6 +361,9 @@ const ADMIN_ACCESS_COVERS = [
   PERMISSIONS.COMMS_WRITE,
   PERMISSIONS.CONFIG_WRITE,
   PERMISSIONS.DOCUMENTS_WRITE,
+  PERMISSIONS.HR_CHECKIN,
+  PERMISSIONS.HR_VIEW,
+  PERMISSIONS.HR_WRITE,
   PERMISSIONS.INPATIENT_ACCESS,
   PERMISSIONS.INPATIENT_WRITE,
   PERMISSIONS.LAB_VIEW,
@@ -413,6 +438,7 @@ const PERMISSION_GROUPS = [
       { key: 'p-lab',       name: 'Lab portal',          access: PERMISSIONS.PORTAL_LAB,       accessLabel: 'Can open', roleDefault: 'Lab technicians' },
       { key: 'p-inpatient', name: 'Inpatient workspace', access: PERMISSIONS.PORTAL_INPATIENT, accessLabel: 'Can open', roleDefault: 'Doctors and nurses' },
       { key: 'p-radiology', name: 'Radiology Suite',    access: PERMISSIONS.PORTAL_RADIOLOGY, accessLabel: 'Can open', roleDefault: 'Doctors and front desk' },
+      { key: 'p-hr',        name: 'HR Suite',           access: PERMISSIONS.PORTAL_HR,        accessLabel: 'Can open', roleDefault: 'Everyone' },
     ],
   },
   {
@@ -525,6 +551,28 @@ const PERMISSION_GROUPS = [
         accessLabel: 'Can read conversations and open attachments',
         writeLabel: 'Can reply, link, file, book, escalate and set reminders',
         roleDefault: 'Front desk, doctors, nurses' },
+    ],
+  },
+  {
+    key: 'hr',
+    name: 'HR Suite',
+    description: 'Staff time & attendance. Everyone can check in and see their own record; '
+      + 'these decide who can see and amend everyone\'s.',
+    areas: [
+      { key: 'hr-checkin', name: 'Check in and out', appliesIn: 'HR Suite, entrance tag',
+        description: 'Tapping the entrance tag, remembering a phone, and seeing their own '
+          + 'attendance and stars. Held by every member of staff; withdraw it to stop one '
+          + 'person checking in.',
+        access: PERMISSIONS.HR_CHECKIN, accessLabel: 'Can check in and out and see their own record',
+        roleDefault: 'Everyone' },
+      { key: 'hr-attendance', name: 'Time & Attendance', appliesIn: 'HR Suite',
+        description: 'Who is in, flagged taps, the register and amendments; working hours '
+          + 'and entrance tags. Tag keys and the check-in rules also need "Catalog, wards '
+          + 'and settings" below.',
+        access: PERMISSIONS.HR_VIEW, write: PERMISSIONS.HR_WRITE,
+        accessLabel: 'Can see everyone\'s attendance',
+        writeLabel: 'Can amend records, set working hours and manage tags',
+        roleDefault: 'Administrators' },
     ],
   },
   {

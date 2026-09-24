@@ -82,6 +82,7 @@ app.use('/api/public/booking',     require('./routes/publicBooking'));
 app.use('/api/doctor-blocks',      require('./routes/doctorBlocks'));
 app.use('/api/users',              require('./routes/users'));
 app.use('/api/staff',              require('./routes/staff'));
+app.use('/api/hr',                 require('./routes/hr'));
 app.use('/api/documents',          require('./routes/documents'));
 app.use('/api/lab-inbox',          require('./routes/labInbox'));
 app.use('/api/comms',              require('./routes/comms'));

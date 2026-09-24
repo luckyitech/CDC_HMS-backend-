@@ -609,6 +609,12 @@ const updateStatus = async (req, res) => {
     await user.update({ isActive });
     const newStatus = isActive ? 'Active' : 'Inactive';
 
+    // Deactivating revokes every remembered phone (HR Suite, B21) so a tap
+    // from that phone can no longer open a session.
+    if (!isActive) {
+      await require('../services/hrAttendanceService').revokeUserDevices(user.id, req.user.id);
+    }
+
     // Keep Patient.status in sync for patient accounts
     if (user.role === 'patient') {
       await Patient.update({ status: newStatus }, { where: { UserId: user.id } });
@@ -709,6 +715,9 @@ const deleteUser = async (req, res) => {
       }
 
       await user.update({ isActive: false }, { transaction });
+
+      // A remembered phone must not outlive the account (HR Suite, B21).
+      await require('../services/hrAttendanceService').revokeUserDevices(user.id, req.user.id, transaction);
 
       await UserEditLog.create({
         targetUserId: user.id,

@@ -14,6 +14,14 @@ router.post('/login', authLimiter, [
   validate,
 ], authController.login);
 
+// POST /api/auth/device-session — a remembered phone (HR Suite tap page)
+// exchanges its long-lived token for a normal session. Same limiter as login:
+// a guessed token is a login attempt.
+router.post('/device-session', authLimiter, [
+  body('deviceToken').isString().isLength({ min: 32, max: 128 }).withMessage('deviceToken is required'),
+  validate,
+], authController.deviceSession);
+
 // POST /api/auth/forgot-password
 // Rate limit: 3 attempts per hour (prevents abuse)
 router.post('/forgot-password', strictLimiter, [
