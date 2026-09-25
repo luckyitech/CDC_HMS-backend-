@@ -16,8 +16,9 @@ const sequelize = require('../config/database');
 const { STAFF_ROLES } = require('../constants/staffRoles');
 const {
   PERMISSIONS, ALL_PERMISSIONS, PERMISSION_GROUPS, PERMISSIBLE_ROLES, STAFF_TYPES,
-  hasPermission, isTrueAdmin, canGrantPermissions, sanitizePermissions, sanitizeDeniedPermissions, toList,
-  effectivePermissions, ROLE_DEFAULT_PORTALS, displayedPermissions, ADMIN_ACCESS_COVERS,
+  hasPermission, isTrueAdmin, canGrantPermissions, toList,
+  displayedPermissions, ADMIN_ACCESS_COVERS,
+  reconcilePermissionLists, defaultPermissionsFor, PRESET_EXCLUDED,
 } = require('../constants/permissions');
 
 const { collectAllEvents, resolveDateFilter } = require('./activityController');
@@ -146,17 +147,11 @@ const formatStaff = (profile, user) => {
     // to record a withdrawal, while unticking something they only had by grant
     // just removes the grant. The admin never has to know the difference —
     // which was the whole problem with the three-state control.
-    defaultPermissions: [
-      ...new Set([
-        ...effectivePermissions({
-          role: user.role,
-          staffType: user.staffType,
-          permissions: [],
-          deniedPermissions: [],
-        }),
-        ...(ROLE_DEFAULT_PORTALS[user.role] || []),
-      ]),
-    ],
+    //
+    // One shared helper with the catalog's `roleDefaults`, so the onboarding
+    // wizard (a person who does not exist yet) and this tab (one who does)
+    // cannot disagree about a nurse's baseline.
+    defaultPermissions: defaultPermissionsFor(user.role, user.staffType),
     canManageStock:  hasPermission(user, PERMISSIONS.STOCK_ACCESS),
     hasAdminAccess:  hasPermission(user, PERMISSIONS.ADMIN_ACCESS),
     canHoldPermissions: PERMISSIBLE_ROLES.includes(user.role),
@@ -494,8 +489,16 @@ const updatePermissions = async (req, res) => {
 
   try {
     // Unknown names are dropped rather than stored, so a typo grants nothing
-    // instead of persisting a string that is never checked.
-    const nextGranted = sanitizePermissions(permissions);
+    // instead of persisting a string that is never checked. Denials are
+    // optional in the payload: a caller that sends only `permissions` (the
+    // pre-split API, and the Manage Users screen) leaves the withdrawals
+    // untouched rather than silently clearing them. The grant/withdrawal
+    // reconciliation is the shared helper createStaffAccount also uses.
+    const { granted, denied: nextDenied, conflicting } = reconcilePermissionLists(
+      permissions,
+      deniedPermissions === undefined ? (user.deniedPermissions || []) : deniedPermissions
+    );
+    const nextGranted = granted;
 
     // permissions.grant is the one capability that must not propagate. Two
     // rules keep the set of key-holders closed and every grant traceable:
@@ -516,20 +519,6 @@ const updatePermissions = async (req, res) => {
         return error(res, 'You cannot grant yourself the right to manage permissions', 403);
       }
     }
-
-    // Denials are optional in the payload: a caller that sends only
-    // `permissions` (the pre-split API, and the Manage Users screen) leaves the
-    // withdrawals untouched rather than silently clearing them.
-    const nextDenied = deniedPermissions === undefined
-      ? (user.deniedPermissions || [])
-      : sanitizeDeniedPermissions(deniedPermissions);
-
-    // A capability cannot be granted and withdrawn at once. The withdrawal
-    // wins — it is the more restrictive statement, and it is what
-    // effectivePermissions() would conclude anyway, so storing anything else
-    // would leave a row that reads differently from how it behaves.
-    const conflicting = nextGranted.filter((p) => nextDenied.includes(p));
-    const granted = nextGranted.filter((p) => !nextDenied.includes(p));
 
     const before = {
       permissions:       user.permissions || [],
@@ -587,6 +576,16 @@ const permissionCatalog = async (_req, res) =>
     // the tab cannot hold a stale copy of a list that is itself derived from
     // the routes and checked by permissionVocabulary.test.
     adminAccessCovers: ADMIN_ACCESS_COVERS,
+    // What a person of each role and staff type holds with nothing ticked —
+    // the onboarding wizard needs this for someone who does not exist yet,
+    // where formatStaff().defaultPermissions cannot be asked. Same helper.
+    roleDefaults: Object.fromEntries(PERMISSIBLE_ROLES.map((role) => [role, {
+      [STAFF_TYPES.CLINICAL]:     defaultPermissionsFor(role, STAFF_TYPES.CLINICAL),
+      [STAFF_TYPES.NON_CLINICAL]: defaultPermissionsFor(role, STAFF_TYPES.NON_CLINICAL),
+    }])),
+    // Capabilities a permission preset may never contain — always a
+    // deliberate per-person tick by a key-holder. See PRESET_EXCLUDED.
+    presetExcluded: PRESET_EXCLUDED,
   });
 
 /**

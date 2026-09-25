@@ -919,6 +919,66 @@ const sanitizeDeniedPermissions = (input) => {
   return ALL_PERMISSIONS.filter((p) => set.has(p));
 };
 
+/**
+ * A granted list and a denied list, made consistent with each other.
+ *
+ * A capability cannot be granted and withdrawn at once. The withdrawal wins —
+ * it is the more restrictive statement, and it is what effectivePermissions()
+ * would conclude anyway, so storing anything else would leave a row that reads
+ * differently from how it behaves. Shared by staffController.updatePermissions
+ * and userController.createStaffAccount so the two writing paths cannot drift.
+ *
+ * Returns { granted, denied, conflicting } — `conflicting` is what was in both
+ * lists, for the caller to log.
+ */
+const reconcilePermissionLists = (permissions, deniedPermissions) => {
+  const nextGranted = sanitizePermissions(permissions);
+  const denied = sanitizeDeniedPermissions(deniedPermissions);
+  const conflicting = nextGranted.filter((p) => denied.includes(p));
+  const granted = nextGranted.filter((p) => !denied.includes(p));
+  return { granted, denied, conflicting };
+};
+
+/**
+ * What a person of this role and staff type holds with NOTHING ticked either
+ * way: the portals their role opens plus whatever their staff type carries.
+ *
+ * This is the baseline the Permissions tab and the onboarding wizard both
+ * compare against to decide what a tick has to STORE (a grant, a withdrawal,
+ * or nothing). One helper so the Staff File and the wizard can never disagree
+ * about what "default" means for a nurse. The role is checked against
+ * PERMISSIBLE_ROLES + admin so a stray value cannot manufacture a baseline.
+ */
+const defaultPermissionsFor = (role, staffType) => {
+  if (!INTERNAL_ROLES.includes(role)) return [];
+  return [
+    ...new Set([
+      ...effectivePermissions({ role, staffType, permissions: [], deniedPermissions: [] }),
+      ...(ROLE_DEFAULT_PORTALS[role] || []),
+    ]),
+  ];
+};
+
+// The capabilities a PERMISSION PRESET may never contain.
+//
+// A preset is a bundle a permissions administrator approved once so that a
+// users.write holder can apply it to a new hire without a second person
+// (decision of record, 24 Sep 2026). That only stays safe if the three
+// capabilities whose whole design is "granted deliberately, per person, by a
+// key-holder" can never ride along inside a template:
+//   - admin.access       — full administrator access is a separate, named act
+//   - permissions.grant  — must not propagate (see PERMISSIONS_GRANT)
+//   - hr.confidential    — reading a colleague's contract is its own trust
+// Served to the UI by the catalog endpoint and enforced on every preset write.
+const PRESET_EXCLUDED = [
+  PERMISSIONS.ADMIN_ACCESS,
+  PERMISSIONS.PERMISSIONS_GRANT,
+  PERMISSIONS.HR_CONFIDENTIAL,
+];
+
+// Roles a preset can be defined for — the same set that may hold permissions.
+const PRESET_ROLES = PERMISSIBLE_ROLES;
+
 module.exports = {
   PERMISSIONS,
   toList,
@@ -946,4 +1006,8 @@ module.exports = {
   canViewConfidential,
   sanitizePermissions,
   sanitizeDeniedPermissions,
+  reconcilePermissionLists,
+  defaultPermissionsFor,
+  PRESET_EXCLUDED,
+  PRESET_ROLES,
 };

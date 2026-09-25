@@ -28,6 +28,17 @@ const SHIFT_VALIDATOR = [
   body('shift').optional({ nullable: true, checkFalsy: true }).isIn(SHIFTS).withMessage('Invalid shift'),
 ];
 
+// Access at creation — sent by the onboarding wizard, absent from the legacy
+// forms. Shape only; WHO may set WHAT is decided in
+// userController.resolveAccessAtCreation (a preset applied unchanged needs only
+// users.write; any edit needs permissions.grant), never here.
+const ACCESS_VALIDATORS = [
+  body('staffType').optional({ nullable: true, checkFalsy: true }).isIn(['clinical', 'non_clinical']).withMessage('staffType must be clinical or non_clinical'),
+  body('permissions').optional({ nullable: true }).isArray().withMessage('permissions must be a list'),
+  body('deniedPermissions').optional({ nullable: true }).isArray().withMessage('deniedPermissions must be a list'),
+  body('presetId').optional({ nullable: true, checkFalsy: true }).isInt({ min: 1 }).withMessage('Invalid preset'),
+];
+
 // ------------------------------------
 // GET /api/users/doctors — list active doctors (any authenticated user)
 // Used by patients when booking appointments
@@ -51,6 +62,7 @@ router.post('/doctors', authenticate, authorize('admin', 'users.write'), [
   body('yearsExperience').isInt({ min: 0 }).withMessage('Years of experience must be a positive number'),
   body('employmentType').isIn(EMPLOYMENT_TYPES).withMessage('Invalid employment type'),
   ...IDENTITY_VALIDATORS,
+  ...ACCESS_VALIDATORS,
   body('password').optional({ nullable: true }).isLength({ min: 6 }).withMessage('Password must be at least 6 characters'),
   validate,
 ], userController.createDoctor);
@@ -70,6 +82,7 @@ router.post('/staff', authenticate, authorize('admin', 'users.write'), [
   // real. A hospital not running shifts can leave it blank.
   ...SHIFT_VALIDATOR,
   ...IDENTITY_VALIDATORS,
+  ...ACCESS_VALIDATORS,
   body('password').optional({ nullable: true }).isLength({ min: 6 }).withMessage('Password must be at least 6 characters'),
   validate,
 ], userController.createStaff);
@@ -91,6 +104,7 @@ router.post('/nurses', authenticate, authorize('admin', 'users.write'), [
   body('certifications').optional({ nullable: true }).isArray().withMessage('Certifications must be a list'),
   ...SHIFT_VALIDATOR,
   ...IDENTITY_VALIDATORS,
+  ...ACCESS_VALIDATORS,
   body('password').optional({ nullable: true }).isLength({ min: 6 }).withMessage('Password must be at least 6 characters'),
   validate,
 ], userController.createNurse);
@@ -110,6 +124,7 @@ router.post('/lab-techs', authenticate, authorize('admin', 'users.write'), [
   body('yearsExperience').isInt({ min: 0 }).withMessage('Years of experience must be a positive number'),
   ...SHIFT_VALIDATOR,
   ...IDENTITY_VALIDATORS,
+  ...ACCESS_VALIDATORS,
   body('password').optional({ nullable: true }).isLength({ min: 6 }).withMessage('Password must be at least 6 characters'),
   validate,
 ], userController.createLabTech);

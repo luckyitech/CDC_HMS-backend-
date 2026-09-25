@@ -103,6 +103,9 @@ const HrNfcTag                    = require('./HrNfcTag');
 const UserDevice                  = require('./UserDevice');
 const StaffWorkHours              = require('./StaffWorkHours');
 
+// --- Onboarding wizard: permission presets (a template, not a link) ---
+const PermissionPreset            = require('./PermissionPreset');
+
 // =============================================
 // ASSOCIATIONS
 // =============================================
@@ -533,6 +536,11 @@ UserDevice.belongsTo(User, { as: 'revokedBy', foreignKey: 'revokedById' });
 
 User.hasMany(StaffWorkHours);
 StaffWorkHours.belongsTo(User);
+
+// Presets carry who defined/last edited them; nothing links a User back to a
+// preset on purpose (see models/PermissionPreset.js).
+PermissionPreset.belongsTo(User, { as: 'createdBy', foreignKey: 'createdById' });
+PermissionPreset.belongsTo(User, { as: 'updatedBy', foreignKey: 'updatedById' });
 StaffWorkHours.belongsTo(User, { as: 'createdBy', foreignKey: 'createdById' });
 StaffWorkHours.belongsTo(User, { as: 'updatedBy', foreignKey: 'updatedById' });
 
@@ -627,6 +635,8 @@ const db = {
   HrNfcTag,
   UserDevice,
   StaffWorkHours,
+  // --- Onboarding wizard ---
+  PermissionPreset,
 };
 
 module.exports = db;

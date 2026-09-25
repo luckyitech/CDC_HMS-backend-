@@ -1,6 +1,7 @@
 const { success, error } = require('../utils/response');
 const {
-  PERMISSIONS, PERMISSIBLE_ROLES, canGrantPermissions, sanitizePermissions, hasPermission, toList,
+  PERMISSIONS, PERMISSIBLE_ROLES, STAFF_TYPES, canGrantPermissions, sanitizePermissions, hasPermission, toList,
+  reconcilePermissionLists,
 } = require('../constants/permissions');
 const db = require('../models');
 const sequelize = require('../config/database');
@@ -16,7 +17,7 @@ const { STAFF_ROLES, DEFAULT_POSITION } = require('../constants/staffRoles');
 // written to or read from; they remain in the codebase for one release as a
 // rollback path and are dropped by a later migration.
 // See STAFF_PROFILE_DESIGN.md.
-const { User, StaffProfile, Patient, UserEditLog } = db;
+const { User, StaffProfile, Patient, UserEditLog, PermissionPreset } = db;
 
 // ====================================
 // HELPER FUNCTIONS
@@ -146,13 +147,105 @@ const formatPatientOnly = (p) => ({
  * the profile page and cannot be given an employee ID, so a half-created
  * account is worse than no account.
  */
+// Are two capability lists the same set?
+const sameSet = (a, b) => a.length === b.length && a.every((p) => b.includes(p));
+
+/**
+ * Decide what access a NEW account gets, and whether this caller may give it.
+ *
+ * The onboarding wizard sends an access section alongside the identity fields:
+ * `staffType`, `permissions`, `deniedPermissions`, and optionally the
+ * `presetId` it started from. The legacy forms send none of it, and get exactly
+ * what they always got (rule 1).
+ *
+ * Who may set what — decision of record, 24 Sep 2026
+ * (claude/onboarding-wizard-build-spec.md §1.2):
+ *   1. No access section     -> unchanged behaviour: clinical, no grants.
+ *   2. A preset, applied UNCHANGED -> allowed for anyone who passed the route's
+ *      users.write gate. The bundle was approved by a key-holder when it was
+ *      defined, so applying it is not a grant decision.
+ *   3. Anything else — no preset, or any difference from the preset (a tick,
+ *      a withdrawal, a different staff type) -> canGrantPermissions(caller),
+ *      the same gate as changing access on the Staff File.
+ *   4. permissions.grant requested -> canGrantPermissions(caller). Implied by
+ *      3 (a preset can never carry it), stated so the invariant lives here too.
+ *      Self-grant is impossible on this path by construction — the target does
+ *      not exist yet — which is exactly why creation is a legitimate way to
+ *      hand the key to a new person.
+ *
+ * Pure apart from the preset row passed in: unit-tested without a database
+ * (tests/onboardingAccess.test.js). Returns { access } or { message, code }.
+ */
+const resolveAccessAtCreation = ({ body, role, caller, preset }) => {
+  const { staffType, permissions, deniedPermissions, presetId } = body;
+  const sent = [staffType, permissions, deniedPermissions, presetId].some((v) => v !== undefined && v !== null && v !== '');
+
+  const unchanged = { staffType: STAFF_TYPES.CLINICAL, permissions: [], deniedPermissions: [] };
+  if (!sent) return { access: { ...unchanged, presetName: null, applied: false } };
+
+  if (presetId !== undefined && presetId !== null && presetId !== '') {
+    if (!preset || preset.status !== 'active') return { message: 'That permission preset is not available', code: 400 };
+    if (preset.baseRole !== role) {
+      return { message: `The "${preset.name}" preset is for a ${preset.baseRole} account, not a ${role}`, code: 400 };
+    }
+  }
+
+  // A missing field means "use the preset's" (or the plain default without one).
+  const base = preset
+    ? { staffType: preset.staffType, permissions: toList(preset.permissions), deniedPermissions: toList(preset.deniedPermissions) }
+    : unchanged;
+  const wantType = staffType === undefined || staffType === null || staffType === '' ? base.staffType : staffType;
+  if (!Object.values(STAFF_TYPES).includes(wantType)) return { message: 'staffType must be clinical or non_clinical', code: 400 };
+
+  const { granted, denied, conflicting } = reconcilePermissionLists(
+    permissions === undefined ? base.permissions : permissions,
+    deniedPermissions === undefined ? base.deniedPermissions : deniedPermissions,
+  );
+  const presetBase = reconcilePermissionLists(base.permissions, base.deniedPermissions);
+
+  const isPresetUnchanged = !!preset
+    && wantType === base.staffType
+    && sameSet(granted, presetBase.granted)
+    && sameSet(denied, presetBase.denied);
+
+  if (!isPresetUnchanged && !canGrantPermissions(caller)) {
+    return {
+      code: 403,
+      message: preset
+        ? 'Only a permissions administrator can change access from the preset'
+        : 'Only a permissions administrator can set access without a preset',
+    };
+  }
+  if (granted.includes(PERMISSIONS.PERMISSIONS_GRANT) && !canGrantPermissions(caller)) {
+    return { message: 'Only a permissions administrator can grant the right to manage permissions', code: 403 };
+  }
+
+  return {
+    access: {
+      staffType: wantType,
+      permissions: granted,
+      deniedPermissions: denied,
+      conflicting,
+      presetName: preset ? preset.name : null,
+      applied: !!preset,
+    },
+  };
+};
+
 const createStaffAccount = async (req, res, { role, profileFields = {}, roleDetails = {}, label }) => {
-  const { firstName, lastName, email, phone, password: providedPassword } = req.body;
+  const { firstName, lastName, email, phone, password: providedPassword, presetId } = req.body;
 
   let transaction;
   try {
     const existingUser = await User.findOne({ where: { email } });
     if (existingUser) return error(res, 'Email already in use', 400);
+
+    // Access at creation (onboarding wizard). Resolved BEFORE anything is
+    // written so a refused grant leaves no half-created account behind.
+    const preset = presetId ? await PermissionPreset.findByPk(presetId) : null;
+    const resolved = resolveAccessAtCreation({ body: req.body, role, caller: req.user, preset });
+    if (resolved.message) return error(res, resolved.message, resolved.code);
+    const { access } = resolved;
 
     const tempPassword   = providedPassword || generateTempPassword();
     const hashedPassword = await bcrypt.hash(tempPassword, 10);
@@ -168,6 +261,9 @@ const createStaffAccount = async (req, res, { role, profileFields = {}, roleDeta
       phone,
       isActive: true,
       createdBy: req.user.name || 'Unknown',
+      staffType:         access.staffType,
+      permissions:       access.permissions,
+      deniedPermissions: access.deniedPermissions,
     }, { transaction });
 
     // Generated inside the transaction so a failed create does not consume an
@@ -184,7 +280,34 @@ const createStaffAccount = async (req, res, { role, profileFields = {}, roleDeta
       ...profileFields,
     }, { transaction });
 
+    // The initial access is a grant like any other — recorded on the same
+    // UserEditLog the Activity tab reads, with who did it and which preset it
+    // came from, so an admin-status grant at creation is as traceable as one
+    // made later on the Staff File (decision 4, 24 Sep 2026).
+    if (access.permissions.length || access.deniedPermissions.length || access.staffType !== STAFF_TYPES.CLINICAL || access.presetName) {
+      await UserEditLog.create({
+        targetUserId: user.id,
+        editedBy:     req.user.id,
+        editedByName: req.user.name || `user #${req.user.id}`,
+        changes: {
+          ...buildChanges(
+            { permissions: [], deniedPermissions: [], staffType: STAFF_TYPES.CLINICAL },
+            { permissions: access.permissions, deniedPermissions: access.deniedPermissions, staffType: access.staffType },
+          ),
+          createdFromPreset: access.presetName,
+        },
+        editedAt: new Date(),
+      }, { transaction });
+    }
+    if (access.applied) {
+      await PermissionPreset.increment('appliedCount', { by: 1, where: { id: preset.id }, transaction });
+    }
+
     await transaction.commit();
+
+    if (access.conflicting?.length) {
+      console.warn(`Access for new user ${user.id}: ${access.conflicting.join(', ')} sent as both granted and withdrawn — withdrawal applied.`);
+    }
 
     // Deliberately after the commit and deliberately not awaited: a mail
     // server outage must not roll back an account that was created correctly.
@@ -803,6 +926,8 @@ module.exports = {
   createStaff,
   createNurse,
   createLabTech,
+  // exported for tests
+  resolveAccessAtCreation,
   listDoctors,
   listUsers,
   getById,
