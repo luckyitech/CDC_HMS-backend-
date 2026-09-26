@@ -3,6 +3,7 @@ const accounts = require('./mailAccounts');
 const session = require('./mailSession');
 const { checkAddress, getSignatureConfig, logoDataUri } = require('../utils/mailConfig');
 const { walkParts } = require('../utils/mailRender');
+const patientDocs = require('./mailPatients');
 const {
   MAX_RECIPIENTS, parseRecipients, recipientSummary, prefixSubject, replyRecipients,
   threadHeaders, parseIdList, quoteOriginal, htmlToText, outgoingHtml, splitDraftHtml, joinBody, signatureBlock,
@@ -130,11 +131,23 @@ const gatherAttachments = async (userId, refs, files) => {
   return out;
 };
 
+/** Mail attachments + documents from a patient file, held to the same 25 MB / 20-file caps. */
+const withPatientDocuments = (attachments, docs) => {
+  const all = [...attachments, ...docs];
+  if (all.length > MAX_ATTACHMENTS) throw new MailError('TOO_MANY_ATTACHMENTS', `At most ${MAX_ATTACHMENTS} attachments.`, 400);
+  const total = all.reduce((n, a) => n + a.content.length, 0);
+  if (total > MAX_TOTAL_ATTACH) throw new MailError('ATTACH_TOO_BIG', 'Attachments come to more than 25 MB. Remove some, or share large files another way.', 413);
+  return all;
+};
+
 /** Build the RFC 822 message. `keepBcc` for the Sent/Drafts copy only — never for SMTP. */
-const buildRaw = ({ from, rcpt, subject, html, inReplyTo, references, attachments, messageId, date, keepBcc, draft }) => {
+const buildRaw = ({ from, rcpt, subject, html, inReplyTo, references, attachments, messageId, date, keepBcc, draft, patientDocumentIds }) => {
   const MailComposer = require('nodemailer/lib/mail-composer');
   const headers = { 'X-Mailer': 'CDC HMS' };
   if (draft) headers['X-HMS-Draft'] = '1';
+  // A draft holds documents from a patient file by REFERENCE only (phase 3a):
+  // the file is read from the HMS at send time, never parked in one.com.
+  if (draft && patientDocumentIds && patientDocumentIds.length) headers['X-HMS-Patient-Documents'] = patientDocumentIds.join(',');
   const mail = new MailComposer({
     from,
     to: rcpt.to,
@@ -227,12 +240,15 @@ const flagOriginal = async (userId, source) => {
  * Send. payload: { to, cc, bcc, subject, html, inReplyTo, references,
  * attachments: [{ folder, uid, part }], draftUid?, source?: { mode, folder, uid } }.
  */
-const send = async (userId, payload = {}, files = [], { senderName } = {}) => {
+const send = async (userId, payload = {}, files = [], { senderName, user } = {}) => {
   const { row, servers, password } = await loadAccount(userId);
   const rcpt = recipientsFrom(payload, true);
   const subject = cleanSubject(payload.subject);
   const { inReplyTo, references } = threadFrom(payload);
-  const attachments = await gatherAttachments(userId, payload.attachments, files);
+  // Patient documents are checked (permission, not archived, file present)
+  // BEFORE anything leaves — a refusal here reaches no SMTP server.
+  const fromFile = await patientDocs.loadPatientDocuments(user || { id: userId }, payload.patientDocuments);
+  const attachments = withPatientDocuments(await gatherAttachments(userId, payload.attachments, files), fromFile.attachments);
   const from = fromHeader(row, senderName);
   const messageId = newMessageId(row.emailAddress);
   const date = new Date();
@@ -284,6 +300,8 @@ const send = async (userId, payload = {}, files = [], { senderName } = {}) => {
     userId, actorId: userId, event: 'sent', emailAddress: row.emailAddress,
     detail: JSON.stringify({ recipients: summary.count, domains: summary.domains, attachments: attachments.length }),
   });
+  if (fromFile.byPatient.size) patientDocs.logPatientDocumentsSent(user || { id: userId }, fromFile.byPatient, summary, row.emailAddress);
+  session.forgetRecent(userId);
 
   let sentCopy = { ok: false, reason: 'failed' };
   try {
@@ -331,15 +349,17 @@ const draftAttachmentRefs = async (userId, folder, uid) => session.withFolder(us
  * attachments now live in the draft, so the composer swaps its uploaded files
  * for these refs and never uploads them again.
  */
-const saveDraft = async (userId, payload = {}, files = [], { senderName } = {}) => {
+const saveDraft = async (userId, payload = {}, files = [], { senderName, user } = {}) => {
   const { row } = await loadAccount(userId);
   const rcpt = recipientsFrom(payload, false);
   const { inReplyTo, references } = threadFrom(payload);
+  const fromFile = await patientDocs.loadPatientDocuments(user || { id: userId }, payload.patientDocuments, { withContent: false });
   const attachments = await gatherAttachments(userId, payload.attachments, files);
   const messageId = newMessageId(row.emailAddress);
   const raw = await buildRaw({
     from: fromHeader(row, senderName), rcpt, subject: cleanSubject(payload.subject), html: joinBody(payload.html, payload.quotedHtml),
     inReplyTo, references, attachments, messageId, date: new Date(), keepBcc: true, draft: true,
+    patientDocumentIds: fromFile.refs.map((r) => r.documentId),
   });
 
   const saved = await appendTo(userId, 'drafts', raw, ['\\Draft', '\\Seen']);
@@ -357,6 +377,7 @@ const saveDraft = async (userId, payload = {}, files = [], { senderName } = {}) 
     draftUid: uid,
     folder: saved.path,
     attachments: uid ? await draftAttachmentRefs(userId, saved.path, uid) : [],
+    patientDocuments: fromFile.refs,
     savedAt: new Date().toISOString(),
   };
 };
@@ -377,7 +398,25 @@ const discardDraft = async (userId, uid) => {
  *   mode reply | replyAll | forward — a new message answering/forwarding it
  *   mode draft                      — continue a saved draft as it was
  */
-const composeContext = async (userId, { folder = 'INBOX', uid, mode }) => {
+/**
+ * A reopened draft's patient documents, re-checked for THIS user now. One that
+ * has gone (archived, file missing) or that the user may no longer open is
+ * dropped and reported rather than blocking the draft.
+ */
+const draftPatientDocuments = async (user, headerValue) => {
+  const ids = String(headerValue || '').split(/[\s,]+/).map((v) => parseInt(v, 10)).filter((n) => n > 0);
+  if (!ids.length) return { patientDocuments: [], patientDocumentsDropped: 0 };
+  const kept = [];
+  for (const id of ids) {
+    try {
+      const { refs } = await patientDocs.loadPatientDocuments(user, [id], { withContent: false });
+      kept.push(...refs);
+    } catch { /* dropped — counted below */ }
+  }
+  return { patientDocuments: kept, patientDocumentsDropped: ids.length - kept.length };
+};
+
+const composeContext = async (userId, { folder = 'INBOX', uid, mode }, user) => {
   if (![...MODES, 'draft'].includes(mode)) throw new MailError('BAD_MODE', 'Unknown compose mode.', 400);
   const { row } = await loadAccount(userId);
   const msg = await session.getMessage(userId, { folder, uid, markSeen: false });
@@ -396,6 +435,7 @@ const composeContext = async (userId, { folder = 'INBOX', uid, mode }) => {
       attachments: msg.attachments.map((a) => ({ folder: msg.folder, uid: msg.uid, part: a.part, filename: a.filename, type: a.type, size: a.size })),
       draftUid: msg.uid,
       source: null,
+      ...(await draftPatientDocuments(user || { id: userId }, msg.hmsPatientDocuments)),
     };
   }
 
@@ -415,6 +455,7 @@ const composeContext = async (userId, { folder = 'INBOX', uid, mode }) => {
       : [],
     draftUid: null,
     source: { mode, folder: msg.folder, uid: msg.uid },
+    patientDocuments: [],
   };
 };
 

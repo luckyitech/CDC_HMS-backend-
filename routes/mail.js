@@ -90,6 +90,20 @@ router.delete('/drafts/:uid', authenticate, authorize(...MAIL), mail.discardDraf
 router.get('/messages/:uid/compose', authenticate, authorize(...MAIL), mail.composeContext);
 router.get('/signature', authenticate, authorize(...MAIL), mail.signature);
 
+// Phase 3a — HMS / patient tie-ins. Still own-mailbox only (no route takes a
+// user id). Patient data is gated again inside services/mailPatients with the
+// same lists as the patient and document routes.
+router.get('/suggest', authenticate, authorize(...MAIL), mail.suggest);
+router.get('/patients', authenticate, authorize(...MAIL), mail.patients);
+router.get('/patients/:uhid/documents', authenticate, authorize(...MAIL), mail.patientDocuments);
+router.post('/messages/:uid/attachments/:part/save-to-patient', authenticate, authorize(...MAIL), [
+  body('uhid').isString().trim().notEmpty().withMessage('Pick a patient'),
+  body('category').optional().isString().isLength({ max: 80 }),
+  body('testDate').optional({ values: 'falsy' }).isString(),
+  body('notes').optional({ values: 'falsy' }).isString().isLength({ max: 5000 }),
+  validate,
+], mail.saveToPatient);
+
 // Admin: who is connected, and forget someone's saved password. Status only.
 router.get('/admin/accounts', authenticate, authorize('admin', 'config.write'), mail.adminListAccounts);
 router.post('/admin/accounts/:userId/disconnect', authenticate, authorize('admin', 'config.write'), mail.adminDisconnect);

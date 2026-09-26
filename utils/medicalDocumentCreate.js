@@ -20,6 +20,24 @@ const { MedicalDocument, Patient, User, Notification } = db;
 // resolved patient family); this takes the already-resolved canonical patient.
 // ---------------------------------------------------------------------------
 
+// The official document categories (BACKEND_GUIDE.md) — one list for the
+// manual upload, the Lab Inbox and Staff Email's "Save to patient file".
+const DOCUMENT_CATEGORIES = [
+  'Lab Report - External',
+  'Imaging Report',
+  'Cardiology Report',
+  'Endocrinology Report',
+  'Nephrology Report',
+  'Ophthalmology Report',
+  'Neuropathy Screening Test',
+  'Specialist Consultation Report',
+  'Patient File',
+  'Other Medical Document',
+];
+
+// Categories that only accept PDF files.
+const PDF_ONLY_CATEGORIES = ['Patient File'];
+
 const formatFileSize = (bytes) => {
   if (bytes == null) return null;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(2)} KB`;
@@ -109,4 +127,4 @@ const createMedicalDocument = async ({
   return fullDocument;
 };
 
-module.exports = { createMedicalDocument, formatFileSize };
+module.exports = { createMedicalDocument, formatFileSize, DOCUMENT_CATEGORIES, PDF_ONLY_CATEGORIES };

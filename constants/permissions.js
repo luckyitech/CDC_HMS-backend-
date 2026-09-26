@@ -769,6 +769,25 @@ const passesAdminGate = (user, capability) =>
       || hasPermission(user, capability));
 
 /**
+ * The pure form of authorize(...allow): 'ok', 'denied' (a capability named in
+ * the gate has been withdrawn from this person — beats everything), or 'no'.
+ * Roles and dotted capabilities in one list, exactly as authorize() takes them;
+ * authorize() is built on this, so an inline check in a controller or service
+ * can never drift from the route gate it mirrors.
+ */
+const gateResult = (user, allow) => {
+  if (!user) return 'no';
+  const roles = allow.filter((a) => !a.includes('.'));
+  const perms = allow.filter((a) => a.includes('.'));
+  if (perms.some((p) => isDenied(user, p))) return 'denied';
+  if (roles.includes(user.role)) return 'ok';
+  if (roles.includes('admin') && hasPermission(user, PERMISSIONS.ADMIN_ACCESS)) return 'ok';
+  if (perms.some((p) => hasPermission(user, p))) return 'ok';
+  return 'no';
+};
+const passesGate = (user, allow) => gateResult(user, allow) === 'ok';
+
+/**
  * May this person open the confidential drawer of a staff file?
  *
  * An explicit grant of hr.confidential, or the true admin account. NOT
@@ -1017,6 +1036,8 @@ module.exports = {
   isTrueAdmin,
   canGrantPermissions,
   passesAdminGate,
+  gateResult,
+  passesGate,
   canViewConfidential,
   sanitizePermissions,
   sanitizeDeniedPermissions,

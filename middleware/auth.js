@@ -3,7 +3,7 @@ const { error } = require('../utils/response');
 const { isTokenBlacklisted } = require('../controllers/authController');
 const { getRotationStatus } = require('../utils/passwordRotation');
 const db = require('../models');
-const { PERMISSIONS, hasPermission, isDenied, canGrantPermissions } = require('../constants/permissions');
+const { hasPermission, canGrantPermissions, gateResult } = require('../constants/permissions');
 const { User } = db;
 
 // Endpoints a staff member with an expired password may still reach. Enough to
@@ -115,14 +115,11 @@ const authenticate = async (req, res, next) => {
 // silently making every gate deniable would turn every hardcoded clinical role
 // list into something an admin could quietly switch off.
 const authorize = (...allow) => (req, res, next) => {
-  const roles = allow.filter((a) => !a.includes('.'));
-  const perms = allow.filter((a) => a.includes('.'));
-  if (perms.some((p) => isDenied(req.user, p))) {
+  const result = gateResult(req.user, allow);
+  if (result === 'ok') return next();
+  if (result === 'denied') {
     return error(res, 'You do not have permission to do that — an administrator has withdrawn this from your account.', 403);
   }
-  if (roles.includes(req.user.role)) return next();
-  if (roles.includes('admin') && hasPermission(req.user, PERMISSIONS.ADMIN_ACCESS)) return next();
-  if (perms.some((p) => hasPermission(req.user, p))) return next();
   return error(res, 'You do not have permission to do that.', 403);
 };
 

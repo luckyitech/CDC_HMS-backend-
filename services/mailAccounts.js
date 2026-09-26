@@ -49,8 +49,8 @@ const findForUser = (userId) => StaffMailAccount.findOne({ where: { userId } });
 const passwordFor = (row) => (row && row.passwordEncrypted ? cryptoUtil().decrypt(row.passwordEncrypted) : null);
 
 /** Metadata-only audit row. Fire-and-forget: an audit hiccup never breaks mail. */
-const logEvent = ({ userId, actorId = null, event, emailAddress = null, detail = null }, options = {}) =>
-  StaffMailEvent.create({ userId, actorId, event, emailAddress, detail: detail ? String(detail).slice(0, 500) : null }, options)
+const logEvent = ({ userId, actorId = null, patientId = null, event, emailAddress = null, detail = null }, options = {}) =>
+  StaffMailEvent.create({ userId, actorId, patientId, event, emailAddress, detail: detail ? String(detail).slice(0, 500) : null }, options)
     .catch((err) => console.error('StaffMailEvent.create error:', err.message));
 
 /** Is this address already connected by SOMEONE ELSE (not disconnected)? */

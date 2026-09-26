@@ -9,27 +9,15 @@ const path = require('path');
 
 const { MedicalDocument, Patient, User, Notification } = db;
 const { broadcast } = require('../utils/sseManager');
+const { DOCUMENT_CATEGORIES: ALLOWED_CATEGORIES, PDF_ONLY_CATEGORIES } = require('../utils/medicalDocumentCreate');
 
 // ====================================
 // CONSTANTS
 // ====================================
 
-// Official document categories (from BACKEND_GUIDE.md)
-const ALLOWED_CATEGORIES = [
-  'Lab Report - External',
-  'Imaging Report',
-  'Cardiology Report',
-  'Endocrinology Report',
-  'Nephrology Report',
-  'Ophthalmology Report',
-  'Neuropathy Screening Test',
-  'Specialist Consultation Report',
-  'Patient File',
-  'Other Medical Document'
-];
-
-// Categories that only accept PDF files
-const PDF_ONLY_CATEGORIES = ['Patient File'];
+// Official document categories + the PDF-only ones live in
+// utils/medicalDocumentCreate (shared with Lab Inbox pairing and Staff Email's
+// "Save to patient file", so the three can never disagree).
 
 // Categories hidden from patients — internal clinical documents
 const PATIENT_HIDDEN_CATEGORIES = ['Patient File', 'Specialist Consultation Report'];

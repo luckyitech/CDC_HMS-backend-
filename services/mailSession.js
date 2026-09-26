@@ -278,7 +278,7 @@ const getMessage = async (userId, { folder = 'INBOX', uid, markSeen = true } = {
   return withFolder(userId, folder, async (client) => {
     const msg = await client.fetchOne(String(id), {
       uid: true, envelope: true, flags: true, bodyStructure: true, internalDate: true, size: true,
-      headers: ['references', 'in-reply-to'],
+      headers: ['references', 'in-reply-to', 'x-hms-patient-documents'],
     }, { uid: true });
     if (!msg) throw new MailError('NOT_FOUND', 'That message is no longer in this folder.', 404);
     const parts = walkParts(msg.bodyStructure);
@@ -333,6 +333,9 @@ const getMessage = async (userId, { folder = 'INBOX', uid, markSeen = true } = {
       references: headerValue('references'),
       inReplyTo: headerValue('in-reply-to'),
       draft: flags.has('\\Draft'),
+      // Phase 3a: documents from a patient file that a draft carries BY REFERENCE
+      // (never embedded in the draft). Only meaningful on a draft.
+      hmsPatientDocuments: flags.has('\\Draft') ? headerValue('x-hms-patient-documents') : '',
       date: env.date || msg.internalDate || null,
       messageId: env.messageId || null,
       seen,
@@ -447,6 +450,45 @@ const specialFolder = async (userId, key) => {
 /** Read one MIME part into memory (attachments being forwarded / carried by a draft). */
 const downloadPart = (client, uid, part, max) => readPart(client, uid, part, max);
 
+// ---------------------------------------------------------------------------
+// Phase 3a — "people you've recently written to", for recipient suggestions.
+// Read live from the envelopes of the newest messages in the user's own Sent
+// folder and kept IN MEMORY for a few minutes (never in the DB — D1). A PM2
+// restart simply rebuilds it on the next keystroke.
+// ---------------------------------------------------------------------------
+const RECENT_TTL_MS = 10 * 60 * 1000;
+const RECENT_SCAN = 200;
+const recentCache = new Map();   // userId -> { at, list: [{ name, address, last }] }
+
+const recentRecipients = async (userId) => {
+  const hit = recentCache.get(userId);
+  if (hit && Date.now() - hit.at < RECENT_TTL_MS) return hit.list;
+  const sent = await specialFolder(userId, 'sent');
+  if (!sent) return [];
+  const byAddress = new Map();
+  await withFolder(userId, sent, async (client) => {
+    const total = client.mailbox.exists || 0;
+    if (!total) return;
+    const range = `${Math.max(1, total - RECENT_SCAN + 1)}:*`;
+    for await (const msg of client.fetch(range, { envelope: true, internalDate: true })) {
+      const env = msg.envelope || {};
+      const when = new Date(env.date || msg.internalDate || 0).getTime() || 0;
+      for (const r of [...addressList(env.to), ...addressList(env.cc)]) {
+        if (!r || !r.address) continue;
+        const key = r.address.toLowerCase();
+        const prev = byAddress.get(key);
+        if (!prev || when > prev.last) byAddress.set(key, { name: r.name || (prev && prev.name) || '', address: key, last: when });
+      }
+    }
+  });
+  const list = [...byAddress.values()].sort((a, b) => b.last - a.last);
+  recentCache.set(userId, { at: Date.now(), list });
+  return list;
+};
+
+/** Forget a user's recent list (after a send, so the new address shows). */
+const forgetRecent = (userId) => recentCache.delete(userId);
+
 module.exports = {
   MailError,
   isAuthError,
@@ -464,5 +506,8 @@ module.exports = {
   specialFolder,
   downloadPart,
   cleanUid,
+  allowedDomains,
+  recentRecipients,
+  forgetRecent,
   _pool: pool,
 };

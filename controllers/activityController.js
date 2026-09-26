@@ -2,7 +2,7 @@ const { Op } = require('sequelize');
 const { success } = require('../utils/response');
 const db = require('../models');
 
-const { Queue, Patient, MedicalDocument, MedicalEquipment, EquipmentHistory, User, Prescription, LabTest, TreatmentPlan, ConsultationNote, PhysicalExamination, InitialAssessment, UserLoginLog, Appointment, DoctorBlock, BarcodeScan, NeuropathyStudy, LabInboxItem, SettingChangeLog, ConversationMessage, Conversation, ConversationEscalation } = db;
+const { Queue, Patient, MedicalDocument, MedicalEquipment, EquipmentHistory, User, Prescription, LabTest, TreatmentPlan, ConsultationNote, PhysicalExamination, InitialAssessment, UserLoginLog, StaffMailEvent, Appointment, DoctorBlock, BarcodeScan, NeuropathyStudy, LabInboxItem, SettingChangeLog, ConversationMessage, Conversation, ConversationEscalation } = db;
 
 // ── Shared event shape ────────────────────────────────────────────────────────
 
@@ -616,6 +616,33 @@ const getSettingChangeEvents = async (dateFilter) => {
   ));
 };
 
+// Staff Email (B26) phase 3a — documents emailed from a patient's file. The
+// audit row holds counts and recipient DOMAINS only (never addresses, subjects
+// or file names — D1). Saving an email attachment to a file already shows as
+// "Uploaded Document" (it is a MedicalDocument), so it is not listed twice.
+const getMailPatientEvents = async (dateFilter) => {
+  const rows = await StaffMailEvent.findAll({
+    where: { event: 'patient_docs_sent', createdAt: dateFilter },
+    include: [
+      { model: User, as: 'actor', attributes: ['firstName', 'lastName', 'role'] },
+      { model: Patient, as: 'patient', attributes: ['uhid', 'firstName', 'lastName'] },
+    ],
+  });
+  return rows.map((r) => {
+    let d = {};
+    try { d = JSON.parse(r.detail || '{}'); } catch { d = {}; }
+    const docs = d.documents || 0;
+    const recips = d.recipients || 0;
+    const domains = Array.isArray(d.domains) ? d.domains.join(', ') : '';
+    return makeEvent(
+      'patient_docs_emailed', 'Emailed Patient Documents',
+      userName(r.actor), patientName(r.patient), r.patient?.uhid || null, r.createdAt,
+      `${docs} document${docs === 1 ? '' : 's'} to ${recips} recipient${recips === 1 ? '' : 's'}${domains ? ` (${domains})` : ''}`,
+      r.actor?.role || null,
+    );
+  });
+};
+
 // views (the Staff File Activity tab) reuse the exact same derivation instead of
 // duplicating it — one source of truth for "what counts as activity".
 const collectAllEvents = async (dateFilter = resolveDateFilter()) => (
@@ -637,6 +664,7 @@ const collectAllEvents = async (dateFilter = resolveDateFilter()) => (
     getLabInboxEvents(dateFilter),
     getCommsEvents(dateFilter),
     getSettingChangeEvents(dateFilter),
+    getMailPatientEvents(dateFilter),
   ])
 ).flat();
 

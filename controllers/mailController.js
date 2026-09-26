@@ -3,6 +3,7 @@ const { success, error } = require('../utils/response');
 const accounts = require('../services/mailAccounts');
 const session = require('../services/mailSession');
 const mailSend = require('../services/mailSend');
+const mailPatients = require('../services/mailPatients');
 const { checkAddress, getMailConfig, normEmail } = require('../utils/mailConfig');
 
 // ===========================================================================
@@ -236,7 +237,7 @@ const senderNameFor = async (userId) => {
 const send = async (req, res) => {
   try {
     const payload = readPayload(req);
-    const result = await mailSend.send(req.user.id, payload, req.files || [], { senderName: await senderNameFor(req.user.id) });
+    const result = await mailSend.send(req.user.id, payload, req.files || [], { senderName: await senderNameFor(req.user.id), user: req.user });
     return success(res, result);
   } catch (err) {
     return sendMailError(res, err, 'Mail.send');
@@ -247,7 +248,7 @@ const send = async (req, res) => {
 const saveDraft = async (req, res) => {
   try {
     const payload = readPayload(req);
-    const result = await mailSend.saveDraft(req.user.id, payload, req.files || [], { senderName: await senderNameFor(req.user.id) });
+    const result = await mailSend.saveDraft(req.user.id, payload, req.files || [], { senderName: await senderNameFor(req.user.id), user: req.user });
     return success(res, result);
   } catch (err) {
     return sendMailError(res, err, 'Mail.saveDraft');
@@ -278,9 +279,54 @@ const composeContext = async (req, res) => {
   try {
     return success(res, await mailSend.composeContext(req.user.id, {
       folder: req.query.folder, uid: req.params.uid, mode: req.query.mode,
-    }));
+    }, req.user));
   } catch (err) {
     return sendMailError(res, err, 'Mail.composeContext');
+  }
+};
+
+// ---------------------------------------------------------------------------
+// Phase 3a — the HMS / patient tie-ins. Gates for patient data are checked in
+// services/mailPatients against the same role/capability lists as the patient
+// and document routes; every read of a patient goes through resolvePatient.
+// ---------------------------------------------------------------------------
+
+/** GET /api/mail/suggest?q= — { recent, staff, patients, patientsShown } */
+const suggest = async (req, res) => {
+  try {
+    return success(res, await mailPatients.suggestRecipients(req.user, req.query.q));
+  } catch (err) {
+    return sendMailError(res, err, 'Mail.suggest');
+  }
+};
+
+/** GET /api/mail/patients?q= — the patient picker for "Attach from patient file". */
+const patients = async (req, res) => {
+  try {
+    return success(res, { patients: await mailPatients.pickPatients(req.user, req.query.q) });
+  } catch (err) {
+    return sendMailError(res, err, 'Mail.patients');
+  }
+};
+
+/** GET /api/mail/patients/:uhid/documents — the documents on a patient's file (whole merge family). */
+const patientDocuments = async (req, res) => {
+  try {
+    return success(res, await mailPatients.patientDocuments(req.user, req.params.uhid));
+  } catch (err) {
+    return sendMailError(res, err, 'Mail.patientDocuments');
+  }
+};
+
+/** POST /api/mail/messages/:uid/attachments/:part/save-to-patient  { folder, uhid, category, testDate, notes } */
+const saveToPatient = async (req, res) => {
+  try {
+    const { folder, uhid, category, testDate, notes } = req.body || {};
+    return success(res, await mailPatients.saveAttachmentToPatient(req.user, {
+      folder, uid: req.params.uid, part: req.params.part, uhid, category, testDate, notes,
+    }));
+  } catch (err) {
+    return sendMailError(res, err, 'Mail.saveToPatient');
   }
 };
 
@@ -313,6 +359,10 @@ const adminDisconnect = async (req, res) => {
 };
 
 module.exports = {
+  suggest,
+  patients,
+  patientDocuments,
+  saveToPatient,
   getAccount,
   testAccount,
   connectAccount,

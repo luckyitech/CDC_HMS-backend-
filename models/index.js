@@ -230,6 +230,7 @@ User.hasOne(StaffMailAccount, { as: 'mailAccount', foreignKey: 'userId' });
 StaffMailAccount.belongsTo(User, { as: 'user', foreignKey: 'userId' });
 StaffMailEvent.belongsTo(User, { as: 'user',  foreignKey: 'userId' });
 StaffMailEvent.belongsTo(User, { as: 'actor', foreignKey: 'actorId' });
+StaffMailEvent.belongsTo(Patient, { as: 'patient', foreignKey: 'patientId', constraints: false });
 
 Patient.hasMany(Appointment);
 Appointment.belongsTo(Patient);
