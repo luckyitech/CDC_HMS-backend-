@@ -1,10 +1,7 @@
 // End-to-end exercise of the authenticated /api/comms API against a scratch
 // MariaDB, with a scripted fake Meta. Manual smoke run: npm run test:comms:api
 require('dotenv').config({ path: '.env.test', override: true });
-if (process.env.CONFIRM_TEST_DB !== '1' || !process.env.DB_NAME || /prod|cdc_hms$/i.test(process.env.DB_NAME)) {
-  console.error(`[comms api test] refusing to run: DB_NAME="${process.env.DB_NAME || ''}" CONFIRM_TEST_DB="${process.env.CONFIRM_TEST_DB || ''}".`);
-  process.exit(0);
-}
+require('../_guard').assertThrowawayDb('comms api test');
 
 const fs = require('fs');
 const path = require('path');

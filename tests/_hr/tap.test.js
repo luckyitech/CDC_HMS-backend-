@@ -9,9 +9,7 @@ const { test, describe, before, after } = require('node:test');
 const assert = require('node:assert/strict');
 require('dotenv').config();
 
-if (process.env.CONFIRM_TEST_DB !== '1' || !/scratch|test/i.test(process.env.DB_NAME || '')) {
-  throw new Error('Refusing: set CONFIRM_TEST_DB=1 and a throw-away DB_NAME (containing "scratch" or "test").');
-}
+require('../_guard').assertThrowawayDb('hr test');
 
 const db = require('../../models');
 const { computeSunMac } = require('../../utils/ntag424');

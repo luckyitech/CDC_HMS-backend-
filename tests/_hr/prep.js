@@ -5,9 +5,7 @@
 // prod will be in when `npm run migrate` runs: HR tables absent, method column
 // absent, SequelizeMeta baselined through 20260923000002.
 require('dotenv').config();
-if (process.env.CONFIRM_TEST_DB !== '1' || !/scratch|test/i.test(process.env.DB_NAME || '')) {
-  throw new Error('Refusing: set CONFIRM_TEST_DB=1 and a throw-away DB_NAME (containing "scratch" or "test").');
-}
+require('../_guard').assertThrowawayDb('hr prep', 1);
 const fs = require('fs');
 const db = require('../../models');
 (async () => {

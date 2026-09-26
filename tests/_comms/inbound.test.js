@@ -6,11 +6,7 @@ require('dotenv').config({ path: '.env.test', override: true });
 // SAFETY: this calls sequelize.sync({ force: true }) — that DROPS EVERY TABLE in
 // whatever database it points at. Never run it against a developer's or the
 // clinic's database. Guarded exactly like the _gmc harness.
-if (process.env.CONFIRM_TEST_DB !== '1' || !process.env.DB_NAME || /prod|cdc_hms$/i.test(process.env.DB_NAME)) {
-  console.error(`[comms test] refusing to run: DB_NAME="${process.env.DB_NAME || ''}" CONFIRM_TEST_DB="${process.env.CONFIRM_TEST_DB || ''}". `
-    + 'Point .env.test at an empty test database and set CONFIRM_TEST_DB=1.');
-  process.exit(0);
-}
+require('../_guard').assertThrowawayDb('comms test');
 
 const fs = require('fs');
 const path = require('path');

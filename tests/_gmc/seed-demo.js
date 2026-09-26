@@ -1,6 +1,8 @@
 // Seeds the scratch DB with a doctor, a nurse, a patient and ~14 days of meter
 // readings so the frontend can be exercised end to end. Manual, not CI.
 require('dotenv').config({ path: '.env.test', override: true });
+// SAFETY: sync({ force: true }) below DROPS EVERY TABLE — throw-away databases only.
+require('../_guard').assertThrowawayDb('gmc seed-demo', 1);
 const bcrypt = require('bcryptjs');
 const db = require('../../models');
 (async () => {

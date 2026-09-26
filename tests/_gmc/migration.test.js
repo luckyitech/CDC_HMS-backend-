@@ -4,11 +4,7 @@ require('dotenv').config({ path: '.env.test', override: true });
 // developer's or the clinic's database. Run only via `npm run test:gmc` with a
 // .env.test that points at an EMPTY throwaway database AND sets
 // CONFIRM_TEST_DB=1 (the same guard test-admission-flow.js uses).
-if (process.env.CONFIRM_TEST_DB !== '1' || !process.env.DB_NAME || /prod|cdc_hms$/i.test(process.env.DB_NAME)) {
-  console.error(`[gmc test] refusing to run: DB_NAME="${process.env.DB_NAME || ''}" CONFIRM_TEST_DB="${process.env.CONFIRM_TEST_DB || ''}". `
-    + 'Point .env.test at an empty test database and set CONFIRM_TEST_DB=1.');
-  process.exit(0);
-}
+require('../_guard').assertThrowawayDb('gmc test');
 const { Sequelize } = require('sequelize');
 const db = require('../../models');
 const mig = require('../../migrations/20260912000001-create-glucose-management-centre');
