@@ -137,6 +137,13 @@ const PERMISSIONS = {
   COMMS_VIEW:  'comms.view',
   COMMS_WRITE: 'comms.write',
 
+  // Staff Email (B26) — using one's OWN clinic mailbox inside the HMS (the My
+  // mail tab of the Inbox): connect it, read, and (phase 2) send. Every
+  // internal role holds it by role (the /api/mail gate lists them); withdraw it
+  // to stop one person using mail in the HMS. It never reaches anyone else's
+  // mailbox — there is no capability for that, by design (decision D1).
+  EMAIL_USE: 'email.use',
+
   // --- Clinical ---
   // The clinical record itself, as opposed to the patient's identity and
   // administration. Reception legitimately needs to know who a patient is,
@@ -381,6 +388,7 @@ const ADMIN_ACCESS_COVERS = [
   PERMISSIONS.COMMS_WRITE,
   PERMISSIONS.CONFIG_WRITE,
   PERMISSIONS.DOCUMENTS_WRITE,
+  PERMISSIONS.EMAIL_USE,
   PERMISSIONS.HR_CHECKIN,
   PERMISSIONS.HR_VIEW,
   PERMISSIONS.HR_WRITE,
@@ -571,6 +579,12 @@ const PERMISSION_GROUPS = [
         accessLabel: 'Can read conversations and open attachments',
         writeLabel: 'Can reply, link, file, book, escalate and set reminders',
         roleDefault: 'Front desk, doctors, nurses' },
+      { key: 'staff-email', name: 'My mail (own clinic mailbox)', appliesIn: 'Inbox, every portal',
+        description: 'Connecting their own clinic email and reading it in the HMS. Only ever '
+          + 'their own mailbox — nobody, administrators included, can open another person\'s '
+          + 'mail through the HMS. Withdraw it to stop one person using email here.',
+        access: PERMISSIONS.EMAIL_USE, accessLabel: 'Can use their own mailbox in the HMS',
+        roleDefault: 'Everyone' },
     ],
   },
   {

@@ -57,4 +57,16 @@ router.put('/comms/costs', authenticate, authorize('admin', 'config.write'), [
   validate,
 ], settings.updateCommsCosts);
 
+// Staff Email (B26) — which domains staff may connect, each domain's mail
+// servers (a provider preset or custom), extra blocked system mailboxes, and
+// the feature on/off. No mailbox credential lives here — each person's is on
+// their own StaffMailAccount row. Normal admin gate.
+router.get('/email', authenticate, authorize('admin', 'config.write'), settings.getEmail);
+router.put('/email', authenticate, authorize('admin', 'config.write'), [
+  body('enabled').optional().isBoolean().withMessage("'enabled' must be true or false").toBoolean(),
+  body('domains').optional().isArray().withMessage("'domains' must be a list"),
+  body('blockedAddresses').optional().isArray().withMessage("'blockedAddresses' must be a list"),
+  validate,
+], settings.updateEmail);
+
 module.exports = router;

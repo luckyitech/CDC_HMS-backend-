@@ -855,6 +855,11 @@ const deleteUser = async (req, res) => {
       // A remembered phone must not outlive the account (HR Suite, B21).
       await require('../services/hrAttendanceService').revokeUserDevices(user.id, req.user.id, transaction);
 
+      // A saved mailbox password must not outlive the account either (Staff
+      // Email, B26, decision D5). Forgets the credential; mail on the server is
+      // untouched.
+      await require('../services/mailAccounts').wipe({ userId: user.id, actorId: req.user.id, reason: 'archived' }, { transaction });
+
       await UserEditLog.create({
         targetUserId: user.id,
         editedBy:     req.user.id,

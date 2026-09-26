@@ -87,6 +87,7 @@ app.use('/api/hr',                 require('./routes/hr'));
 app.use('/api/documents',          require('./routes/documents'));
 app.use('/api/lab-inbox',          require('./routes/labInbox'));
 app.use('/api/comms',              require('./routes/comms'));
+app.use('/api/mail',               require('./routes/mail'));   // Staff Email (B26)
 app.use('/api/reports',            require('./routes/reports'));
 app.use('/api/analytics',          require('./routes/analytics'));
 app.use('/api/dashboard',          require('./routes/dashboard'));

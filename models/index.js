@@ -27,6 +27,8 @@ const NursingNote         = require('./NursingNote');
 const MedicalDocument     = require('./MedicalDocument');
 const LabInboxItem        = require('./LabInboxItem');
 const SettingChangeLog    = require('./SettingChangeLog');
+const StaffMailAccount    = require('./StaffMailAccount');
+const StaffMailEvent      = require('./StaffMailEvent');
 const Appointment         = require('./Appointment');
 const MedicalEquipment    = require('./MedicalEquipment');
 const EquipmentHistory    = require('./EquipmentHistory');
@@ -221,6 +223,13 @@ LabInboxItem.belongsTo(User, { as: 'discardedBy', foreignKey: 'discardedById' })
 
 // Setting change audit — who changed which clinic-wide setting (Activity Log).
 SettingChangeLog.belongsTo(User, { as: 'changedBy', foreignKey: 'changedById' });
+
+// Staff Email (B26) — a staff member's own mailbox connection + its metadata
+// audit. Aliased camelCase FKs (A4). No mail content is stored anywhere.
+User.hasOne(StaffMailAccount, { as: 'mailAccount', foreignKey: 'userId' });
+StaffMailAccount.belongsTo(User, { as: 'user', foreignKey: 'userId' });
+StaffMailEvent.belongsTo(User, { as: 'user',  foreignKey: 'userId' });
+StaffMailEvent.belongsTo(User, { as: 'actor', foreignKey: 'actorId' });
 
 Patient.hasMany(Appointment);
 Appointment.belongsTo(Patient);
@@ -637,6 +646,9 @@ const db = {
   StaffWorkHours,
   // --- Onboarding wizard ---
   PermissionPreset,
+  // --- Staff Email (B26) ---
+  StaffMailAccount,
+  StaffMailEvent,
 };
 
 module.exports = db;

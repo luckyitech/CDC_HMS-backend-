@@ -346,7 +346,68 @@ const updateCommsCosts = async (req, res) => {
   }
 };
 
+// =====================================================================
+// Staff Email (B26) — System Settings → Email
+// =====================================================================
+const { getMailConfig, setMailConfig } = require('../utils/mailConfig');
+const { publicProviders } = require('../utils/mailProviders');
+
+/** Flatten the domain list to one comparable string per domain for the audit diff. */
+const domainSummary = (domains) => (domains || []).map((d) => (d.provider === 'custom'
+  ? `${d.domain} (custom: ${d.imapHost}:${d.imapPort} / ${d.smtpHost}:${d.smtpPort})`
+  : `${d.domain} (${d.provider})`));
+
+/**
+ * GET /api/settings/email
+ * { enabled, domains[], blockedAddresses[], systemAddresses[], providers[] }.
+ * systemAddresses (the Lab Inbox mailbox and the system sender) are always
+ * blocked and shown read-only.
+ * Authorization: admin / config.write
+ */
+const getEmail = async (req, res) => {
+  try {
+    return success(res, { ...(await getMailConfig()), providers: publicProviders() });
+  } catch (err) {
+    console.error('getEmail error:', err.message);
+    return error(res, 'Failed to load the Email settings', 500);
+  }
+};
+
+/**
+ * PUT /api/settings/email — any subset of enabled, domains[], blockedAddresses[].
+ * Authorization: admin / config.write
+ */
+const updateEmail = async (req, res) => {
+  try {
+    const changes = {};
+    for (const k of ['enabled', 'domains', 'blockedAddresses']) if (req.body[k] !== undefined) changes[k] = req.body[k];
+    if (!Object.keys(changes).length) return error(res, 'Nothing to update.', 400);
+
+    const before = await getMailConfig();
+    const cfg = await setMailConfig(changes);
+
+    recordSettingChanges({
+      user: req.user, area: 'Email',
+      before: { ...before, domains: domainSummary(before.domains) },
+      after: { ...cfg, domains: domainSummary(cfg.domains) },
+      fields: {
+        enabled:          { key: 'mail.enabled',          label: 'Email in the HMS' },
+        domains:          { key: 'mail.domains',          label: 'Allowed email domains' },
+        blockedAddresses: { key: 'mail.blockedAddresses', label: 'Blocked mailboxes' },
+      },
+    });
+
+    return success(res, { ...cfg, providers: publicProviders() });
+  } catch (err) {
+    console.error('updateEmail error:', err.message);
+    const userFacing = /must be|not a valid|need a valid|listed twice|Unknown provider/i.test(err.message || '');
+    return error(res, userFacing ? err.message : 'Failed to update the Email settings', userFacing ? 400 : 500);
+  }
+};
+
 module.exports = {
+  getEmail,
+  updateEmail,
   getPasswordRotation,
   updatePasswordRotation,
   getLabInbox,
