@@ -85,8 +85,36 @@ const sendText = async (to, text) => {
   });
 };
 
+// The sender's display name, for labelling a thread in the Inbox. Unlike
+// WhatsApp (which sends a contact name with every message), Messenger and
+// Instagram send only an opaque PSID/IGSID, so without this every thread reads
+// "Facebook Page". Needs the app feature "Business Asset User Profile Access".
+// BEST-EFFORT: any failure (feature missing, the person's privacy settings,
+// token, network, 5 s timeout) returns null and the thread stays unnamed —
+// a message must never be lost or held up over a name.
+const PROFILE_FIELDS = { messenger: 'first_name,last_name', instagram: 'name,username' };
+
+const profileNameFrom = (p) => {
+  if (!p || typeof p !== 'object') return null;
+  const full = [p.first_name, p.last_name].filter(Boolean).join(' ').trim() || String(p.name || '').trim();
+  const name = full || (p.username ? `@${p.username}` : '');
+  return name ? name.slice(0, 255) : null;
+};
+
+const fetchProfileName = async (userId, channelType) => {
+  const fields = PROFILE_FIELDS[channelType];
+  if (!fields || !userId) return null;
+  try {
+    const c = await cfg();
+    const url = `${GRAPH}/${c.graphVersion}/${encodeURIComponent(String(userId))}?fields=${fields}&access_token=${encodeURIComponent(c.pageAccessToken)}`;
+    return profileNameFrom(await call(url, { signal: AbortSignal.timeout(5000) }, { retry: false }));
+  } catch {
+    return null;
+  }
+};
+
 // Download an inbound attachment. Messenger/IG give a direct (signed) CDN URL on
 // the webhook, so — unlike WhatsApp — there is no media-id lookup step.
 const fetchAttachment = (url) => call(url, {}, { parse: false });
 
-module.exports = { sendText, fetchAttachment, GRAPH };
+module.exports = { sendText, fetchAttachment, fetchProfileName, profileNameFrom, GRAPH };
