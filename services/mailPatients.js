@@ -264,6 +264,9 @@ const patientDocuments = async (user, uhid) => {
         type: typeOf(d.fileName),
         size: file ? fs.statSync(file).size : null,
         available: !!file,
+        // For "Preview": the stored name GET /api/documents/file/:filename
+        // serves (same gate as reading the patient's documents).
+        fileKey: file ? path.basename(String(d.fileUrl || d.filePath || '')) : null,
         fromUhid: d.Patient ? d.Patient.uhid : null,
       };
     }),
