@@ -2,10 +2,12 @@ const db = require('../models');
 const { success, error } = require('../utils/response');
 const accounts = require('../services/mailAccounts');
 const session = require('../services/mailSession');
+const mailSend = require('../services/mailSend');
 const { checkAddress, getMailConfig, normEmail } = require('../utils/mailConfig');
 
 // ===========================================================================
-// Staff Email (B26) — /api/mail. Phase 1: connect + read.
+// Staff Email (B26) — /api/mail. Phase 1: connect + read. Phase 2: send,
+// reply, forward, drafts.
 //
 // EVERY handler here acts on req.user.id's OWN mailbox. There is no route
 // parameter that selects a user, so nobody — administrators included — can
@@ -213,6 +215,76 @@ const markSeen = async (req, res) => {
 };
 
 // ---------------------------------------------------------------------------
+// Phase 2 — send, reply, forward, drafts. The composer posts multipart:
+// a `message` field (JSON) plus any new `files`. Files stay in memory for this
+// request only.
+// ---------------------------------------------------------------------------
+
+const readPayload = (req) => {
+  const raw = req.body && req.body.message;
+  if (!raw) return {};
+  if (typeof raw === 'object') return raw;
+  try { return JSON.parse(raw); } catch { throw new session.MailError('BAD_PAYLOAD', 'The message could not be read. Try again.', 400); }
+};
+
+const senderNameFor = async (userId) => {
+  const u = await db.User.findByPk(userId, { attributes: ['firstName', 'lastName'] });
+  return u ? `${u.firstName || ''} ${u.lastName || ''}`.trim() : '';
+};
+
+/** POST /api/mail/send  (multipart: message=JSON, files[]) */
+const send = async (req, res) => {
+  try {
+    const payload = readPayload(req);
+    const result = await mailSend.send(req.user.id, payload, req.files || [], { senderName: await senderNameFor(req.user.id) });
+    return success(res, result);
+  } catch (err) {
+    return sendMailError(res, err, 'Mail.send');
+  }
+};
+
+/** POST /api/mail/drafts  (multipart: message=JSON incl. draftUid to replace, files[]) */
+const saveDraft = async (req, res) => {
+  try {
+    const payload = readPayload(req);
+    const result = await mailSend.saveDraft(req.user.id, payload, req.files || [], { senderName: await senderNameFor(req.user.id) });
+    return success(res, result);
+  } catch (err) {
+    return sendMailError(res, err, 'Mail.saveDraft');
+  }
+};
+
+/** DELETE /api/mail/drafts/:uid — moves the draft to Trash. */
+const discardDraft = async (req, res) => {
+  try {
+    return success(res, await mailSend.discardDraft(req.user.id, req.params.uid));
+  } catch (err) {
+    return sendMailError(res, err, 'Mail.discardDraft');
+  }
+};
+
+/** GET /api/mail/signature — { html } the signature added to every message, for previews. */
+const signature = async (req, res) => {
+  try {
+    return success(res, await mailSend.signaturePreview(req.user.id));
+  } catch (err) {
+    console.error('Mail.signature error:', err.message);
+    return error(res, 'Failed to load your signature', 500);
+  }
+};
+
+/** GET /api/mail/messages/:uid/compose?folder=&mode=reply|replyAll|forward|draft */
+const composeContext = async (req, res) => {
+  try {
+    return success(res, await mailSend.composeContext(req.user.id, {
+      folder: req.query.folder, uid: req.params.uid, mode: req.query.mode,
+    }));
+  } catch (err) {
+    return sendMailError(res, err, 'Mail.composeContext');
+  }
+};
+
+// ---------------------------------------------------------------------------
 // Admin — status and disconnect only. No route here can read a mailbox.
 // ---------------------------------------------------------------------------
 
@@ -252,6 +324,11 @@ module.exports = {
   message,
   attachment,
   markSeen,
+  send,
+  saveDraft,
+  discardDraft,
+  composeContext,
+  signature,
   adminListAccounts,
   adminDisconnect,
 };

@@ -349,7 +349,7 @@ const updateCommsCosts = async (req, res) => {
 // =====================================================================
 // Staff Email (B26) — System Settings → Email
 // =====================================================================
-const { getMailConfig, setMailConfig } = require('../utils/mailConfig');
+const { getMailConfig, setMailConfig, getSignatureConfig, setSignatureConfig, logoDataUri } = require('../utils/mailConfig');
 const { publicProviders } = require('../utils/mailProviders');
 
 /** Flatten the domain list to one comparable string per domain for the audit diff. */
@@ -364,9 +364,22 @@ const domainSummary = (domains) => (domains || []).map((d) => (d.provider === 'c
  * blocked and shown read-only.
  * Authorization: admin / config.write
  */
+/** The clinic signature as the admin screen sees it (logo as a data: URI). */
+const signatureForAdmin = (sig) => {
+  const { logo, ...rest } = sig;
+  return { ...rest, logoDataUri: logoDataUri(sig) };
+};
+
+/** One comparable value per signature field for the settings audit; the logo as a size, never its bytes. */
+const signatureAudit = (sig) => ({
+  sigClinicName: sig.clinicName, sigAddress: sig.address, sigPhone: sig.phone, sigEmail: sig.email,
+  sigWebsite: sig.website, sigConfidentialityOn: sig.confidentialityOn, sigConfidentialityText: sig.confidentialityText,
+  sigLogo: sig.logoSource === 'uploaded' ? `uploaded (${Math.round(sig.logo.buffer.length / 1024)} KB)` : sig.logoSource,
+});
+
 const getEmail = async (req, res) => {
   try {
-    return success(res, { ...(await getMailConfig()), providers: publicProviders() });
+    return success(res, { ...(await getMailConfig()), providers: publicProviders(), signature: signatureForAdmin(await getSignatureConfig()) });
   } catch (err) {
     console.error('getEmail error:', err.message);
     return error(res, 'Failed to load the Email settings', 500);
@@ -381,10 +394,13 @@ const updateEmail = async (req, res) => {
   try {
     const changes = {};
     for (const k of ['enabled', 'domains', 'blockedAddresses']) if (req.body[k] !== undefined) changes[k] = req.body[k];
-    if (!Object.keys(changes).length) return error(res, 'Nothing to update.', 400);
+    const sigChanges = req.body.signature && typeof req.body.signature === 'object' ? req.body.signature : null;
+    if (!Object.keys(changes).length && !sigChanges) return error(res, 'Nothing to update.', 400);
 
     const before = await getMailConfig();
-    const cfg = await setMailConfig(changes);
+    const sigBefore = await getSignatureConfig();
+    const cfg = Object.keys(changes).length ? await setMailConfig(changes) : before;
+    const sig = sigChanges ? await setSignatureConfig(sigChanges) : sigBefore;
 
     recordSettingChanges({
       user: req.user, area: 'Email',
@@ -396,11 +412,28 @@ const updateEmail = async (req, res) => {
         blockedAddresses: { key: 'mail.blockedAddresses', label: 'Blocked mailboxes' },
       },
     });
+    if (sigChanges) {
+      recordSettingChanges({
+        user: req.user, area: 'Email',
+        before: signatureAudit(sigBefore),
+        after: signatureAudit(sig),
+        fields: {
+          sigClinicName:          { key: 'mail.signature.clinicName',  label: 'Signature: clinic name' },
+          sigAddress:             { key: 'mail.signature.address',     label: 'Signature: address' },
+          sigPhone:               { key: 'mail.signature.phone',       label: 'Signature: phone' },
+          sigEmail:               { key: 'mail.signature.email',       label: 'Signature: clinic email' },
+          sigWebsite:             { key: 'mail.signature.website',     label: 'Signature: website' },
+          sigConfidentialityOn:   { key: 'mail.signature.confidentialityOn',   label: 'Signature: confidentiality note' },
+          sigConfidentialityText: { key: 'mail.signature.confidentialityText', label: 'Signature: confidentiality wording' },
+          sigLogo:                { key: 'mail.signatureLogo',         label: 'Signature: logo' },
+        },
+      });
+    }
 
-    return success(res, { ...cfg, providers: publicProviders() });
+    return success(res, { ...cfg, providers: publicProviders(), signature: signatureForAdmin(sig) });
   } catch (err) {
     console.error('updateEmail error:', err.message);
-    const userFacing = /must be|not a valid|need a valid|listed twice|Unknown provider/i.test(err.message || '');
+    const userFacing = /must be|not a valid|need a valid|listed twice|Unknown provider|at most/i.test(err.message || '');
     return error(res, userFacing ? err.message : 'Failed to update the Email settings', userFacing ? 400 : 500);
   }
 };

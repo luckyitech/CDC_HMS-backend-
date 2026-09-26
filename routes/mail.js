@@ -1,8 +1,10 @@
 const express = require('express');
+const multer = require('multer');
 const rateLimit = require('express-rate-limit');
 const { body } = require('express-validator');
 const validate = require('../middleware/validate');
 const { authenticate, authorize } = require('../middleware/auth');
+const { error } = require('../utils/response');
 const mail = require('../controllers/mailController');
 
 const router = express.Router();
@@ -57,6 +59,36 @@ router.post('/messages/seen', authenticate, authorize(...MAIL), [
 ], mail.markSeen);
 router.get('/messages/:uid', authenticate, authorize(...MAIL), mail.message);
 router.get('/messages/:uid/attachments/:part', authenticate, authorize(...MAIL), mail.attachment);
+
+// Phase 2 — composing. New attachments arrive as multipart `files` and are held
+// in memory for this request only (never written to disk, never /uploads).
+// 25 MB is the whole-message cap; mailSend re-checks the total including
+// attachments carried from other messages.
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024, files: 20, fieldSize: 4 * 1024 * 1024 } });
+const composeUpload = (req, res, next) => upload.array('files', 20)(req, res, (err) => {
+  if (!err) return next();
+  const tooBig = err.code === 'LIMIT_FILE_SIZE' || err.code === 'LIMIT_FIELD_VALUE';
+  return error(res, tooBig ? 'Attachments come to more than 25 MB. Remove some, or share large files another way.'
+    : err.code === 'LIMIT_FILE_COUNT' ? 'At most 20 attachments.' : 'The attachments could not be read.', tooBig ? 413 : 400,
+  { code: tooBig ? 'ATTACH_TOO_BIG' : 'BAD_UPLOAD' });
+});
+
+// one.com allows 25 messages per 5 minutes per mailbox. Stay under it so the
+// HMS refuses politely before the provider does.
+const sendLimiter = rateLimit({
+  windowMs: 5 * 60 * 1000,
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req) => `mail-send:${req.user ? req.user.id : 'anon'}`,
+  message: { success: false, message: 'You have sent a lot of email in the last few minutes. Wait a moment and send again — your draft is kept.', code: 'RATE_LIMITED' },
+});
+
+router.post('/send', authenticate, authorize(...MAIL), sendLimiter, composeUpload, mail.send);
+router.post('/drafts', authenticate, authorize(...MAIL), composeUpload, mail.saveDraft);
+router.delete('/drafts/:uid', authenticate, authorize(...MAIL), mail.discardDraft);
+router.get('/messages/:uid/compose', authenticate, authorize(...MAIL), mail.composeContext);
+router.get('/signature', authenticate, authorize(...MAIL), mail.signature);
 
 // Admin: who is connected, and forget someone's saved password. Status only.
 router.get('/admin/accounts', authenticate, authorize('admin', 'config.write'), mail.adminListAccounts);

@@ -25,6 +25,8 @@ const K = {
   enabled:          'mail.enabled',
   domains:          'mail.domains',
   blockedAddresses: 'mail.blockedAddresses',
+  signature:        'mail.signature',       // JSON — the clinic part of every signature
+  signatureLogo:    'mail.signatureLogo',   // data: URI of an uploaded logo, 'none', or '' (= the bundled default)
 };
 
 let cached = { rows: null, at: 0 };
@@ -129,6 +131,99 @@ const setMailConfig = async (changes = {}) => {
   return getMailConfig();
 };
 
+// ---------------------------------------------------------------------------
+// The clinic signature (phase 2). Each person writes their own lines (name,
+// title, direct line) in their email settings; the HMS adds this clinic block
+// under them on every message they send. Set once by an admin in System
+// Settings → Email. Until an admin changes it, it carries the clinic's
+// letterhead details and the logo bundled with the backend.
+// ---------------------------------------------------------------------------
+
+const SIGNATURE_DEFAULTS = {
+  clinicName: 'Comprehensive Diabetes Centre',
+  address: '3rd Floor, Doctors Park, Third Avenue, Nairobi',
+  phone: '0711 781299',
+  email: 'info@cdiabetescentre.com',
+  website: 'comprehensivediabetescentre.com',
+  confidentialityOn: true,
+  confidentialityText: 'Confidential: this email may contain patient information intended only for the addressee. If you received it in error, please tell the sender and delete it.',
+};
+const SIGNATURE_LIMITS = { clinicName: 120, address: 200, phone: 120, email: 120, website: 200, confidentialityText: 600 };
+const DEFAULT_LOGO_PATH = require('path').join(__dirname, '..', 'logo', 'cdc_mark.png');
+const MAX_LOGO_BYTES = 40 * 1024;   // kept small: it travels inside every email
+const LOGO_RE = /^data:(image\/(?:png|jpeg));base64,([A-Za-z0-9+/=]+)$/;
+
+let defaultLogo;
+const readDefaultLogo = () => {
+  if (defaultLogo === undefined) {
+    try { defaultLogo = { type: 'image/png', buffer: require('fs').readFileSync(DEFAULT_LOGO_PATH) }; } catch { defaultLogo = null; }
+  }
+  return defaultLogo;
+};
+
+const parseObject = (raw) => {
+  if (!raw) return {};
+  try { const v = typeof raw === 'string' ? JSON.parse(raw) : raw; return v && typeof v === 'object' && !Array.isArray(v) ? v : {}; } catch { return {}; }
+};
+
+/**
+ * The clinic signature: { clinicName, address, phone, email, website,
+ * confidentialityOn, confidentialityText, logo: { type, buffer } | null,
+ * logoSource: 'default' | 'uploaded' | 'none' }.
+ */
+const getSignatureConfig = async () => {
+  const m = await readRows();
+  const saved = parseObject(m[K.signature]);
+  const sig = { ...SIGNATURE_DEFAULTS };
+  for (const k of Object.keys(SIGNATURE_DEFAULTS)) if (saved[k] !== undefined) sig[k] = saved[k];
+  sig.confidentialityOn = sig.confidentialityOn !== false;
+
+  const rawLogo = m[K.signatureLogo] || '';
+  if (rawLogo === 'none') { sig.logo = null; sig.logoSource = 'none'; }
+  else {
+    const match = rawLogo.match(LOGO_RE);
+    if (match) { sig.logo = { type: match[1], buffer: Buffer.from(match[2], 'base64') }; sig.logoSource = 'uploaded'; }
+    else { sig.logo = readDefaultLogo(); sig.logoSource = sig.logo ? 'default' : 'none'; }
+  }
+  return sig;
+};
+
+/** For the admin screen and previews: the logo as a data: URI. */
+const logoDataUri = (sig) => (sig.logo ? `data:${sig.logo.type};base64,${sig.logo.buffer.toString('base64')}` : null);
+
+/**
+ * Save the clinic signature. `logo`: a data: URI (PNG/JPEG ≤ 40 KB), 'none'
+ * to show no logo, or 'default' for the bundled one. Throws user-facing
+ * validation errors.
+ */
+const setSignatureConfig = async (changes = {}) => {
+  const current = parseObject((await readRows())[K.signature]);
+  const next = { ...current };
+  for (const [k, max] of Object.entries(SIGNATURE_LIMITS)) {
+    if (changes[k] === undefined) continue;
+    const v = String(changes[k] == null ? '' : changes[k]).replace(/[\r\n]+/g, k === 'confidentialityText' ? ' ' : ' ').trim();
+    if (v.length > max) throw new Error(`The signature's ${k} must be at most ${max} characters.`);
+    next[k] = v;
+  }
+  if (changes.email !== undefined && next.email && !EMAIL_RE.test(next.email)) throw new Error(`'${next.email}' is not a valid email address.`);
+  if (changes.confidentialityOn !== undefined) next.confidentialityOn = !!changes.confidentialityOn;
+  await writeSetting(K.signature, JSON.stringify(next));
+
+  if (changes.logo !== undefined) {
+    const logo = String(changes.logo || '');
+    if (logo === 'default') await writeSetting(K.signatureLogo, '');
+    else if (logo === 'none') await writeSetting(K.signatureLogo, 'none');
+    else {
+      const match = logo.match(LOGO_RE);
+      if (!match) throw new Error('The logo must be a PNG or JPEG image.');
+      if (Buffer.from(match[2], 'base64').length > MAX_LOGO_BYTES) throw new Error('The logo must be at most 40 KB — it travels inside every email.');
+      await writeSetting(K.signatureLogo, logo);
+    }
+  }
+  clearMailCache();
+  return getSignatureConfig();
+};
+
 /**
  * May this address be connected as someone's personal mailbox, and with which
  * servers? Returns { ok: true, servers } or { ok: false, reason, code }.
@@ -160,6 +255,10 @@ module.exports = {
   setMailConfig,
   checkAddress,
   clearMailCache,
+  getSignatureConfig,
+  setSignatureConfig,
+  logoDataUri,
+  SIGNATURE_DEFAULTS,
   normEmail,
   domainOf,
   EMAIL_RE,

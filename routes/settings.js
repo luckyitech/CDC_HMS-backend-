@@ -66,6 +66,7 @@ router.put('/email', authenticate, authorize('admin', 'config.write'), [
   body('enabled').optional().isBoolean().withMessage("'enabled' must be true or false").toBoolean(),
   body('domains').optional().isArray().withMessage("'domains' must be a list"),
   body('blockedAddresses').optional().isArray().withMessage("'blockedAddresses' must be a list"),
+  body('signature').optional().isObject().withMessage("'signature' must be an object"),
   validate,
 ], settings.updateEmail);
 

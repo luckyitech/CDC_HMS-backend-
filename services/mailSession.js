@@ -276,7 +276,10 @@ const getMessage = async (userId, { folder = 'INBOX', uid, markSeen = true } = {
   const id = cleanUid(uid);
   const domains = await allowedDomains();
   return withFolder(userId, folder, async (client) => {
-    const msg = await client.fetchOne(String(id), { uid: true, envelope: true, flags: true, bodyStructure: true, internalDate: true, size: true }, { uid: true });
+    const msg = await client.fetchOne(String(id), {
+      uid: true, envelope: true, flags: true, bodyStructure: true, internalDate: true, size: true,
+      headers: ['references', 'in-reply-to'],
+    }, { uid: true });
     if (!msg) throw new MailError('NOT_FOUND', 'That message is no longer in this folder.', 404);
     const parts = walkParts(msg.bodyStructure);
 
@@ -312,6 +315,12 @@ const getMessage = async (userId, { folder = 'INBOX', uid, markSeen = true } = {
 
     const env = msg.envelope || {};
     const from = addressList(env.from)[0] || null;
+    // Threading headers — used only to build a reply's In-Reply-To/References.
+    const rawHeaders = msg.headers ? msg.headers.toString('utf8') : '';
+    const headerValue = (name) => {
+      const m = rawHeaders.match(new RegExp(`(?:^|\\n)${name}:([\\s\\S]*?)(?=\\r?\\n\\S|\\s*$)`, 'i'));
+      return m ? m[1].replace(/\r?\n\s+/g, ' ').trim() : '';
+    };
     return {
       uid: id,
       folder: client.mailbox.path,
@@ -319,7 +328,11 @@ const getMessage = async (userId, { folder = 'INBOX', uid, markSeen = true } = {
       from,
       to: addressList(env.to),
       cc: addressList(env.cc),
+      bcc: addressList(env.bcc),
       replyTo: addressList(env.replyTo),
+      references: headerValue('references'),
+      inReplyTo: headerValue('in-reply-to'),
+      draft: flags.has('\\Draft'),
       date: env.date || msg.internalDate || null,
       messageId: env.messageId || null,
       seen,
@@ -411,6 +424,29 @@ const unreadCount = async (userId) => {
   }
 };
 
+/**
+ * The path of a special-use folder (sent / drafts / trash) in the caller's
+ * mailbox, by the server's special-use flag, then by common names. Null when
+ * there is none.
+ */
+const SPECIAL_FLAG = { sent: '\\Sent', drafts: '\\Drafts', trash: '\\Trash' };
+const SPECIAL_NAMES = {
+  sent: ['sent', 'sent items', 'sent messages', 'inbox.sent', 'inbox/sent'],
+  drafts: ['drafts', 'draft', 'inbox.drafts', 'inbox/drafts'],
+  trash: ['trash', 'deleted items', 'deleted messages', 'inbox.trash', 'inbox/trash'],
+};
+const specialFolder = async (userId, key) => {
+  const client = await getClient(userId);
+  const rows = await client.list();
+  const byFlag = rows.find((f) => f.specialUse === SPECIAL_FLAG[key]);
+  if (byFlag) return byFlag.path;
+  const byName = rows.find((f) => SPECIAL_NAMES[key].includes(String(f.path).toLowerCase()));
+  return byName ? byName.path : null;
+};
+
+/** Read one MIME part into memory (attachments being forwarded / carried by a draft). */
+const downloadPart = (client, uid, part, max) => readPart(client, uid, part, max);
+
 module.exports = {
   MailError,
   isAuthError,
@@ -424,5 +460,9 @@ module.exports = {
   setSeen,
   unreadCount,
   dispositionHeader,
+  withFolder,
+  specialFolder,
+  downloadPart,
+  cleanUid,
   _pool: pool,
 };

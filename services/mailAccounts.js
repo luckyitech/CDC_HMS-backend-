@@ -1,5 +1,6 @@
 const db = require('../models');
 const { normEmail } = require('../utils/mailConfig');
+const { sanitizeHtml } = require('../utils/mailRender');
 
 const { StaffMailAccount, StaffMailEvent } = db;
 
@@ -82,7 +83,8 @@ const updatePreferences = async (userId, prefs) => {
   if (!row) return null;
   const values = {};
   if (prefs.displayName !== undefined) values.displayName = String(prefs.displayName || '').slice(0, 120) || null;
-  if (prefs.signatureHtml !== undefined) values.signatureHtml = String(prefs.signatureHtml || '').slice(0, 5000) || null;
+  // The signature goes into every message the person sends — strip active content.
+  if (prefs.signatureHtml !== undefined) values.signatureHtml = sanitizeHtml(String(prefs.signatureHtml || '')).trim().slice(0, 5000) || null;
   if (prefs.remoteImagesDefault !== undefined) values.remoteImagesDefault = !!prefs.remoteImagesDefault;
   if (prefs.trustedImageSenders !== undefined) {
     const list = [...new Set((Array.isArray(prefs.trustedImageSenders) ? prefs.trustedImageSenders : [])
