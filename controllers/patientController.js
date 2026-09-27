@@ -1,5 +1,5 @@
 const { Op } = require('sequelize');
-const { success } = require('../utils/response');
+const { success, error } = require('../utils/response');
 const { clinicToday, clinicStartOfDay } = require('../utils/clinicTime');
 const { broadcast } = require('../utils/sseManager');
 const db = require('../models');
@@ -9,6 +9,8 @@ const bcrypt = require('bcryptjs');
 const crypto = require('crypto');
 const { generateUHID } = require('../utils/generateId');
 const { sendPatientWelcomeEmail, sendEmailUpdatedEmail } = require('../utils/emailService');
+const { registerPatient, createPatientLogin } = require('../services/patientRegistration');
+const { findMatches } = require('../utils/patientMatch');
 
 const {
   Patient, User, PatientVital, Appointment, Queue,
@@ -187,6 +189,16 @@ const duplicateIdResponse = (res, idNumber, existing) =>
     existingPatient: { uhid: existing.uhid, name: `${existing.firstName} ${existing.lastName}`.trim() },
   });
 
+// 409 returned when a new registration looks like an existing file (fuzzy /
+// merge-aware match). `code: 'POSSIBLE_DUPLICATE'` tells the frontend to show
+// the "open existing file / create anyway" chooser rather than a plain toast.
+// The client resubmits with { force: true } to proceed.
+const duplicateMatchResponse = (res, candidates) =>
+  error(res, 'One or more existing patient files look like a match.', 409, {
+    code: 'POSSIBLE_DUPLICATE',
+    candidates,
+  });
+
 /**
  * Fetches the full patient row with all related data needed for an API response.
  * Centralises the repeated Promise.all pattern across create / update / completeRegistration.
@@ -282,115 +294,67 @@ const missingContactInfo = (fields) => {
   return null;
 };
 
+// Full registration: creates the Patient file + a linked portal login. Runs the
+// merge-aware duplicate WARN gate — on a probable match it returns 409
+// POSSIBLE_DUPLICATE with candidates, and the client resubmits with force:true.
 const create = async (req, res) => {
-  const { password, ...patientFields } = req.body;
+  const { password, force, ...patientFields } = req.body;
 
   const contactError = missingContactInfo(patientFields);
   if (contactError) {
     return res.status(400).json({ success: false, message: contactError });
   }
 
-  // Use provided UHID or auto-generate one
-  let uhid = patientFields.uhid;
-  if (uhid) {
-    const existing = await Patient.findOne({ where: { uhid } });
-    if (existing) {
-      return res.status(400).json({
-        success: false,
-        message: `UHID "${uhid}" already exists. Please use a different UHID.`,
-      });
-    }
-  } else {
-    uhid = await generateUHID(Patient);
-  }
-
+  // ID number remains a HARD block (a shared national ID is never two people).
   const idDuplicate = await findDuplicateIdNumber(patientFields.idNumber);
   if (idDuplicate) return duplicateIdResponse(res, patientFields.idNumber, idDuplicate);
 
-  // Use provided password or auto-generate one
-  const tempPassword = password || crypto.randomBytes(6).toString('hex');
+  const result = await registerPatient({
+    fields: patientFields,
+    createLogin: true,
+    password,
+    force: !!force,
+    attribution: { registeredBy: req.user.name || 'Unknown', registeredByRole: req.user.role || 'staff' },
+    sendWelcome: true,
+  });
 
-  const transaction = await sequelize.transaction();
-  try {
-    // Check if email already has a user account
-    if (patientFields.email) {
-      const existingUser = await User.findOne({ where: { email: patientFields.email } });
-      if (existingUser) {
-        await transaction.rollback();
-        return res.status(400).json({
-          success: false,
-          message: `A login account already exists for email "${patientFields.email}".`,
-        });
-      }
-    }
-
-    const hashedPassword = await bcrypt.hash(tempPassword, 10);
-    const user = await User.create({
-      email: patientFields.email,
-      password: hashedPassword,
-      role: 'patient',
-      firstName: patientFields.firstName,
-      lastName: patientFields.lastName,
-      phone: patientFields.phone,
-      isActive: true,
-    }, { transaction });
-
-    const patient = await Patient.create({ ...patientFields, uhid, UserId: user.id, registrationComplete: true, registeredBy: req.user.name || 'Unknown', registeredByRole: req.user.role || 'staff' }, { transaction });
-    await transaction.commit();
-
-    const full = await Patient.findByPk(patient.id, { include: [doctorInclude] });
-
-    // Send welcome email to patient with login credentials
-    if (patientFields.email) {
-      sendPatientWelcomeEmail({
-        to: patientFields.email,
-        name: `${patientFields.firstName} ${patientFields.lastName}`,
-        uhid,
-        tempPassword,
-      }).catch(() => {});
-    }
-
-    // Return tempPassword so the frontend can show it to the staff member
-    return success(res, { ...formatPatient(full, null), tempPassword }, 201);
-  } catch (err) {
-    await transaction.rollback();
-    throw err;
+  if (result.status === 'duplicate') return duplicateMatchResponse(res, result.candidates);
+  if (result.status === 'uhid_taken') {
+    return res.status(400).json({ success: false, message: `UHID "${result.uhid}" already exists. Please use a different UHID.` });
   }
+  if (result.status === 'email_taken') {
+    return res.status(400).json({ success: false, message: `A login account already exists for email "${result.email}".` });
+  }
+
+  const full = await Patient.findByPk(result.patient.id, { include: [doctorInclude] });
+  // Return tempPassword so the frontend can show it to the staff member
+  return success(res, { ...formatPatient(full, null), tempPassword: result.tempPassword }, 201);
 };
 
 // ------------------------------------
 // POST /api/patients/quick — minimal placeholder for phone bookings
 // Creates a Patient record only (no User login account).
 // Full profile is completed face-to-face when the patient walks in.
+// Same merge-aware WARN gate as full create (force:true to override).
 // ------------------------------------
 const quickCreate = async (req, res) => {
-  const { firstName, lastName, phone } = req.body;
+  const { firstName, lastName, phone, force } = req.body;
 
   if (!phone || !phone.trim()) {
     return res.status(400).json({ success: false, message: 'Phone number is required.' });
   }
 
   try {
-    const existing = await Patient.findOne({ where: { phone } });
-    if (existing) {
-      return res.status(400).json({
-        success: false,
-        message: `A patient with phone ${phone} already exists — ${existing.firstName} ${existing.lastName} (${existing.uhid}).`,
-      });
-    }
-
-    const uhid = await generateUHID(Patient);
-
-    const patient = await Patient.create({
-      firstName,
-      lastName,
-      phone,
-      uhid,
-      registeredBy:     req.user.name || 'Unknown',
-      registeredByRole: req.user.role || 'staff',
+    const result = await registerPatient({
+      fields: { firstName, lastName, phone },
+      createLogin: false,
+      force: !!force,
+      attribution: { registeredBy: req.user.name || 'Unknown', registeredByRole: req.user.role || 'staff' },
     });
 
-    return success(res, formatPatient(patient, null), 201);
+    if (result.status === 'duplicate') return duplicateMatchResponse(res, result.candidates);
+
+    return success(res, formatPatient(result.patient, null), 201);
   } catch (err) {
     console.error('quickCreate error:', err);
     return res.status(500).json({ success: false, message: 'Failed to register patient' });
@@ -500,6 +464,28 @@ const list = async (req, res) => {
     lastQueueMap[p.id] || null,
   ));
 
+  // Fuzzy fallback (additive only): if a name search returned a thin exact/LIKE
+  // result set, fold in phonetic + edit-distance matches so a MISSPELLED file
+  // surfaces when staff search — the root cause of the duplicate-file problem
+  // (search "Mohamed", the file is "Mohammed", nothing found, a new file made).
+  // Never removes or reorders the exact results; appends deduped fuzzy hits with
+  // fuzzyMatch:true. Only on the first page of an unfiltered name search.
+  if (search && parseInt(page) === 1 && !doctor && !riskLevel && !status && patients.length < parseInt(limit)) {
+    const term = String(search).trim();
+    // Only worth it for a name-ish term (not a phone/UHID/email fragment).
+    if (term && !/^\+?\d[\d\s-]*$/.test(term) && !/@/.test(term) && !/^cdc/i.test(term)) {
+      const toks = term.split(/\s+/);
+      const fuzzyFields = { firstName: toks[0], lastName: toks.slice(1).join(' ') || toks[0] };
+      const candidates = await findMatches(fuzzyFields, { limit: 30 });
+      const seen = new Set(rows.map(p => p.id));
+      const extra = candidates.filter(c => !seen.has(c.id)).slice(0, 10).map(c => c.id);
+      if (extra.length) {
+        const extraRows = await Patient.findAll({ where: { id: { [Op.in]: extra } }, include: [{ ...doctorInclude }] });
+        extraRows.forEach(p => patients.push({ ...formatPatient(p, null), fuzzyMatch: true }));
+      }
+    }
+  }
+
   return success(res, {
     patients,
     pagination: {
@@ -546,29 +532,19 @@ const completeRegistration = async (req, res) => {
     let tempPassword = null;
 
     if (patientFields.email) {
-      const existingUser = await User.findOne({ where: { email: patientFields.email } });
-      if (existingUser) {
-        await transaction.rollback();
-        return res.status(400).json({
-          success: false,
-          message: `A login account already exists for email "${patientFields.email}".`,
-        });
-      }
-
-      tempPassword = password || crypto.randomBytes(6).toString('hex');
-      const hashedPassword = await bcrypt.hash(tempPassword, 10);
-
-      const user = await User.create({
-        email:     patientFields.email,
-        password:  hashedPassword,
-        role:      'patient',
-        firstName: patient.firstName,
-        lastName:  patient.lastName,
-        phone:     patientFields.phone || patient.phone,
-        isActive:  true,
-      }, { transaction });
-
-      await patient.update({ ...patientFields, UserId: user.id, registrationComplete: true }, { transaction });
+      // Shared login helper (throws EMAIL_TAKEN if the email already backs a User).
+      const login = await createPatientLogin(
+        {
+          email:     patientFields.email,
+          password,
+          firstName: patient.firstName,
+          lastName:  patient.lastName,
+          phone:     patientFields.phone || patient.phone,
+        },
+        transaction,
+      );
+      tempPassword = login.tempPassword;
+      await patient.update({ ...patientFields, UserId: login.user.id, registrationComplete: true }, { transaction });
     } else {
       await patient.update({ ...patientFields, registrationComplete: true }, { transaction });
     }
@@ -592,6 +568,9 @@ const completeRegistration = async (req, res) => {
     });
   } catch (err) {
     await transaction.rollback();
+    if (err.code === 'EMAIL_TAKEN') {
+      return res.status(400).json({ success: false, message: `A login account already exists for email "${err.email}".` });
+    }
     throw err;
   }
 };
