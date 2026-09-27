@@ -588,26 +588,25 @@ const patientEmailTrail = async (family, { from, to, canReadText = false } = {})
   }));
 };
 
-// ---- 3b. emailed HMS reports — a copy on the patient's file (debt pass) ------
+// ---- 3b. emailed HMS reports (debt pass; revised 27 Sep evening) ---------
 //
-// A report printed from the HMS (lab result, prescription, treatment plan…) is
+// A printout from the HMS (prescription, lab request, referral letter…) is
 // turned into a PDF in the browser and attached to the email as an ordinary
-// upload, listed in payload.hmsReports = [{ uhid, filename, title }]. Emu, 27
-// Sep: a copy of EXACTLY what was sent is saved to the patient's Documents —
-// category "Sent Correspondence", status Reviewed (the clinic's own output) —
-// once the email has gone. checkReportCopies runs BEFORE sending (so a refusal
-// reaches no SMTP server); saveReportCopies after, and never throws.
+// upload, listed in payload.hmsReports = [{ uhid, filename, title }].
+// Emu, 27 Sep (evening): these are NOT filed on the patient's Documents any
+// more — each can be rebuilt from Visit History at any time, and filing them
+// crowded Documents. The send is still on the patient's Communications trail.
+// checkReports runs BEFORE sending, so a refusal reaches no SMTP server.
 
-const REPORT_CATEGORY = 'Sent Correspondence';
 const MAX_REPORTS = 10;
 
 const cleanReportTitle = (t) => String(t || 'HMS report').replace(/[\r\n]+/g, ' ').trim().slice(0, 120) || 'HMS report';
 
-const checkReportCopies = async (user, reports, files) => {
+const checkReports = async (user, reports, files) => {
   const list = Array.isArray(reports) ? reports.slice(0, MAX_REPORTS + 1) : [];
   if (!list.length) return [];
   if (list.length > MAX_REPORTS) throw new MailError('TOO_MANY', `At most ${MAX_REPORTS} HMS reports per email.`, 400);
-  requireGate(user, DOCUMENT_WRITE, "save a copy to a patient's file");
+  requireGate(user, PATIENT_VIEW, 'email a patient printout');
   const out = [];
   const used = new Set();
   for (const r of list) {
@@ -622,43 +621,9 @@ const checkReportCopies = async (user, reports, files) => {
       const into = await Patient.findByPk(family.patient.mergedIntoId, { attributes: ['uhid'] });
       throw new MailError('MERGED', `That report's file was merged into ${into ? into.uhid : 'another file'}. Open that one and try again.`, 409);
     }
-    if ((family.patient.status || '').toLowerCase() === 'inactive') {
-      throw new MailError('INACTIVE', 'This patient profile is inactive. Documents cannot be filed to it.', 403);
-    }
     out.push({ family, file, title: cleanReportTitle(r.title) });
   }
   return out;
-};
-
-/** After the email has gone: file each copy. → { idsByPatient: Map(canonicalId → [docIds]), filedNames, failed } */
-const saveReportCopies = async (user, checked, { recipients = 0 } = {}) => {
-  const idsByPatient = new Map();
-  const filedNames = [];
-  let failed = 0;
-  for (const { family, file, title } of checked) {
-    const filename = `${crypto.randomBytes(16).toString('hex')}.pdf`;
-    try {
-      if (!fs.existsSync(DOCUMENTS_DIR)) fs.mkdirSync(DOCUMENTS_DIR, { recursive: true });
-      fs.writeFileSync(path.join(DOCUMENTS_DIR, filename), file.buffer);
-      const doc = await createMedicalDocument({
-        patient: family.patient,
-        actingUser: user,
-        file: { originalName: String(file.originalname).replace(/[\r\n"\\/]/g, '_').slice(0, 250), filename, size: file.buffer.length },
-        documentCategory: REPORT_CATEGORY,
-        testDate: clinicToday(),
-        notes: `${title} — emailed from the HMS to ${recipients} recipient${recipients === 1 ? '' : 's'}. This is the exact copy that was sent.`,
-        status: 'Reviewed',
-      });
-      const id = family.patient.id;
-      idsByPatient.set(id, [...(idsByPatient.get(id) || []), doc.id]);
-      filedNames.push(file.originalname);
-    } catch (err) {
-      failed += 1;
-      fs.promises.unlink(path.join(DOCUMENTS_DIR, filename)).catch(() => {});
-      console.error('[Mail] report copy not saved:', err.code || err.name || err.message);
-    }
-  }
-  return { idsByPatient, filedNames, failed };
 };
 
 // ---- 3. save an attachment to a patient file -------------------------------
@@ -788,9 +753,7 @@ module.exports = {
   loadPatientDocuments,
   logPatientDocumentsSent,
   saveAttachmentToPatient,
-  checkReportCopies,
-  saveReportCopies,
-  REPORT_CATEGORY,
+  checkReports,
   verifyPatientRecipients,
   logPatientEmailed,
   patientContact,

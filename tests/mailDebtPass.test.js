@@ -91,10 +91,9 @@ describe('folders and select-all — shape', () => {
   });
 });
 
-describe('emailed HMS reports — the copy on the file', () => {
-  test('"Sent Correspondence" is an official category and takes PDFs', () => {
-    assert.ok(DOCUMENT_CATEGORIES.includes(mailPatients.REPORT_CATEGORY));
-    assert.equal(mailPatients.REPORT_CATEGORY, 'Sent Correspondence');
+describe('emailed HMS printouts — checked, sent, never filed (27 Sep evening)', () => {
+  test('"Sent Correspondence" stays an official category (manual uploads), not PDF-only', () => {
+    assert.ok(DOCUMENT_CATEGORIES.includes('Sent Correspondence'));
     assert.ok(!PDF_ONLY_CATEGORIES.includes('Sent Correspondence'));
   });
   test('the frontend category list matches the backend one', () => {
@@ -103,46 +102,40 @@ describe('emailed HMS reports — the copy on the file', () => {
     for (const c of DOCUMENT_CATEGORIES) assert.ok(fs.readFileSync(fe, 'utf8').includes(`"${c}"`), c);
   });
   test('no reports → nothing to check (and no permission needed)', async () => {
-    assert.deepEqual(await mailPatients.checkReportCopies({ id: 1, role: 'lab' }, [], []), []);
-    assert.deepEqual(await mailPatients.checkReportCopies({ id: 1, role: 'lab' }, undefined, []), []);
+    assert.deepEqual(await mailPatients.checkReports({ id: 1, role: 'patient' }, [], []), []);
+    assert.deepEqual(await mailPatients.checkReports({ id: 1, role: 'patient' }, undefined, []), []);
   });
-  test('a report needs the document-write permission', async () => {
+  test('a printout needs the same permission as opening patient files', async () => {
     await assert.rejects(
-      mailPatients.checkReportCopies({ id: 1, role: 'lab', permissions: [] }, [{ uhid: 'X', filename: 'a.pdf' }], []),
+      mailPatients.checkReports({ id: 1, role: 'patient', permissions: [] }, [{ uhid: 'X', filename: 'a.pdf' }], []),
       (e) => e.code === 'FORBIDDEN',
     );
   });
-  test('a report must be one of the uploaded files, and a real PDF', async () => {
+  test('a printout must be one of the uploaded files, and a real PDF', async () => {
     const doctor = { id: 1, role: 'doctor' };
-    await assert.rejects(mailPatients.checkReportCopies(doctor, [{ uhid: 'X', filename: 'a.pdf' }], []), (e) => e.code === 'ATTACH_GONE');
+    await assert.rejects(mailPatients.checkReports(doctor, [{ uhid: 'X', filename: 'a.pdf' }], []), (e) => e.code === 'ATTACH_GONE');
     await assert.rejects(
-      mailPatients.checkReportCopies(doctor, [{ uhid: 'X', filename: 'a.pdf' }], [{ originalname: 'a.pdf', buffer: Buffer.from('not a pdf') }]),
+      mailPatients.checkReports(doctor, [{ uhid: 'X', filename: 'a.pdf' }], [{ originalname: 'a.pdf', buffer: Buffer.from('not a pdf') }]),
       (e) => e.code === 'BAD_TYPE',
     );
   });
-  test('at most 10 reports per email', async () => {
+  test('at most 10 printouts per email', async () => {
     const many = Array.from({ length: 11 }, (_, i) => ({ uhid: 'X', filename: `${i}.pdf` }));
-    await assert.rejects(mailPatients.checkReportCopies({ id: 1, role: 'doctor' }, many, []), (e) => e.code === 'TOO_MANY');
+    await assert.rejects(mailPatients.checkReports({ id: 1, role: 'doctor' }, many, []), (e) => e.code === 'TOO_MANY');
   });
-  test('send checks the reports BEFORE anything leaves, files them only after, and never parks them in a draft', () => {
+  test('send checks printouts BEFORE anything leaves, files nothing, and never parks them in a draft', () => {
     const src = read('services/mailSend.js');
     const send = src.slice(src.indexOf('const send = async'), src.indexOf('const signaturePreview'));
-    assert.ok(send.indexOf('checkReportCopies') < send.indexOf('sendMail('), 'checked before SMTP');
-    assert.ok(send.indexOf('saveReportCopies') > send.indexOf("It has gone"), 'filed only after the send');
+    assert.ok(send.indexOf('checkReports') < send.indexOf('sendMail('), 'checked before SMTP');
+    assert.doesNotMatch(src, /saveReportCopies|createMedicalDocument/);
+    assert.doesNotMatch(read('services/mailPatients.js'), /saveReportCopies|REPORT_CATEGORY/);
     const draft = src.slice(src.indexOf('const saveDraft = async'));
     assert.match(draft, /reportNames/);
     assert.match(draft, /gatherAttachments\(userId, payload\.attachments, draftFiles\)/);
   });
-  test('a filed report is not listed again as an unfiled attachment on the thread', () => {
+  test('a printout is not listed on the thread as an attachment to save', () => {
     const src = read('services/mailSend.js');
-    assert.match(src, /attachmentNames: dropFiled\(mailAttachments\.map\(\(a\) => a\.filename\), filedReportNames\)/);
-  });
-  test('the copy is Reviewed, dated today, and attributed from the JWT user', () => {
-    const src = read('services/mailPatients.js');
-    const save = src.slice(src.indexOf('const saveReportCopies'), src.indexOf('// ---- 3. save an attachment'));
-    assert.match(save, /status: 'Reviewed'/);
-    assert.match(save, /actingUser: user/);
-    assert.match(save, /documentCategory: REPORT_CATEGORY/);
+    assert.match(src, /attachmentNames: dropFiled\(mailAttachments\.map\(\(a\) => a\.filename\), reports\.map\(\(r\) => r\.file\.originalname\)\)/);
   });
 });
 

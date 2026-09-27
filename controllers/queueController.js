@@ -557,6 +557,14 @@ const saveReferralNote = async (req, res) => {
   try {
     const { referralNote, referralType } = req.body;
     if (!referralNote || !referralNote.trim()) return error(res, 'The referral note is empty.', 400);
+    // The letter's heading lines (27 Sep evening): who it is to and why, kept
+    // with the note so Visit History can reprint the letter exactly as it was
+    // written — even if the referral is never sent. refer() overwrites them
+    // with the final values when it is.
+    const clip = (v, n) => (typeof v === 'string' && v.trim() ? v.trim().slice(0, n) : null);
+    const referralReason         = clip(req.body.referralReason, 2000);
+    const referredToDoctorName   = clip(req.body.referredToDoctorName, 255);
+    const externalReferralTarget = clip(req.body.externalReferralTarget, 255);
 
     // referralType lands in an ENUM column. Sequelize does not check ENUM
     // membership, so an unexpected value reaches MySQL: a 500 under STRICT mode,
@@ -600,6 +608,10 @@ const saveReferralNote = async (req, res) => {
       // Safe: the referredAt guard above means no referral has been finalised on
       // this row, so referralType is still the draft's to set.
       referralType:             referralType || item.referralType || null,
+      ...(referralReason ? { referralReason } : {}),
+      // One destination per letter: the field for the other type is cleared.
+      ...(referralType === 'Internal' && referredToDoctorName ? { referredToDoctorName, externalReferralTarget: null } : {}),
+      ...(referralType === 'External' && externalReferralTarget ? { externalReferralTarget, referredToDoctorName: null } : {}),
     });
 
     return success(res, { queueId: item.id, saved: true });
@@ -627,7 +639,7 @@ const listAdvisedReferrals = async (req, res) => {
     const rows = await Queue.findAll({
       where: { PatientId: { [Op.in]: family.patientIds }, referralNote: { [Op.ne]: null } },
       attributes: [
-        'id', 'referralType', 'referralNote', 'referredToDoctorName',
+        'id', 'referralType', 'referralReason', 'referralNote', 'referredToDoctorName',
         'externalReferralTarget', 'referredByDoctorName', 'referralNoteByDoctorName',
         'referralNoteSavedAt', 'referredAt',
       ],
@@ -637,7 +649,9 @@ const listAdvisedReferrals = async (req, res) => {
     const referrals = rows.map((q) => ({
       id: q.id,
       referralType: q.referralType,
-      destination: q.referredToDoctorName || q.externalReferralTarget || null,
+      destination: q.referralType === 'Internal' && q.referredToDoctorName ? `Dr. ${q.referredToDoctorName.replace(/^Dr\.?\s+/i, '')}`
+        : (q.externalReferralTarget || q.referredToDoctorName || null),
+      reason: q.referralReason || null,
       note: q.referralNote,
       // The note's author. Falls back to referredByDoctorName for rows written
       // before referralNoteByDoctorName existed, and for notes captured by
