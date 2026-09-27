@@ -4,6 +4,7 @@ const accounts = require('../services/mailAccounts');
 const session = require('../services/mailSession');
 const mailSend = require('../services/mailSend');
 const mailPatients = require('../services/mailPatients');
+const organise = require('../services/mailOrganise');
 const { checkAddress, getMailConfig, normEmail } = require('../utils/mailConfig');
 
 // ===========================================================================
@@ -20,7 +21,7 @@ const { checkAddress, getMailConfig, normEmail } = require('../utils/mailConfig'
 // ===========================================================================
 
 const sendMailError = (res, err, fallback) => {
-  if (err instanceof session.MailError) return error(res, err.message, err.status, { code: err.code });
+  if (err instanceof session.MailError) return error(res, err.message, err.status, { code: err.code, ...(err.extra || {}) });
   console.error(`${fallback} error:`, err.message);
   return error(res, 'Something went wrong reading your mailbox. Try again in a moment.', 500);
 };
@@ -358,6 +359,50 @@ const adminDisconnect = async (req, res) => {
   }
 };
 
+// ---------------------------------------------------------------------------
+// Phase 3b — organise the caller's own mailbox. Delete = move to Trash; the
+// only permanent action is Empty Trash (typed EMPTY + matching count).
+// See services/mailOrganise.js.
+// ---------------------------------------------------------------------------
+
+const ORGANISE = {
+  move: (userId, b) => organise.moveMessages(userId, { folder: b.folder, uids: b.uids, to: b.to }),
+  archive: (userId, b) => organise.archiveMessages(userId, { folder: b.folder, uids: b.uids }),
+  trash: (userId, b) => organise.trashMessages(userId, { folder: b.folder, uids: b.uids }),
+  restore: (userId, b) => organise.restoreMessages(userId, { folder: b.folder, uids: b.uids }),
+  flag: (userId, b) => organise.setFlagged(userId, { folder: b.folder, uids: b.uids, flagged: b.flagged !== false }),
+};
+
+/** POST /api/mail/messages/:action — move | archive | trash | restore | flag. Body { folder, uids, to?, flagged? }. */
+const organiseMessages = async (req, res) => {
+  try {
+    const run = ORGANISE[req.params.action];
+    if (!run) return error(res, 'Unknown action.', 404);
+    return success(res, await run(req.user.id, req.body || {}));
+  } catch (err) {
+    return sendMailError(res, err, `Mail.organise.${req.params.action}`);
+  }
+};
+
+/** GET /api/mail/trash — { folder, count } for the Empty Trash dialog. */
+const trashInfo = async (req, res) => {
+  try {
+    return success(res, await organise.trashCount(req.user.id));
+  } catch (err) {
+    return sendMailError(res, err, 'Mail.trashInfo');
+  }
+};
+
+/** POST /api/mail/trash/empty — { confirm: 'EMPTY', count }. Permanent. */
+const emptyTrash = async (req, res) => {
+  try {
+    const { confirm, count } = req.body || {};
+    return success(res, await organise.emptyTrash(req.user.id, { confirm, count }));
+  } catch (err) {
+    return sendMailError(res, err, 'Mail.emptyTrash');
+  }
+};
+
 module.exports = {
   suggest,
   patients,
@@ -374,6 +419,9 @@ module.exports = {
   message,
   attachment,
   markSeen,
+  organiseMessages,
+  trashInfo,
+  emptyTrash,
   send,
   saveDraft,
   discardDraft,

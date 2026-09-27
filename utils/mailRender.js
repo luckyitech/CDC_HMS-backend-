@@ -41,6 +41,7 @@ const walkParts = (structure) => {
       part: node.part || fallbackPart || '1',
       type,
       charset: node.parameters && node.parameters.charset ? String(node.parameters.charset) : null,
+      encoding: node.encoding ? String(node.encoding).toLowerCase() : null,
       size: Number(node.size) || 0,
       filename: filenameOf(node),
       contentId: stripCid(node.id),
@@ -128,11 +129,112 @@ const SPECIAL = {
   '\\Trash': { key: 'trash', label: 'Trash', order: 5 },
 };
 
+// ---------------------------------------------------------------------------
+// Phase 3b — preview snippets. The list fetches only the first few hundred
+// bytes of each message's text (or HTML) part, still transfer-encoded, and
+// turns them into one short line. Everything here must survive being cut off
+// mid-character, mid-escape or mid-tag.
+// ---------------------------------------------------------------------------
+const SNIPPET_BYTES = 800;       // raw bytes fetched per message
+const SNIPPET_CHARS = 140;       // characters shown
+
+/** Decode a possibly-truncated transfer-encoded body fragment into a Buffer. */
+const decodeTransfer = (buf, encoding) => {
+  const raw = Buffer.isBuffer(buf) ? buf : Buffer.from(String(buf || ''), 'binary');
+  const enc = String(encoding || '').toLowerCase();
+  if (enc === 'base64') {
+    const clean = raw.toString('ascii').replace(/[^A-Za-z0-9+/]/g, '');
+    return Buffer.from(clean.slice(0, clean.length - (clean.length % 4)), 'base64');
+  }
+  if (enc === 'quoted-printable') {
+    const s = raw.toString('binary')
+      .replace(/=\r?\n/g, '')                 // soft line breaks
+      .replace(/=[0-9A-Fa-f]?$/, '');          // an escape cut off at the end
+    const bytes = [];
+    for (let i = 0; i < s.length; i += 1) {
+      if (s[i] === '=' && /^[0-9A-Fa-f]{2}$/.test(s.slice(i + 1, i + 3))) {
+        bytes.push(parseInt(s.slice(i + 1, i + 3), 16)); i += 2;
+      } else {
+        bytes.push(s.charCodeAt(i) & 0xff);
+      }
+    }
+    return Buffer.from(bytes);
+  }
+  return raw;
+};
+
+/** Bytes → string in the part's charset; unknown charsets fall back to UTF-8. */
+const decodeCharset = (buf, charset) => {
+  const label = String(charset || 'utf-8').toLowerCase();
+  try {
+    return new TextDecoder(label).decode(buf);
+  } catch {
+    return new TextDecoder('utf-8').decode(buf);
+  }
+};
+
+const ENTITIES = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ', '#39': "'" };
+
+/**
+ * One preview line from a fetched body fragment: decoded, HTML stripped
+ * (style/script/head content dropped, a trailing half-tag cut), quoted reply
+ * lines removed, whitespace collapsed, clipped to SNIPPET_CHARS. Plain text
+ * out — the frontend renders it as text, never as HTML.
+ */
+const snippetFrom = (buf, { encoding, charset, isHtml } = {}) => {
+  let s = decodeCharset(decodeTransfer(buf, encoding), charset);
+  if (isHtml) {
+    s = s
+      .replace(/<(style|script|head|title)\b[\s\S]*?(<\/\1\s*>|$)/gi, ' ')
+      .replace(/<!--[\s\S]*?(-->|$)/g, ' ')
+      .replace(/<br\s*\/?>|<\/(p|div|li|tr|h[1-6])>/gi, ' ')
+      .replace(/<[^>]*>/g, ' ')
+      .replace(/<[^>]*$/, ' ')
+      .replace(/&(#\d+|#x[0-9a-f]+|[a-z]+);/gi, (m, e) => {
+        const k = e.toLowerCase();
+        if (ENTITIES[k]) return ENTITIES[k];
+        if (k.startsWith('#x')) return String.fromCodePoint(parseInt(k.slice(2), 16) || 32);
+        if (k.startsWith('#')) return String.fromCodePoint(parseInt(k.slice(1), 10) || 32);
+        return ' ';
+      });
+  }
+  s = s.split(/\r?\n/).filter((line) => !/^\s*>/.test(line)).join(' ');
+  s = s.replace(/�/g, '').replace(/[\u0000-\u001F\u007F​-‍﻿]/g, ' ').replace(/\s+/g, ' ').trim();
+  return s.length > SNIPPET_CHARS ? `${s.slice(0, SNIPPET_CHARS - 1).trimEnd()}…` : s;
+};
+
+/** Which part a snippet should come from: plain text preferred, else HTML. Null for none. */
+const snippetPart = (structure) => {
+  const parts = walkParts(structure);
+  const p = parts.text || parts.html;
+  if (!p) return null;
+  return { part: p.part, encoding: p.encoding, charset: p.charset, isHtml: p === parts.html && !parts.text };
+};
+
+// When a server doesn't mark a folder with a special-use flag (including an
+// Archive or Trash the HMS created itself — phase 3b), recognise it by name,
+// but only if no OTHER folder already carries that flag.
+const SPECIAL_BY_NAME = {
+  archive: '\\Archive', archives: '\\Archive',
+  trash: '\\Trash', 'deleted items': '\\Trash', 'deleted messages': '\\Trash',
+  sent: '\\Sent', 'sent items': '\\Sent', 'sent messages': '\\Sent',
+  drafts: '\\Drafts', junk: '\\Junk', spam: '\\Junk',
+};
+const bareName = (path) => String(path || '').replace(/^inbox[./]/i, '').toLowerCase();
+
 /** imapflow list() rows → the folder rail. Hidden/non-selectable folders dropped. */
-const shapeFolders = (rows) => (rows || [])
+const shapeFolders = (rows) => {
+  const flagged = new Set((rows || []).map((f) => f && f.specialUse).filter(Boolean));
+  const claimed = new Set();
+  return (rows || [])
   .filter((f) => f && f.path && !(f.flags && (f.flags.has ? f.flags.has('\\Noselect') : [].concat(f.flags).includes('\\Noselect'))))
   .map((f) => {
-    const special = f.path.toUpperCase() === 'INBOX' ? SPECIAL['\\Inbox'] : SPECIAL[f.specialUse] || null;
+    let use = f.specialUse || null;
+    if (!use && f.path.toUpperCase() !== 'INBOX') {
+      const guess = SPECIAL_BY_NAME[bareName(f.path)];
+      if (guess && !flagged.has(guess) && !claimed.has(guess)) { use = guess; claimed.add(guess); }
+    }
+    const special = f.path.toUpperCase() === 'INBOX' ? SPECIAL['\\Inbox'] : SPECIAL[use] || null;
     return {
       path: f.path,
       name: special ? special.label : (f.name || f.path),
@@ -144,6 +246,7 @@ const shapeFolders = (rows) => (rows || [])
     };
   })
   .sort((a, b) => (a.order - b.order) || a.path.localeCompare(b.path));
+};
 
 module.exports = {
   walkParts,
@@ -157,4 +260,8 @@ module.exports = {
   isExternal,
   shapeFolders,
   stripCid,
+  decodeTransfer,
+  snippetFrom,
+  snippetPart,
+  SNIPPET_BYTES,
 };

@@ -384,12 +384,13 @@ const saveDraft = async (userId, payload = {}, files = [], { senderName, user } 
 
 /** Discard a draft: move it to Trash (never destroyed outright — one.com keeps no backups). */
 const discardDraft = async (userId, uid) => {
-  const trash = await session.specialFolder(userId, 'trash');
+  // Phase 3b: Trash is created if the mailbox has none, rather than flagging
+  // the draft \Deleted (which any later expunge would destroy).
+  const trash = await session.ensureSpecialFolder(userId, 'trash');
   return withOwnDraft(userId, uid, async (client, id) => {
     if (!id) return { discarded: false };
-    if (trash) await client.messageMove(String(id), trash, { uid: true });
-    else await client.messageFlagsAdd(String(id), ['\\Deleted'], { uid: true });
-    return { discarded: true, movedTo: trash || null };
+    await client.messageMove(String(id), trash, { uid: true });
+    return { discarded: true, movedTo: trash };
   });
 };
 

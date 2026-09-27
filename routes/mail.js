@@ -28,6 +28,19 @@ const loginLimiter = rateLimit({
   message: { success: false, message: 'Too many mailbox login attempts. Wait 15 minutes and try again.' },
 });
 
+// Emptying Trash is the one permanent action in My mail — a few a quarter-hour is plenty.
+const emptyTrashLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 5,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req) => `mail-empty:${req.user ? req.user.id : 'anon'}`,
+  // Only an actual emptying counts — a refusal (wrong word, count changed)
+  // must not use up the allowance or be described as "emptied".
+  skipFailedRequests: true,
+  message: { success: false, message: 'Trash was emptied several times just now. Wait a few minutes.' },
+});
+
 router.get('/account', authenticate, authorize(...MAIL), mail.getAccount);
 router.post('/account/test', authenticate, authorize(...MAIL), loginLimiter, [
   body('emailAddress').isString().trim().notEmpty().withMessage('Enter your email address'),
@@ -57,6 +70,28 @@ router.post('/messages/seen', authenticate, authorize(...MAIL), [
   body('seen').optional().isBoolean().toBoolean(),
   validate,
 ], mail.markSeen);
+// Phase 3b — organise (move / archive / trash / restore / flag): five literal
+// paths (Express 5 has no inline regex params), one handler.
+const organiseChecks = [
+  body('uids').isArray({ min: 1, max: 500 }).withMessage('Pick at least one message'),
+  body('folder').optional().isString().isLength({ min: 1, max: 300 }),
+  body('to').optional().isString().isLength({ min: 1, max: 300 }),
+  body('flagged').optional().isBoolean().toBoolean(),
+  validate,
+];
+// Written out one per line (not a loop) so tests/mailRender.test.js's D1 scan sees every path.
+const asAction = (action) => (req, res, next) => { req.params.action = action; next(); };
+router.post('/messages/move', authenticate, authorize(...MAIL), asAction('move'), organiseChecks, mail.organiseMessages);
+router.post('/messages/archive', authenticate, authorize(...MAIL), asAction('archive'), organiseChecks, mail.organiseMessages);
+router.post('/messages/trash', authenticate, authorize(...MAIL), asAction('trash'), organiseChecks, mail.organiseMessages);
+router.post('/messages/restore', authenticate, authorize(...MAIL), asAction('restore'), organiseChecks, mail.organiseMessages);
+router.post('/messages/flag', authenticate, authorize(...MAIL), asAction('flag'), organiseChecks, mail.organiseMessages);
+router.get('/trash', authenticate, authorize(...MAIL), mail.trashInfo);
+router.post('/trash/empty', authenticate, authorize(...MAIL), emptyTrashLimiter, [
+  body('confirm').isString().withMessage('Type EMPTY to confirm'),
+  body('count').isInt({ min: 0 }).toInt(),
+  validate,
+], mail.emptyTrash);
 router.get('/messages/:uid', authenticate, authorize(...MAIL), mail.message);
 router.get('/messages/:uid/attachments/:part', authenticate, authorize(...MAIL), mail.attachment);
 

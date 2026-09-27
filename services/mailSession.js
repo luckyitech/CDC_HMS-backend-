@@ -2,7 +2,7 @@ const accounts = require('./mailAccounts');
 const { checkAddress, getMailConfig } = require('../utils/mailConfig');
 const {
   walkParts, hasAttachments, sanitizeHtml, textToHtml, hasRemoteContent,
-  inlineCids, addressList, isExternal, shapeFolders,
+  inlineCids, addressList, isExternal, shapeFolders, snippetFrom, snippetPart, SNIPPET_BYTES,
 } = require('../utils/mailRender');
 
 // ---------------------------------------------------------------------------
@@ -41,6 +41,22 @@ const PAGE_SIZE_MAX = 100;
 const pool = new Map(); // userId -> { client?, connecting?, lastUsed }
 let sweeper = null;
 
+// Phase 3b — preview snippets, IN MEMORY ONLY (never the DB, never a log).
+// Keyed by user → "folder|uidValidity|uid"; a message's text never changes,
+// so an entry is good until it falls out of the cap or the user disconnects.
+const SNIPPET_CACHE_PER_USER = 2000;
+const snippetCache = {
+  byUser: new Map(),
+  get(userId, key) { const m = this.byUser.get(userId); return m ? m.get(key) : undefined; },
+  set(userId, key, value) {
+    let m = this.byUser.get(userId);
+    if (!m) { m = new Map(); this.byUser.set(userId, m); }
+    m.set(key, value);
+    if (m.size > SNIPPET_CACHE_PER_USER) m.delete(m.keys().next().value);   // oldest first
+  },
+  forget(userId) { this.byUser.delete(userId); },
+};
+
 const isAuthError = (err) => !!(err && (
   err.authenticationFailed
   || err.serverResponseCode === 'AUTHENTICATIONFAILED'
@@ -52,7 +68,7 @@ const isConnectionGone = (err) => !!(err && (
   || /connection not available|connection closed/i.test(err.message || '')
 ));
 
-const openImap = async ({ imap, user, pass }) => {
+const openImap = async ({ imap, user, pass, extra = {} }) => {
   const { ImapFlow } = require('imapflow');
   const client = new ImapFlow({
     host: imap.host,
@@ -62,6 +78,10 @@ const openImap = async ({ imap, user, pass }) => {
     logger: false,
     connectionTimeout: 20_000,
     greetingTimeout: 15_000,
+    // Re-issue IDLE every 5 min instead of waiting for the server's ~29 min
+    // cut-off (phase 3b watcher; harmless on pooled connections).
+    maxIdleTime: 5 * 60 * 1000,
+    ...extra,
   });
   await client.connect();
   return client;
@@ -72,17 +92,28 @@ const startSweeper = () => {
   sweeper = setInterval(() => {
     const now = Date.now();
     for (const [userId, entry] of pool.entries()) {
-      if (entry.client && now - entry.lastUsed > IDLE_CLOSE_MS) closeClient(userId);
+      if (entry.client && now - entry.lastUsed > IDLE_CLOSE_MS) closePooled(userId);
     }
   }, 60 * 1000);
   if (sweeper.unref) sweeper.unref();
 };
 
-/** Close and forget a user's connection (disconnect, wipe, idle). Never throws. */
-function closeClient(userId) {
+/** Close the pooled request connection only (idle sweep, dead socket). Never throws. */
+function closePooled(userId) {
   const entry = pool.get(userId);
   pool.delete(userId);
   if (entry && entry.client) entry.client.logout().catch(() => {});
+}
+
+/**
+ * Drop EVERYTHING open for this user — pooled connection, live INBOX watcher,
+ * cached snippets. For disconnect, wipe-on-archive and a password change: no
+ * connection made with the old credential may survive. Never throws.
+ */
+function closeClient(userId) {
+  closePooled(userId);
+  try { require('./mailWatch').stop(userId); } catch { /* watcher not loaded */ }
+  snippetCache.forget(userId);
 }
 
 /**
@@ -103,42 +134,53 @@ const testLogin = async ({ emailAddress, password, servers }) => {
   }
 };
 
+/**
+ * Open a NEW connection to the caller's own mailbox with their saved
+ * credential — the one place that does it. Enforces connected status, the
+ * allowed-domains list, and the two-refusals-then-park rule. Shared by the
+ * request pool (getClient) and the live INBOX watcher (services/mailWatch).
+ */
+const openForUser = async (userId, { markConnected = true, imapOptions = {} } = {}) => {
+  const row = await accounts.findForUser(userId);
+  if (!row || row.status === 'disconnected' || !row.passwordEncrypted) {
+    throw new MailError('NOT_CONNECTED', 'Your mailbox is not connected.', 409);
+  }
+  if (row.status === 'needs_password') {
+    throw new MailError('NEEDS_PASSWORD', row.lastError || 'Enter your mailbox password again to reconnect.', 409);
+  }
+  const check = await checkAddress(row.emailAddress);
+  if (!check.ok) throw new MailError('NOT_ALLOWED', check.reason, 403);
+
+  let client;
+  try {
+    client = await openImap({ imap: check.servers.imap, user: row.emailAddress, pass: accounts.passwordFor(row), extra: imapOptions });
+  } catch (err) {
+    if (isAuthError(err)) {
+      const parked = await accounts.recordAuthFailure(row, err.responseText || err.message);
+      throw new MailError(parked ? 'NEEDS_PASSWORD' : 'AUTH',
+        parked ? 'Your mailbox refused the saved password (it may have been changed). Enter it again to reconnect.'
+          : 'Your mailbox refused the login just now. Try again in a moment.', 409);
+    }
+    await accounts.recordConnectionError(row, err.code || err.message);
+    throw new MailError('UNREACHABLE', 'Couldn\'t reach your mail server. Try again in a moment.', 502);
+  }
+  // Log the error class only — never an address, subject or credential.
+  client.on('error', (err) => console.error('[Mail] connection error:', err.code || err.message));
+  if (markConnected) await accounts.markConnected(row);
+  return client;
+};
+
 /** The caller's live connection — opened on demand, shared by parallel requests. */
 const getClient = async (userId) => {
   startSweeper();
   const entry = pool.get(userId);
   if (entry && entry.client && entry.client.usable) { entry.lastUsed = Date.now(); return entry.client; }
   if (entry && entry.connecting) return entry.connecting;
-  if (entry) closeClient(userId);
+  if (entry) closePooled(userId);
 
   const connecting = (async () => {
-    const row = await accounts.findForUser(userId);
-    if (!row || row.status === 'disconnected' || !row.passwordEncrypted) {
-      throw new MailError('NOT_CONNECTED', 'Your mailbox is not connected.', 409);
-    }
-    if (row.status === 'needs_password') {
-      throw new MailError('NEEDS_PASSWORD', row.lastError || 'Enter your mailbox password again to reconnect.', 409);
-    }
-    const check = await checkAddress(row.emailAddress);
-    if (!check.ok) throw new MailError('NOT_ALLOWED', check.reason, 403);
-
-    let client;
-    try {
-      client = await openImap({ imap: check.servers.imap, user: row.emailAddress, pass: accounts.passwordFor(row) });
-    } catch (err) {
-      if (isAuthError(err)) {
-        const parked = await accounts.recordAuthFailure(row, err.responseText || err.message);
-        throw new MailError(parked ? 'NEEDS_PASSWORD' : 'AUTH',
-          parked ? 'Your mailbox refused the saved password (it may have been changed). Enter it again to reconnect.'
-            : 'Your mailbox refused the login just now. Try again in a moment.', 409);
-      }
-      await accounts.recordConnectionError(row, err.code || err.message);
-      throw new MailError('UNREACHABLE', 'Couldn\'t reach your mail server. Try again in a moment.', 502);
-    }
+    const client = await openForUser(userId);
     client.on('close', () => { const e = pool.get(userId); if (e && e.client === client) pool.delete(userId); });
-    // Log the error class only — never an address, subject or credential.
-    client.on('error', (err) => console.error('[Mail] connection error:', err.code || err.message));
-    await accounts.markConnected(row);
     pool.set(userId, { client, lastUsed: Date.now() });
     return client;
   })();
@@ -169,7 +211,7 @@ const withFolder = async (userId, folder, fn, attempt = 0) => {
   try {
     lock = await client.getMailboxLock(cleanFolder(folder));
   } catch (err) {
-    if (attempt === 0 && isConnectionGone(err)) { closeClient(userId); return withFolder(userId, folder, fn, 1); }
+    if (attempt === 0 && isConnectionGone(err)) { closePooled(userId); return withFolder(userId, folder, fn, 1); }
     if (err instanceof MailError) throw err;
     throw new MailError('NOT_FOUND', 'That folder no longer exists.', 404);
   }
@@ -179,7 +221,7 @@ const withFolder = async (userId, folder, fn, attempt = 0) => {
     if (entry) entry.lastUsed = Date.now();
     return result;
   } catch (err) {
-    if (attempt === 0 && isConnectionGone(err)) { lock.release(); lock = null; closeClient(userId); return withFolder(userId, folder, fn, 1); }
+    if (attempt === 0 && isConnectionGone(err)) { lock.release(); lock = null; closePooled(userId); return withFolder(userId, folder, fn, 1); }
     throw err;
   } finally {
     if (lock) lock.release();
@@ -236,6 +278,48 @@ const toListItem = (msg, domains) => {
 
 const LIST_QUERY = { uid: true, envelope: true, flags: true, internalDate: true, size: true, bodyStructure: true };
 
+/**
+ * Fill `snippet` on each list item. Fetches only the first SNIPPET_BYTES of
+ * each message's text part with BODY.PEEK (imapflow's bodyParts), so listing
+ * never marks anything read. One FETCH per distinct part number (usually 2–3
+ * per page). Best-effort: a failure leaves snippets empty, never breaks the list.
+ */
+const addSnippets = async (client, userId, fetched, items) => {
+  const folderKey = `${client.mailbox.path}|${client.mailbox.uidValidity}`;
+  const byPart = new Map();   // part -> [{ uid, meta }]
+  for (const m of fetched) {
+    const key = `${folderKey}|${m.uid}`;
+    const cached = snippetCache.get(userId, key);
+    if (cached !== undefined) { items.get(m.uid).snippet = cached; continue; }
+    const meta = snippetPart(m.bodyStructure);
+    if (!meta) { snippetCache.set(userId, key, ''); items.get(m.uid).snippet = ''; continue; }
+    if (!byPart.has(meta.part)) byPart.set(meta.part, []);
+    byPart.get(meta.part).push({ uid: m.uid, meta });
+  }
+  for (const [part, list] of byPart) {
+    try {
+      const range = list.map((x) => x.uid).join(',');
+      const got = await client.fetchAll(range, {
+        uid: true, bodyParts: [{ key: part, start: 0, maxLength: SNIPPET_BYTES }],
+      }, { uid: true });
+      for (const g of got) {
+        const entry = list.find((x) => x.uid === g.uid);
+        if (!entry) continue;
+        // Only one part is requested per FETCH, so the map holds exactly one
+        // value (its key carries the <0> partial suffix, so don't look it up by name).
+        const buf = g.bodyParts && g.bodyParts.size ? [...g.bodyParts.values()][0] : null;
+        // A part that came back via FETCH BINARY is already decoded — don't decode twice.
+        const meta = g.binaryParts && g.binaryParts.size ? { ...entry.meta, encoding: null } : entry.meta;
+        const text = buf ? snippetFrom(buf, meta) : '';
+        snippetCache.set(userId, `${folderKey}|${g.uid}`, text);
+        items.get(g.uid).snippet = text;
+      }
+    } catch (err) {
+      console.error('[Mail] snippet fetch failed:', err.code || err.message);
+    }
+  }
+};
+
 const listMessages = async (userId, { folder = 'INBOX', page = 1, pageSize = 50, q = '' } = {}) => {
   const size = Math.min(Math.max(parseInt(pageSize, 10) || 50, 1), PAGE_SIZE_MAX);
   const p = Math.max(parseInt(page, 10) || 1, 1);
@@ -250,6 +334,10 @@ const listMessages = async (userId, { folder = 'INBOX', page = 1, pageSize = 50,
       const pageUids = uids.slice((p - 1) * size, p * size);
       if (pageUids.length) fetched = await client.fetchAll(pageUids.join(','), LIST_QUERY, { uid: true });
     } else {
+      // A folder that was already selected on this pooled connection isn't
+      // re-selected, and the connection only IDLEs after 15 quiet seconds —
+      // so ask the server for anything new before trusting the count.
+      await client.noop();
       total = client.mailbox.exists || 0;
       const end = total - (p - 1) * size;
       if (end >= 1) {
@@ -261,7 +349,8 @@ const listMessages = async (userId, { folder = 'INBOX', page = 1, pageSize = 50,
     // UID), which is how mail apps list a folder. Sorting a page by the
     // sender's Date header instead would disagree with the paging and let a
     // back-dated message jump pages.
-    const messages = fetched.map((m) => toListItem(m, domains)).sort((a, b) => b.uid - a.uid);
+    const messages = fetched.map((m) => ({ ...toListItem(m, domains), snippet: '' })).sort((a, b) => b.uid - a.uid);
+    await addSnippets(client, userId, fetched, new Map(messages.map((m) => [m.uid, m])));
     return { folder: client.mailbox.path, total, page: p, pageSize: size, messages };
   });
 };
@@ -400,30 +489,41 @@ const streamAttachment = async (userId, { folder = 'INBOX', uid, part }, res) =>
   }
 };
 
-const setSeen = async (userId, { folder = 'INBOX', uids = [], seen = true } = {}) => {
+/** A request's list of UIDs: whole positive numbers, de-duplicated, at most 500. */
+const cleanUidList = (uids) => {
   const list = [...new Set((Array.isArray(uids) ? uids : []).map((u) => parseInt(u, 10)).filter((n) => n > 0))].slice(0, 500);
   if (!list.length) throw new MailError('BAD_UID', 'Pick at least one message.', 400);
-  return withFolder(userId, folder, async (client) => {
+  return list;
+};
+
+const setSeen = async (userId, { folder = 'INBOX', uids = [], seen = true } = {}) => {
+  const list = cleanUidList(uids);
+  const result = await withFolder(userId, folder, async (client) => {
     if (seen) await client.messageFlagsAdd(list.join(','), ['\\Seen'], { uid: true });
     else await client.messageFlagsRemove(list.join(','), ['\\Seen'], { uid: true });
     return { folder: client.mailbox.path, uids: list, seen: !!seen };
   });
+  try { require('./mailWatch').nudge(userId); } catch { /* not loaded */ }
+  return result;
 };
 
 /**
- * Unread count for the badge. Never opens a connection for someone who isn't
- * connected, and never throws — a badge must not break a page.
+ * Unread count for the badge — and, since phase 3b, the newest unread INBOX
+ * message for the new-mail toast. Answered from the live INBOX watcher's
+ * memory (services/mailWatch): the browser asks every 30 s and no call goes
+ * to the provider unless the watcher is being (re)started. Never opens a
+ * connection for someone who isn't connected, and never throws — a badge
+ * must not break a page.
  */
 const unreadCount = async (userId) => {
   const row = await accounts.findForUser(userId);
-  if (!row || row.status === 'disconnected' || !row.passwordEncrypted) return { connected: false, status: row ? row.status : 'none', unread: 0 };
-  if (row.status === 'needs_password') return { connected: false, status: 'needs_password', unread: 0 };
+  if (!row || row.status === 'disconnected' || !row.passwordEncrypted) return { connected: false, status: row ? row.status : 'none', unread: 0, latest: null };
+  if (row.status === 'needs_password') return { connected: false, status: 'needs_password', unread: 0, latest: null };
   try {
-    const client = await getClient(userId);
-    const s = await client.status('INBOX', { unseen: true });
-    return { connected: true, status: 'connected', unread: s.unseen || 0 };
+    const state = await require('./mailWatch').touch(userId);
+    return { connected: true, status: 'connected', unread: state.unread, latest: state.latest };
   } catch (err) {
-    return { connected: false, status: err.code === 'NEEDS_PASSWORD' ? 'needs_password' : 'error', unread: 0 };
+    return { connected: false, status: err.code === 'NEEDS_PASSWORD' ? 'needs_password' : 'error', unread: 0, latest: null };
   }
 };
 
@@ -432,19 +532,48 @@ const unreadCount = async (userId) => {
  * mailbox, by the server's special-use flag, then by common names. Null when
  * there is none.
  */
-const SPECIAL_FLAG = { sent: '\\Sent', drafts: '\\Drafts', trash: '\\Trash' };
+const SPECIAL_FLAG = { sent: '\\Sent', drafts: '\\Drafts', trash: '\\Trash', archive: '\\Archive', junk: '\\Junk' };
 const SPECIAL_NAMES = {
   sent: ['sent', 'sent items', 'sent messages', 'inbox.sent', 'inbox/sent'],
   drafts: ['drafts', 'draft', 'inbox.drafts', 'inbox/drafts'],
   trash: ['trash', 'deleted items', 'deleted messages', 'inbox.trash', 'inbox/trash'],
+  archive: ['archive', 'archives', 'inbox.archive', 'inbox/archive'],
+  junk: ['junk', 'spam', 'junk e-mail', 'inbox.junk', 'inbox/junk', 'inbox.spam', 'inbox/spam'],
 };
-const specialFolder = async (userId, key) => {
-  const client = await getClient(userId);
-  const rows = await client.list();
+const findSpecial = (rows, key) => {
   const byFlag = rows.find((f) => f.specialUse === SPECIAL_FLAG[key]);
   if (byFlag) return byFlag.path;
   const byName = rows.find((f) => SPECIAL_NAMES[key].includes(String(f.path).toLowerCase()));
   return byName ? byName.path : null;
+};
+const specialFolder = async (userId, key) => {
+  const client = await getClient(userId);
+  return findSpecial(await client.list(), key);
+};
+
+/**
+ * Like specialFolder, but for Archive and Trash creates the folder when the
+ * mailbox has none (phase 3b decision 3) — "Archive" / "Trash" at the top
+ * level, or under the server's personal namespace prefix when it has one
+ * (e.g. "INBOX."). Never creates Sent/Drafts/Junk.
+ */
+const CREATABLE = { archive: 'Archive', trash: 'Trash' };
+const ensureSpecialFolder = async (userId, key) => {
+  const existing = await specialFolder(userId, key);
+  if (existing || !CREATABLE[key]) return existing;
+  const client = await getClient(userId);
+  const prefix = (client.namespace && client.namespace.prefix) || '';
+  const path = `${prefix}${CREATABLE[key]}`;
+  try {
+    const made = await client.mailboxCreate(path);
+    return (made && made.path) || path;
+  } catch (err) {
+    // Lost a race with another tab, or the server already has it under that name.
+    const again = findSpecial(await client.list(), key);
+    if (again) return again;
+    console.error('[Mail] could not create folder:', key, err.code || err.message);
+    throw new MailError('NO_FOLDER', `Your mailbox has no ${CREATABLE[key]} folder and one couldn't be created.`, 502);
+  }
 };
 
 /** Read one MIME part into memory (attachments being forwarded / carried by a draft). */
@@ -495,6 +624,7 @@ module.exports = {
   testLogin,
   getClient,
   closeClient,
+  openForUser,
   listFolders,
   listMessages,
   getMessage,
@@ -504,8 +634,11 @@ module.exports = {
   dispositionHeader,
   withFolder,
   specialFolder,
+  ensureSpecialFolder,
+  findSpecial,
   downloadPart,
   cleanUid,
+  cleanUidList,
   allowedDomains,
   recentRecipients,
   forgetRecent,

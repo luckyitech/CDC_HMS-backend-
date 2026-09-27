@@ -616,29 +616,80 @@ const getSettingChangeEvents = async (dateFilter) => {
   ));
 };
 
-// Staff Email (B26) phase 3a — documents emailed from a patient's file. The
-// audit row holds counts and recipient DOMAINS only (never addresses, subjects
-// or file names — D1). Saving an email attachment to a file already shows as
-// "Uploaded Document" (it is a MedicalDocument), so it is not listed twice.
-const getMailPatientEvents = async (dateFilter) => {
+// Staff Email (B26) — every mail audit row (phase 3b, Emu 26 Sep: "all events
+// + sends, with a special filter for patient docs"). Metadata only (D1): the
+// person's OWN mailbox address, counts and recipient DOMAINS — never a
+// recipient address, subject, body or file name. A save-to-patient also shows
+// as "Uploaded Document" (it creates a MedicalDocument); it is listed here too,
+// under its own type, so the patient-documents filter shows both directions.
+const MAIL_EVENT_TYPES = {
+  connected:         { type: 'mail_connected',         label: 'Connected Mailbox' },
+  disconnected:      { type: 'mail_disconnected',      label: 'Disconnected Mailbox' },
+  auth_failed:       { type: 'mail_auth_failed',       label: 'Mailbox Login Refused' },
+  wiped:             { type: 'mail_wiped',             label: 'Mailbox Removed (Staff Archived)' },
+  sent:              { type: 'mail_sent',              label: 'Sent Email' },
+  trash_emptied:     { type: 'mail_trash_emptied',     label: 'Emptied Mail Trash' },
+  patient_docs_sent: { type: 'patient_docs_emailed',   label: 'Emailed Patient Documents' },
+  saved_to_patient:  { type: 'mail_saved_to_patient',  label: 'Saved Email Attachment to Patient' },
+};
+
+// Filter groups the Activity Log's "Action" menu offers on top of single types.
+const ACTION_GROUPS = {
+  mail_all: Object.values(MAIL_EVENT_TYPES).map((t) => t.type),
+  mail_patient_docs: ['patient_docs_emailed', 'mail_saved_to_patient'],
+};
+
+const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
+
+const mailDetail = (r, d, actorIsOwner) => {
+  const domains = Array.isArray(d.domains) && d.domains.length ? ` (${d.domains.join(', ')})` : '';
+  switch (r.event) {
+    case 'sent':
+      return `${plural(d.recipients || 0, 'recipient')}${domains}${d.attachments ? ` · ${plural(d.attachments, 'attachment')}` : ''}`;
+    case 'patient_docs_sent':
+      return `${plural(d.documents || 0, 'document')} to ${plural(d.recipients || 0, 'recipient')}${domains}`;
+    case 'saved_to_patient':
+      return `1 attachment${d.senderDomain ? ` from ${d.senderDomain}` : ''} · Pending Review`;
+    case 'trash_emptied':
+      return `${r.detail || ''} deleted permanently`;
+    case 'auth_failed':
+      return r.detail === 'test' ? 'While testing the setup'
+        : r.detail === 'connect' ? 'While connecting'
+          : r.detail === 'parked: needs_password' ? 'Saved password refused twice — asked to re-enter' : 'Saved password refused';
+    case 'disconnected':
+      return actorIsOwner ? 'By themselves' : 'By an administrator';
+    default:
+      return '';
+  }
+};
+
+const getMailEvents = async (dateFilter) => {
   const rows = await StaffMailEvent.findAll({
-    where: { event: 'patient_docs_sent', createdAt: dateFilter },
+    where: { createdAt: dateFilter },
     include: [
       { model: User, as: 'actor', attributes: ['firstName', 'lastName', 'role'] },
+      { model: User, as: 'user', attributes: ['firstName', 'lastName', 'role'] },
       { model: Patient, as: 'patient', attributes: ['uhid', 'firstName', 'lastName'] },
     ],
   });
-  return rows.map((r) => {
+  return rows.filter((r) => MAIL_EVENT_TYPES[r.event]).map((r) => {
     let d = {};
     try { d = JSON.parse(r.detail || '{}'); } catch { d = {}; }
-    const docs = d.documents || 0;
-    const recips = d.recipients || 0;
-    const domains = Array.isArray(d.domains) ? d.domains.join(', ') : '';
+    if (typeof d !== 'object' || d === null) d = {};
+    const t = MAIL_EVENT_TYPES[r.event];
+    // Who it is about: the actor when there is one, else the mailbox owner
+    // (a refused saved password has no actor — the server did it).
+    const person = r.actor || r.user;
+    const actorIsOwner = !r.actorId || r.actorId === r.userId;
+    const base = mailDetail(r, d, actorIsOwner);
+    const mailbox = r.emailAddress && ['connected', 'disconnected', 'auth_failed', 'wiped', 'sent', 'trash_emptied'].includes(r.event)
+      ? r.emailAddress : null;
+    const ownerNote = !actorIsOwner && r.user ? `${userName(r.user)}'s mailbox` : null;
     return makeEvent(
-      'patient_docs_emailed', 'Emailed Patient Documents',
-      userName(r.actor), patientName(r.patient), r.patient?.uhid || null, r.createdAt,
-      `${docs} document${docs === 1 ? '' : 's'} to ${recips} recipient${recips === 1 ? '' : 's'}${domains ? ` (${domains})` : ''}`,
-      r.actor?.role || null,
+      t.type, t.label,
+      userName(person), r.patient ? patientName(r.patient) : null, r.patient?.uhid || null, r.createdAt,
+      [mailbox, ownerNote, base].filter(Boolean).join(' · '),
+      person?.role || null,
     );
   });
 };
@@ -664,7 +715,7 @@ const collectAllEvents = async (dateFilter = resolveDateFilter()) => (
     getLabInboxEvents(dateFilter),
     getCommsEvents(dateFilter),
     getSettingChangeEvents(dateFilter),
-    getMailPatientEvents(dateFilter),
+    getMailEvents(dateFilter),
   ])
 ).flat();
 
@@ -685,7 +736,8 @@ const getActivityLog = async (req, res) => {
     filtered = filtered.filter(e => e.staff.toLowerCase().includes(lower));
   }
   if (action && action !== 'all') {
-    filtered = filtered.filter(e => e.type === action);
+    const group = ACTION_GROUPS[action];
+    filtered = filtered.filter(e => (group ? group.includes(e.type) : e.type === action));
   }
 
   // Most recent first
@@ -694,4 +746,4 @@ const getActivityLog = async (req, res) => {
   return success(res, { events: filtered, summary });
 };
 
-module.exports = { getActivityLog, collectAllEvents, resolveDateFilter };
+module.exports = { getActivityLog, collectAllEvents, resolveDateFilter, MAIL_EVENT_TYPES, ACTION_GROUPS };
