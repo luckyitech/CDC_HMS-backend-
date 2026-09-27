@@ -131,6 +131,8 @@ router.get('/signature', authenticate, authorize(...MAIL), mail.signature);
 router.get('/suggest', authenticate, authorize(...MAIL), mail.suggest);
 router.get('/patients', authenticate, authorize(...MAIL), mail.patients);
 router.get('/patients/:uhid/documents', authenticate, authorize(...MAIL), mail.patientDocuments);
+// Phase 4 — "Email patient" from the patient file: who to write to.
+router.get('/patients/:uhid/contact', authenticate, authorize(...MAIL), mail.patientContact);
 router.post('/messages/:uid/attachments/:part/save-to-patient', authenticate, authorize(...MAIL), [
   body('uhid').isString().trim().notEmpty().withMessage('Pick a patient'),
   body('category').optional().isString().isLength({ max: 80 }),

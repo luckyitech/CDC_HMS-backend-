@@ -311,6 +311,15 @@ const patients = async (req, res) => {
 };
 
 /** GET /api/mail/patients/:uhid/documents — the documents on a patient's file (whole merge family). */
+/** GET /api/mail/patients/:uhid/contact — phase 4 "Email patient": name + address. */
+const patientContact = async (req, res) => {
+  try {
+    return success(res, await mailPatients.patientContact(req.user, req.params.uhid));
+  } catch (err) {
+    return sendMailError(res, err, 'Mail.patientContact');
+  }
+};
+
 const patientDocuments = async (req, res) => {
   try {
     return success(res, await mailPatients.patientDocuments(req.user, req.params.uhid));
@@ -407,6 +416,7 @@ module.exports = {
   suggest,
   patients,
   patientDocuments,
+  patientContact,
   saveToPatient,
   getAccount,
   testAccount,

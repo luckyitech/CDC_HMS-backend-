@@ -14,6 +14,7 @@ const whatsappApi = require('../services/whatsappApi');
 const metaMessagingApi = require('../services/metaMessagingApi');
 const commsAnalytics = require('../services/commsAnalytics');
 const appointmentController = require('./appointmentController');
+const mailPatients = require('../services/mailPatients');
 const db = require('../models');
 
 const {
@@ -840,12 +841,18 @@ const patientTrail = async (req, res) => {
       if (to) { const t = new Date(to); t.setHours(23, 59, 59, 999); where.createdAt[Op.lte] = t; }
     }
     const rows = await ConversationMessage.findAll({ where, include: MSG_INCLUDE, order: [['createdAt', 'DESC']], limit: 500 });
+    // Phase 4 (B26): the email side of the trail — metadata rows only, never
+    // mail content (the subject of a message sent to the patient excepted).
+    // Queries and internal notes are WhatsApp concepts, so those filters hide it.
+    const emails = (show === 'queries' || show === 'internal' || (channel && channel !== 'email'))
+      ? [] : await mailPatients.patientEmailTrail(family, { from, to });
     const convIds = [...new Set(rows.map((m) => m.conversationId))];
     const conversations = convIds.length
       ? await Conversation.findAll({ where: { id: convIds }, include: CONV_INCLUDE }) : [];
     return success(res, {
       messages: rows.map(formatMessage),
       conversations: conversations.map(formatConversation),
+      emails,
     });
   } catch (err) {
     console.error('Comms.patientTrail error:', err);

@@ -228,8 +228,8 @@ describe('Activity Log — mail events', () => {
     for (const t of Object.values(MAIL_EVENT_TYPES)) assert.ok(t.type && t.label);
   });
 
-  test('the patient-documents filter = emailed from a file + saved to a file; "all email" = every mail type', () => {
-    assert.deepEqual(ACTION_GROUPS.mail_patient_docs.sort(), ['mail_saved_to_patient', 'patient_docs_emailed']);
+  test('the patient filter = emailed from a file + saved to a file (+ phase 4: emailed the patient); "all email" = every mail type', () => {
+    assert.deepEqual(ACTION_GROUPS.mail_patient_docs.sort(), ['mail_patient_emailed', 'mail_saved_to_patient', 'patient_docs_emailed']);
     assert.deepEqual(ACTION_GROUPS.mail_all.sort(), Object.values(MAIL_EVENT_TYPES).map((t) => t.type).sort());
   });
 });

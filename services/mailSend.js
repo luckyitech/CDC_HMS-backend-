@@ -141,13 +141,17 @@ const withPatientDocuments = (attachments, docs) => {
 };
 
 /** Build the RFC 822 message. `keepBcc` for the Sent/Drafts copy only — never for SMTP. */
-const buildRaw = ({ from, rcpt, subject, html, inReplyTo, references, attachments, messageId, date, keepBcc, draft, patientDocumentIds }) => {
+const buildRaw = ({ from, rcpt, subject, html, inReplyTo, references, attachments, messageId, date, keepBcc, draft, patientDocumentIds, patientUhids }) => {
   const MailComposer = require('nodemailer/lib/mail-composer');
   const headers = { 'X-Mailer': 'CDC HMS' };
   if (draft) headers['X-HMS-Draft'] = '1';
   // A draft holds documents from a patient file by REFERENCE only (phase 3a):
   // the file is read from the HMS at send time, never parked in one.com.
   if (draft && patientDocumentIds && patientDocumentIds.length) headers['X-HMS-Patient-Documents'] = patientDocumentIds.join(',');
+  // Phase 4: which recipients were picked AS a patient (UHIDs only), so a
+  // draft reopened later — here or via "Open in My mail" — keeps its Patient
+  // tags and the send is still logged on the patient's file.
+  if (draft && patientUhids && patientUhids.length) headers['X-HMS-Patient-Recipients'] = patientUhids.join(',');
   const mail = new MailComposer({
     from,
     to: rcpt.to,
@@ -238,7 +242,8 @@ const flagOriginal = async (userId, source) => {
 
 /**
  * Send. payload: { to, cc, bcc, subject, html, inReplyTo, references,
- * attachments: [{ folder, uid, part }], draftUid?, source?: { mode, folder, uid } }.
+ * attachments: [{ folder, uid, part }], draftUid?, source?: { mode, folder, uid },
+ * patientDocuments?: [ids], patientRecipients?: [uhids] }.
  */
 const send = async (userId, payload = {}, files = [], { senderName, user } = {}) => {
   const { row, servers, password } = await loadAccount(userId);
@@ -248,7 +253,11 @@ const send = async (userId, payload = {}, files = [], { senderName, user } = {})
   // Patient documents are checked (permission, not archived, file present)
   // BEFORE anything leaves — a refusal here reaches no SMTP server.
   const fromFile = await patientDocs.loadPatientDocuments(user || { id: userId }, payload.patientDocuments);
-  const attachments = withPatientDocuments(await gatherAttachments(userId, payload.attachments, files), fromFile.attachments);
+  const mailAttachments = await gatherAttachments(userId, payload.attachments, files);
+  const attachments = withPatientDocuments(mailAttachments, fromFile.attachments);
+  // Phase 4: the recipients picked AS a patient, confirmed against the
+  // patient's file. Decides only what is logged — never blocks the send.
+  const patientRcpts = await patientDocs.verifyPatientRecipients(user || { id: userId }, payload.patientRecipients, rcpt);
   const from = fromHeader(row, senderName);
   const messageId = newMessageId(row.emailAddress);
   const date = new Date();
@@ -300,7 +309,17 @@ const send = async (userId, payload = {}, files = [], { senderName, user } = {})
     userId, actorId: userId, event: 'sent', emailAddress: row.emailAddress,
     detail: JSON.stringify({ recipients: summary.count, domains: summary.domains, attachments: attachments.length }),
   });
-  if (fromFile.byPatient.size) patientDocs.logPatientDocumentsSent(user || { id: userId }, fromFile.byPatient, summary, row.emailAddress);
+  // A patient who was emailed gets ONE row (patient_emailed, listing the file's
+  // documents that went with it); documents of any other patient — sent to a
+  // colleague, an insurer — keep the phase 3a patient_docs_sent row.
+  const emailedIds = new Set(patientRcpts.map((p) => p.patientId));
+  const othersDocs = new Map([...fromFile.byPatient].filter(([id]) => !emailedIds.has(id)));
+  if (othersDocs.size) patientDocs.logPatientDocumentsSent(user || { id: userId }, othersDocs, summary, row.emailAddress);
+  if (patientRcpts.length) {
+    patientDocs.logPatientEmailed(user || { id: userId }, patientRcpts, {
+      subject, idsByPatient: fromFile.idsByPatient, summary, otherAttachments: mailAttachments.length, emailAddress: row.emailAddress,
+    });
+  }
   session.forgetRecent(userId);
 
   let sentCopy = { ok: false, reason: 'failed' };
@@ -322,6 +341,7 @@ const send = async (userId, payload = {}, files = [], { senderName, user } = {})
   return {
     sent: true,
     messageId,
+    loggedToPatients: patientRcpts.map((p) => p.uhid),
     sentCopy: sentCopy.ok,
     sentCopyReason: sentCopy.ok ? null : sentCopy.reason,
     draftKept,
@@ -355,11 +375,13 @@ const saveDraft = async (userId, payload = {}, files = [], { senderName, user } 
   const { inReplyTo, references } = threadFrom(payload);
   const fromFile = await patientDocs.loadPatientDocuments(user || { id: userId }, payload.patientDocuments, { withContent: false });
   const attachments = await gatherAttachments(userId, payload.attachments, files);
+  const patientRcpts = await patientDocs.verifyPatientRecipients(user || { id: userId }, payload.patientRecipients, rcpt);
   const messageId = newMessageId(row.emailAddress);
   const raw = await buildRaw({
     from: fromHeader(row, senderName), rcpt, subject: cleanSubject(payload.subject), html: joinBody(payload.html, payload.quotedHtml),
     inReplyTo, references, attachments, messageId, date: new Date(), keepBcc: true, draft: true,
     patientDocumentIds: fromFile.refs.map((r) => r.documentId),
+    patientUhids: patientRcpts.map((p) => p.uhid),
   });
 
   const saved = await appendTo(userId, 'drafts', raw, ['\\Draft', '\\Seen']);
@@ -425,9 +447,10 @@ const composeContext = async (userId, { folder = 'INBOX', uid, mode }, user) => 
   if (mode === 'draft') {
     if (!msg.draft) throw new MailError('NOT_A_DRAFT', 'That message is not a draft.', 400);
     const { body, quote } = splitDraftHtml(msg.html);
+    const tagged = await patientDocs.tagDraftRecipients(user || { id: userId }, msg.hmsPatientRecipients, { to: msg.to, cc: msg.cc, bcc: msg.bcc });
     return {
       mode,
-      to: msg.to, cc: msg.cc, bcc: msg.bcc,
+      to: tagged.to, cc: tagged.cc, bcc: tagged.bcc,
       subject: msg.subject || '',
       html: body,
       quotedHtml: quote,

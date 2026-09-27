@@ -34,7 +34,9 @@ const { Patient, User, MedicalDocument, StaffMailAccount } = db;
 //   save to a patient's file      = POST /api/documents   (doctor/staff/admin + documents.write)
 //
 // Audit: metadata only (D1). StaffMailEvents rows carry patientId + counts +
-// recipient domains — never addresses, subjects, bodies or file names.
+// recipient domains — never addresses, bodies or file names. The ONE exception
+// (phase 4, Emu 27 Sep): a patient_emailed row keeps the message SUBJECT
+// (≤ 200 characters) for that patient's own Communications trail.
 // ---------------------------------------------------------------------------
 
 const PATIENT_VIEW = [...INTERNAL_ROLES];
@@ -279,13 +281,14 @@ const cleanDocIds = (list) => [...new Set((Array.isArray(list) ? list : [])
 
 /**
  * Documents to attach, checked afresh at send/draft time: the gate, not
- * archived, file on disk. Returns { refs, attachments, byPatient } — byPatient
- * maps the CANONICAL patient id to how many of its documents are attached.
+ * archived, file on disk. Returns { refs, attachments, byPatient, idsByPatient }
+ * — byPatient maps the CANONICAL patient id to how many of its documents are
+ * attached; idsByPatient to which ones.
  * `withContent` false for drafts (they carry references, not copies).
  */
 const loadPatientDocuments = async (user, ids, { withContent = true } = {}) => {
   const clean = cleanDocIds(ids);
-  if (!clean.length) return { refs: [], attachments: [], byPatient: new Map() };
+  if (!clean.length) return { refs: [], attachments: [], byPatient: new Map(), idsByPatient: new Map() };
   requireGate(user, DOCUMENT_VIEW, "attach documents from a patient's file");
   const docs = await MedicalDocument.findAll({
     where: { id: { [Op.in]: clean }, isArchived: false },
@@ -306,13 +309,17 @@ const loadPatientDocuments = async (user, ids, { withContent = true } = {}) => {
   const refs = [];
   const attachments = [];
   const byPatient = new Map();
+  const idsByPatient = new Map();   // canonical id -> [document ids] (phase 4: the patient's own trail)
   for (const id of clean) {
     const d = docs.find((x) => x.id === id);
     const file = documentFile(d);
     if (!file) throw new MailError('ATTACH_GONE', `The file for "${d.fileName}" is missing on the server. Remove it and try again.`, 409);
     const size = fs.statSync(file).size;
     const canonical = d.Patient ? (d.Patient.mergedIntoId || d.Patient.id) : null;
-    if (canonical) byPatient.set(canonical, (byPatient.get(canonical) || 0) + 1);
+    if (canonical) {
+      byPatient.set(canonical, (byPatient.get(canonical) || 0) + 1);
+      idsByPatient.set(canonical, [...(idsByPatient.get(canonical) || []), d.id]);
+    }
     const label = labelOf(d);
     refs.push({
       documentId: d.id, fileName: d.fileName, type: typeOf(d.fileName), size,
@@ -326,7 +333,7 @@ const loadPatientDocuments = async (user, ids, { withContent = true } = {}) => {
       });
     }
   }
-  return { refs, attachments, byPatient };
+  return { refs, attachments, byPatient, idsByPatient };
 };
 
 /** One audit row per patient whose documents went out. */
@@ -337,6 +344,179 @@ const logPatientDocumentsSent = (user, byPatient, summary, emailAddress) => {
       detail: JSON.stringify({ documents: count, recipients: summary.count, domains: summary.domains }),
     });
   }
+};
+
+// ---- 4. email this patient (phase 4) ----------------------------------------
+//
+// A message is logged against a patient's file only when a recipient was
+// picked AS that patient (the violet Patient tag — from the patient file or
+// from the suggestions), and the server confirms the address really is one on
+// that patient's merge family. A hand-typed address is not logged (Emu, 27 Sep:
+// "tagged chips only" — a shared family email would otherwise land on every
+// patient who uses it).
+//
+// The patient_emailed row keeps the SUBJECT (≤ 200 characters — Emu's decision,
+// 27 Sep), the ids of the file's documents that went with it, and the usual
+// counts + domains. It is shown only on that patient's Communications trail;
+// the admin Activity Log keeps to metadata and never shows the subject.
+
+const MAX_PATIENT_RECIPIENTS = 20;
+const SUBJECT_KEEP = 200;
+const DETAIL_MAX = 500;   // StaffMailEvents.detail is VARCHAR(500)
+
+const cleanUhids = (list) => [...new Set((Array.isArray(list) ? list : [])
+  .map((v) => String(typeof v === 'object' && v ? v.uhid : v || '').trim())
+  .filter((u) => u && u.length <= 50))].slice(0, MAX_PATIENT_RECIPIENTS);
+
+/** Every email on a merge family, lower-cased (the canonical file's first). */
+const familyEmails = async (family) => {
+  const rows = await Patient.findAll({ where: { id: { [Op.in]: family.patientIds } }, attributes: ['id', 'email'] });
+  const own = rows.filter((r) => r.id === family.patient.id);
+  return [...new Set([...own, ...rows].map((r) => String(r.email || '').trim().toLowerCase()).filter(Boolean))];
+};
+
+/**
+ * The patient chips of a message that are real: for each UHID the caller may
+ * see (PATIENT_VIEW) and that is an ACTIVE file, the family address that is
+ * actually among the recipients. Anything else is dropped silently — this
+ * decides what is logged, it never blocks a send.
+ *   → [{ patientId, uhid, name, address }]
+ */
+const verifyPatientRecipients = async (user, uhids, rcpt) => {
+  const list = cleanUhids(uhids);
+  if (!list.length || !canSeePatients(user)) return [];
+  const addresses = new Set([...(rcpt.to || []), ...(rcpt.cc || []), ...(rcpt.bcc || [])]
+    .map((r) => String(r.address || '').toLowerCase()));
+  const out = [];
+  for (const uhid of list) {
+    const family = await resolvePatient(uhid);
+    if (!family || family.isDeactivated) continue;
+    const match = (await familyEmails(family)).find((e) => addresses.has(e));
+    if (!match || out.some((o) => o.patientId === family.patient.id)) continue;
+    out.push({ patientId: family.patient.id, uhid: family.patient.uhid, name: fullName(family.patient), address: match });
+  }
+  return out;
+};
+
+/** The detail JSON, with the subject shortened until it fits the column. */
+const emailedDetail = ({ subject, documentIds, summary, otherAttachments }) => {
+  let subj = String(subject || '').replace(/[\r\n]+/g, ' ').trim();
+  if (subj.length > SUBJECT_KEEP) subj = `${subj.slice(0, SUBJECT_KEEP - 1)}…`;
+  const build = (s) => JSON.stringify({
+    subject: s,
+    documents: (documentIds || []).slice(0, 20),
+    recipients: summary.count,
+    domains: (summary.domains || []).slice(0, 5),
+    attachments: otherAttachments || 0,
+  });
+  let out = build(subj);
+  while (out.length > DETAIL_MAX && subj.length) {
+    subj = subj.length > 21 ? `${subj.slice(0, subj.length - 21)}…` : '';
+    out = build(subj);
+  }
+  return out;
+};
+
+/** One patient_emailed row per verified patient chip (after the message has gone). */
+const logPatientEmailed = (user, patients, { subject, idsByPatient, summary, otherAttachments, emailAddress }) => {
+  for (const p of patients) {
+    accounts.logEvent({
+      userId: user.id, actorId: user.id, patientId: p.patientId, event: 'patient_emailed', emailAddress,
+      detail: emailedDetail({ subject, documentIds: (idsByPatient && idsByPatient.get(p.patientId)) || [], summary, otherAttachments }),
+    });
+  }
+};
+
+/**
+ * GET /api/mail/patients/:uhid/contact — who "Email patient" writes to: the
+ * surviving file's name + address (borrowed from a merged-away record if the
+ * survivor has none, as the suggestions do). A merged-away UHID is refused.
+ */
+const patientContact = async (user, uhid) => {
+  requireGate(user, PATIENT_VIEW, 'open patient files');
+  const family = await resolvePatient(String(uhid || ''));
+  if (!family) throw new MailError('NOT_FOUND', 'Patient not found.', 404);
+  if (family.isDeactivated) {
+    const into = await Patient.findByPk(family.patient.mergedIntoId, { attributes: ['uhid'] });
+    throw new MailError('MERGED', `This file was merged into ${into ? into.uhid : 'another file'}. Open that one instead.`, 409);
+  }
+  const emails = await familyEmails(family);
+  const p = family.patient;
+  return { uhid: p.uhid, name: fullName(p), yearOfBirth: yearOf(p.dateOfBirth), address: emails[0] || null };
+};
+
+/**
+ * A reopened draft's patient chips (X-HMS-Patient-Recipients), re-checked for
+ * THIS user: the recipients whose address still belongs to that patient get
+ * their Patient tag back. Chips that no longer check out stay as plain
+ * recipients.
+ */
+const tagDraftRecipients = async (user, headerValue, lists) => {
+  const uhids = String(headerValue || '').split(/[\s,]+/).filter(Boolean);
+  if (!uhids.length) return lists;
+  const flat = { to: lists.to || [], cc: lists.cc || [], bcc: lists.bcc || [] };
+  const ok = await verifyPatientRecipients(user, uhids, flat);
+  const byAddress = new Map(ok.map((p) => [p.address, p]));
+  const tag = (arr) => arr.map((r) => {
+    const p = byAddress.get(String(r.address || '').toLowerCase());
+    return p ? { ...r, name: r.name || p.name, patient: { uhid: p.uhid } } : r;
+  });
+  return { to: tag(flat.to), cc: tag(flat.cc), bcc: tag(flat.bcc) };
+};
+
+/**
+ * The email side of a patient's Communications trail (phase 4): every mail
+ * event logged on the merge family — the patient was emailed, the file's
+ * documents were emailed to someone else, an attachment was saved to the
+ * file. `family` comes from resolvePatient (the caller has already passed the
+ * trail's route gate). Newest first, at most 200.
+ */
+const TRAIL_EVENTS = ['patient_emailed', 'patient_docs_sent', 'saved_to_patient'];
+const patientEmailTrail = async (family, { from, to } = {}) => {
+  const where = { patientId: { [Op.in]: family.patientIds }, event: { [Op.in]: TRAIL_EVENTS } };
+  if (from || to) {
+    where.createdAt = {};
+    if (from) where.createdAt[Op.gte] = new Date(from);
+    if (to) { const t = new Date(to); t.setHours(23, 59, 59, 999); where.createdAt[Op.lte] = t; }
+  }
+  const rows = await db.StaffMailEvent.findAll({
+    where,
+    include: [{ model: User, as: 'actor', attributes: ['id', 'firstName', 'lastName', 'role'] }],
+    order: [['createdAt', 'DESC']],
+    limit: 200,
+  });
+  const parsed = rows.map((r) => {
+    let d = {};
+    try { d = JSON.parse(r.detail || '{}'); } catch { d = {}; }
+    return { r, d: d && typeof d === 'object' ? d : {} };
+  });
+  const docIds = [...new Set(parsed.flatMap(({ d }) => (Array.isArray(d.documents) ? d.documents : [])))]
+    .map((n) => parseInt(n, 10)).filter((n) => n > 0);
+  const docs = docIds.length ? await MedicalDocument.findAll({
+    where: { id: { [Op.in]: docIds } },
+    attributes: ['id', 'fileName', 'documentCategory', 'testDate', 'isArchived'],
+  }) : [];
+  const docBy = new Map(docs.map((x) => [x.id, x]));
+  return parsed.map(({ r, d }) => ({
+    id: r.id,
+    kind: r.event === 'patient_emailed' ? 'emailed' : r.event === 'patient_docs_sent' ? 'docs_sent' : 'saved',
+    createdAt: r.createdAt,
+    by: r.actor ? { id: r.actor.id, name: fullName(r.actor), role: r.actor.role } : null,
+    subject: r.event === 'patient_emailed' ? (d.subject || '') : null,
+    documents: r.event === 'patient_emailed'
+      ? (Array.isArray(d.documents) ? d.documents : []).map((id) => {
+        const doc = docBy.get(parseInt(id, 10));
+        return doc
+          ? { id: doc.id, fileName: doc.fileName, category: doc.documentCategory, date: doc.testDate || null, archived: !!doc.isArchived }
+          : { id, fileName: null, missing: true };
+      })
+      : [],
+    documentCount: r.event === 'patient_emailed' ? (Array.isArray(d.documents) ? d.documents.length : 0) : (d.documents || 0),
+    recipients: d.recipients || 0,
+    domains: Array.isArray(d.domains) ? d.domains : [],
+    otherAttachments: d.attachments || 0,
+    senderDomain: d.senderDomain || null,
+  }));
 };
 
 // ---- 3. save an attachment to a patient file -------------------------------
@@ -439,5 +619,10 @@ module.exports = {
   loadPatientDocuments,
   logPatientDocumentsSent,
   saveAttachmentToPatient,
-  _internals: { cleanDocIds, documentFile, MAGIC, DOCUMENTS_DIR, yearOf },
+  verifyPatientRecipients,
+  logPatientEmailed,
+  patientContact,
+  tagDraftRecipients,
+  patientEmailTrail,
+  _internals: { cleanDocIds, cleanUhids, documentFile, MAGIC, DOCUMENTS_DIR, yearOf, emailedDetail, SUBJECT_KEEP, DETAIL_MAX },
 };

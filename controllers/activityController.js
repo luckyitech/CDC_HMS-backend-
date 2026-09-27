@@ -630,13 +630,14 @@ const MAIL_EVENT_TYPES = {
   sent:              { type: 'mail_sent',              label: 'Sent Email' },
   trash_emptied:     { type: 'mail_trash_emptied',     label: 'Emptied Mail Trash' },
   patient_docs_sent: { type: 'patient_docs_emailed',   label: 'Emailed Patient Documents' },
+  patient_emailed:   { type: 'mail_patient_emailed',   label: 'Emailed Patient' },
   saved_to_patient:  { type: 'mail_saved_to_patient',  label: 'Saved Email Attachment to Patient' },
 };
 
 // Filter groups the Activity Log's "Action" menu offers on top of single types.
 const ACTION_GROUPS = {
   mail_all: Object.values(MAIL_EVENT_TYPES).map((t) => t.type),
-  mail_patient_docs: ['patient_docs_emailed', 'mail_saved_to_patient'],
+  mail_patient_docs: ['patient_docs_emailed', 'mail_saved_to_patient', 'mail_patient_emailed'],
 };
 
 const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
@@ -648,6 +649,15 @@ const mailDetail = (r, d, actorIsOwner) => {
       return `${plural(d.recipients || 0, 'recipient')}${domains}${d.attachments ? ` · ${plural(d.attachments, 'attachment')}` : ''}`;
     case 'patient_docs_sent':
       return `${plural(d.documents || 0, 'document')} to ${plural(d.recipients || 0, 'recipient')}${domains}`;
+    case 'patient_emailed': {
+      // Metadata only here: the subject this row keeps is for the patient's own
+      // Communications trail, never the Activity Log.
+      const docs = Array.isArray(d.documents) ? d.documents.length : 0;
+      const other = d.attachments || 0;
+      return [`${plural(d.recipients || 0, 'recipient')}${domains}`,
+        docs ? `${plural(docs, 'document')} from the file` : null,
+        other ? plural(other, 'other attachment') : null].filter(Boolean).join(' · ');
+    }
     case 'saved_to_patient':
       return `1 attachment${d.senderDomain ? ` from ${d.senderDomain}` : ''} · Pending Review`;
     case 'trash_emptied':
