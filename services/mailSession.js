@@ -367,7 +367,7 @@ const getMessage = async (userId, { folder = 'INBOX', uid, markSeen = true } = {
   return withFolder(userId, folder, async (client) => {
     const msg = await client.fetchOne(String(id), {
       uid: true, envelope: true, flags: true, bodyStructure: true, internalDate: true, size: true,
-      headers: ['references', 'in-reply-to', 'x-hms-patient-documents', 'x-hms-patient-recipients'],
+      headers: ['references', 'in-reply-to', 'x-hms-patient-documents', 'x-hms-patient-recipients', 'x-hms-patient-links'],
     }, { uid: true });
     if (!msg) throw new MailError('NOT_FOUND', 'That message is no longer in this folder.', 404);
     const parts = walkParts(msg.bodyStructure);
@@ -427,6 +427,7 @@ const getMessage = async (userId, { folder = 'INBOX', uid, markSeen = true } = {
       hmsPatientDocuments: flags.has('\\Draft') ? headerValue('x-hms-patient-documents') : '',
       // Phase 4: the UHIDs of recipients picked as a patient (drafts only).
       hmsPatientRecipients: flags.has('\\Draft') ? headerValue('x-hms-patient-recipients') : '',
+      hmsPatientLinks: flags.has('\\Draft') ? headerValue('x-hms-patient-links') : '',
       date: env.date || msg.internalDate || null,
       messageId: env.messageId || null,
       seen,

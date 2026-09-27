@@ -229,7 +229,9 @@ describe('Activity Log — mail events', () => {
   });
 
   test('the patient filter = emailed from a file + saved to a file (+ phase 4: emailed the patient); "all email" = every mail type', () => {
-    assert.deepEqual(ACTION_GROUPS.mail_patient_docs.sort(), ['mail_patient_emailed', 'mail_saved_to_patient', 'patient_docs_emailed']);
-    assert.deepEqual(ACTION_GROUPS.mail_all.sort(), Object.values(MAIL_EVENT_TYPES).map((t) => t.type).sort());
+    assert.deepEqual(ACTION_GROUPS.mail_patient_docs.sort(), ['mail_linked_to_patient', 'mail_patient_emailed', 'mail_saved_to_patient', 'patient_docs_emailed']);
+    // Phase 5: "all email" also holds every message sent/received (StaffMailTraffic).
+    const { MAIL_TRAFFIC_TYPES } = require('../controllers/activityController');
+    assert.deepEqual(ACTION_GROUPS.mail_all.sort(), [...Object.values(MAIL_EVENT_TYPES), ...Object.values(MAIL_TRAFFIC_TYPES)].map((t) => t.type).sort());
   });
 });

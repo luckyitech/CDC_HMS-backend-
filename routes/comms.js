@@ -12,6 +12,9 @@ const comms = require('../controllers/commsController');
 const VIEW  = ['staff', 'doctor', 'nurse', 'admin', 'comms.view'];
 const WRITE = ['staff', 'doctor', 'nurse', 'admin', 'comms.write'];
 const CONFIG = ['admin', 'config.write'];   // cost analytics + the organisations editor
+// Staff Email phase 5: reading the TEXT of a patient's email threads — doctors,
+// nurses, admins by role; anyone else by grant (Emu, 27 Sep).
+const PATIENT_EMAIL_VIEW = ['doctor', 'nurse', 'admin', 'patientemail.view'];
 
 // Outbound media (Send via WhatsApp / composer attach) — kept in memory, ≤10 MB.
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
@@ -35,10 +38,19 @@ router.post('/organisations',  authenticate, authorize(...CONFIG), comms.saveOrg
 
 // --- patient communications trail (Patient file → Communications tab) ---
 router.get('/patients/:uhid/trail', authenticate, authorize(...VIEW), comms.patientTrail);
+// Phase 5 — the patient's email threads (text), and an admin-only soft removal.
+router.get('/patients/:uhid/email-threads', authenticate, authorize(...PATIENT_EMAIL_VIEW), comms.patientEmailThreads);
+router.post('/patients/:uhid/email-messages/:id/remove', authenticate, authorize('admin'), comms.removePatientEmail);
+// Phase 5b — save an attachment of a patient-thread email into the patient's
+// Documents. The POST /api/documents gate; only the mailbox owner (controller).
+router.post('/patients/:uhid/email-messages/:id/attachments/:index/save', authenticate, authorize('doctor', 'staff', 'admin', 'documents.write'), comms.savePatientEmailAttachment);
 
 // --- analytics ---
 router.get('/analytics/operations', authenticate, authorize(...VIEW),   comms.analyticsOperations);
 router.get('/analytics/costs',      authenticate, authorize(...CONFIG), comms.analyticsCosts);
+// Phase 5 — email analytics: shows each person's mail volume, so the Activity
+// Log's gate, not the Inbox's.
+router.get('/analytics/email',      authenticate, authorize('admin', 'monitoring.view'), comms.analyticsEmail);
 
 // --- escalations ---
 router.post('/escalations/:id/resolve', authenticate, authorize(...WRITE), comms.resolveEscalation);

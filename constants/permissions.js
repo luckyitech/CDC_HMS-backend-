@@ -144,6 +144,13 @@ const PERMISSIONS = {
   // mailbox — there is no capability for that, by design (decision D1).
   EMAIL_USE: 'email.use',
 
+  // Staff Email phase 5 — reading the TEXT of the emails on a patient's
+  // Communications trail (their email threads: messages to the patient,
+  // replies, and emails a colleague linked to the file). Doctors, nurses and
+  // admins by role; anyone else (e.g. reception) by grant; withdrawable per
+  // person. Without it the trail shows only that an email was sent.
+  PATIENT_EMAIL_VIEW: 'patientemail.view',
+
   // --- Clinical ---
   // The clinical record itself, as opposed to the patient's identity and
   // administration. Reception legitimately needs to know who a patient is,
@@ -398,6 +405,7 @@ const ADMIN_ACCESS_COVERS = [
   PERMISSIONS.LABINBOX_VIEW,
   PERMISSIONS.LABINBOX_WRITE,
   PERMISSIONS.MONITORING_VIEW,
+  PERMISSIONS.PATIENT_EMAIL_VIEW,
   PERMISSIONS.PATIENTS_MERGE,
   PERMISSIONS.PATIENTS_WRITE,
   PERMISSIONS.QUEUE_WRITE,
@@ -585,6 +593,12 @@ const PERMISSION_GROUPS = [
           + 'mail through the HMS. Withdraw it to stop one person using email here.',
         access: PERMISSIONS.EMAIL_USE, accessLabel: 'Can use their own mailbox in the HMS',
         roleDefault: 'Everyone' },
+      { key: 'patient-email', name: 'Patient email threads', appliesIn: 'Patient file → Communications',
+        description: 'Reading the text of the emails on a patient\'s Communications tab: messages '
+          + 'sent to the patient, their replies, and emails a colleague linked to the file (e.g. an '
+          + 'insurer pre-authorisation). Without it the tab shows only that an email was sent.',
+        access: PERMISSIONS.PATIENT_EMAIL_VIEW, accessLabel: 'Can read patient email threads',
+        roleDefault: 'Doctors, nurses' },
     ],
   },
   {

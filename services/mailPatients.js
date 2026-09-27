@@ -337,11 +337,12 @@ const loadPatientDocuments = async (user, ids, { withContent = true } = {}) => {
 };
 
 /** One audit row per patient whose documents went out. */
-const logPatientDocumentsSent = (user, byPatient, summary, emailAddress) => {
+const logPatientDocumentsSent = (user, byPatient, summary, emailAddress, idsByPatient = new Map()) => {
   for (const [patientId, count] of byPatient.entries()) {
     accounts.logEvent({
       userId: user.id, actorId: user.id, patientId, event: 'patient_docs_sent', emailAddress,
-      detail: JSON.stringify({ documents: count, recipients: summary.count, domains: summary.domains }),
+      // Phase 5: the document ids too (for Analytics → documents by category).
+      detail: JSON.stringify({ documents: count, recipients: summary.count, domains: (summary.domains || []).slice(0, 5), documentIds: (idsByPatient.get(patientId) || []).slice(0, 20) }),
     });
   }
 };
@@ -361,6 +362,8 @@ const logPatientDocumentsSent = (user, byPatient, summary, emailAddress) => {
 // the admin Activity Log keeps to metadata and never shows the subject.
 
 const MAX_PATIENT_RECIPIENTS = 20;
+/** A short, stable hash of a Message-ID (phase 5 — see emailedDetail). */
+const midHash = (messageId) => crypto.createHash('sha1').update(String(messageId || '')).digest('hex').slice(0, 16);
 const SUBJECT_KEEP = 200;
 const DETAIL_MAX = 500;   // StaffMailEvents.detail is VARCHAR(500)
 
@@ -399,7 +402,7 @@ const verifyPatientRecipients = async (user, uhids, rcpt) => {
 };
 
 /** The detail JSON, with the subject shortened until it fits the column. */
-const emailedDetail = ({ subject, documentIds, summary, otherAttachments }) => {
+const emailedDetail = ({ subject, documentIds, summary, otherAttachments, messageId }) => {
   let subj = String(subject || '').replace(/[\r\n]+/g, ' ').trim();
   if (subj.length > SUBJECT_KEEP) subj = `${subj.slice(0, SUBJECT_KEEP - 1)}…`;
   const build = (s) => JSON.stringify({
@@ -408,6 +411,9 @@ const emailedDetail = ({ subject, documentIds, summary, otherAttachments }) => {
     recipients: summary.count,
     domains: (summary.domains || []).slice(0, 5),
     attachments: otherAttachments || 0,
+    // Phase 5: ties this row to the stored thread message — a short hash of
+    // the Message-ID, so the row still carries nothing address-like.
+    ...(messageId ? { mid: midHash(messageId) } : {}),
   });
   let out = build(subj);
   while (out.length > DETAIL_MAX && subj.length) {
@@ -418,11 +424,11 @@ const emailedDetail = ({ subject, documentIds, summary, otherAttachments }) => {
 };
 
 /** One patient_emailed row per verified patient chip (after the message has gone). */
-const logPatientEmailed = (user, patients, { subject, idsByPatient, summary, otherAttachments, emailAddress }) => {
+const logPatientEmailed = (user, patients, { subject, idsByPatient, summary, otherAttachments, emailAddress, messageId }) => {
   for (const p of patients) {
     accounts.logEvent({
       userId: user.id, actorId: user.id, patientId: p.patientId, event: 'patient_emailed', emailAddress,
-      detail: emailedDetail({ subject, documentIds: (idsByPatient && idsByPatient.get(p.patientId)) || [], summary, otherAttachments }),
+      detail: emailedDetail({ subject, documentIds: (idsByPatient && idsByPatient.get(p.patientId)) || [], summary, otherAttachments, messageId }),
     });
   }
 };
@@ -472,7 +478,7 @@ const tagDraftRecipients = async (user, headerValue, lists) => {
  * trail's route gate). Newest first, at most 200.
  */
 const TRAIL_EVENTS = ['patient_emailed', 'patient_docs_sent', 'saved_to_patient'];
-const patientEmailTrail = async (family, { from, to } = {}) => {
+const patientEmailTrail = async (family, { from, to, canReadText = false } = {}) => {
   const where = { patientId: { [Op.in]: family.patientIds }, event: { [Op.in]: TRAIL_EVENTS } };
   if (from || to) {
     where.createdAt = {};
@@ -485,11 +491,18 @@ const patientEmailTrail = async (family, { from, to } = {}) => {
     order: [['createdAt', 'DESC']],
     limit: 200,
   });
-  const parsed = rows.map((r) => {
+  let parsed = rows.map((r) => {
     let d = {};
     try { d = JSON.parse(r.detail || '{}'); } catch { d = {}; }
     return { r, d: d && typeof d === 'object' ? d : {} };
   });
+  // Phase 5: someone who reads the patient's email threads sees each sent
+  // message there in full — drop the matching "emailed the patient" note.
+  if (canReadText) {
+    const stored = await db.PatientEmailMessage.findAll({ where: { patientId: { [Op.in]: family.patientIds }, status: 'active' }, attributes: ['messageId'] });
+    const inThreads = new Set(stored.map((m) => midHash(m.messageId)));
+    parsed = parsed.filter(({ r, d }) => !(r.event === 'patient_emailed' && d.mid && inThreads.has(d.mid)));
+  }
   const docIds = [...new Set(parsed.flatMap(({ d }) => (Array.isArray(d.documents) ? d.documents : [])))]
     .map((n) => parseInt(n, 10)).filter((n) => n > 0);
   const docs = docIds.length ? await MedicalDocument.findAll({
@@ -502,7 +515,9 @@ const patientEmailTrail = async (family, { from, to } = {}) => {
     kind: r.event === 'patient_emailed' ? 'emailed' : r.event === 'patient_docs_sent' ? 'docs_sent' : 'saved',
     createdAt: r.createdAt,
     by: r.actor ? { id: r.actor.id, name: fullName(r.actor), role: r.actor.role } : null,
-    subject: r.event === 'patient_emailed' ? (d.subject || '') : null,
+    // Phase 5: the subject only for people who may read patient email text.
+    subject: r.event === 'patient_emailed' && canReadText ? (d.subject || '') : null,
+    mid: d.mid || null,
     documents: r.event === 'patient_emailed'
       ? (Array.isArray(d.documents) ? d.documents : []).map((id) => {
         const doc = docBy.get(parseInt(id, 10));
@@ -551,7 +566,7 @@ const saveAttachmentToPatient = async (user, { folder, uid, part, uhid, category
   if (family.isDeactivated) throw new MailError('INACTIVE', 'This patient profile is inactive. Documents cannot be filed to it.', 403);
 
   const id = session.cleanUid(uid);
-  const { meta, content, senderDomain } = await session.withFolder(user.id, String(folder || 'INBOX'), async (client) => {
+  const { meta, content, senderDomain, messageId } = await session.withFolder(user.id, String(folder || 'INBOX'), async (client) => {
     const msg = await client.fetchOne(String(id), { uid: true, bodyStructure: true, envelope: true }, { uid: true });
     if (!msg) throw new MailError('NOT_FOUND', 'That message is no longer in this folder.', 404);
     const found = walkParts(msg.bodyStructure).attachments.find((a) => a.part === String(part));
@@ -559,7 +574,10 @@ const saveAttachmentToPatient = async (user, { folder, uid, part, uhid, category
     if (found.size && found.size > MAX_SAVE_BYTES * 1.4) throw new MailError('TOO_BIG', 'That attachment is larger than 25 MB.', 413);
     const buf = await session.downloadPart(client, id, String(part), MAX_SAVE_BYTES + 1);
     const from = ((msg.envelope && msg.envelope.from) || [])[0];
-    return { meta: found, content: buf, senderDomain: from && from.address ? String(from.address).split('@')[1] || null : null };
+    return {
+      meta: found, content: buf, senderDomain: from && from.address ? String(from.address).split('@')[1] || null : null,
+      messageId: (msg.envelope && msg.envelope.messageId) || null,
+    };
   });
   if (content.length > MAX_SAVE_BYTES) throw new MailError('TOO_BIG', 'That attachment is larger than 25 MB.', 413);
 
@@ -599,6 +617,30 @@ const saveAttachmentToPatient = async (user, { folder, uid, part, uhid, category
     detail: JSON.stringify({ documents: 1, senderDomain }),
   });
 
+  // Phase 5b: if this email is on the patient's email trail, remember which
+  // Document this attachment became — the Communications tab then opens it
+  // from Documents instead of asking for it to be saved.
+  if (messageId) {
+    try {
+      const rows = await db.PatientEmailMessage.findAll({ where: { messageId: String(messageId).slice(0, 255), patientId: { [Op.in]: family.patientIds } } });
+      for (const r of rows) {
+        let list = [];
+        try { list = JSON.parse(r.attachmentNames || '[]'); } catch { list = []; }
+        let hit = false;
+        list = list.map((a) => {
+          const e = typeof a === 'string' ? { name: a } : { ...a };
+          if (!hit && !e.documentId && ((e.part && e.part === String(part)) || (!e.part && e.name === meta.filename) || (e.part == null && e.name === meta.filename))) {
+            hit = true; e.documentId = document.id; if (!e.part) e.part = String(part);
+          }
+          return e;
+        });
+        if (hit) await r.update({ attachmentNames: JSON.stringify(list) });
+      }
+    } catch (err) {
+      console.error('[Mail] thread attachment not marked as filed:', err.code || err.name || err.message);
+    }
+  }
+
   return {
     documentId: document.id,
     patient: { uhid: family.patient.uhid, name: fullName(family.patient) },
@@ -624,5 +666,6 @@ module.exports = {
   patientContact,
   tagDraftRecipients,
   patientEmailTrail,
+  midHash,
   _internals: { cleanDocIds, cleanUhids, documentFile, MAGIC, DOCUMENTS_DIR, yearOf, emailedDetail, SUBJECT_KEEP, DETAIL_MAX },
 };

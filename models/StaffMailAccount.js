@@ -36,6 +36,9 @@ const StaffMailAccount = defineModel('StaffMailAccount', {
   remoteImagesDefault: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
   // JSON array (as TEXT) of sender addresses whose remote images always load.
   trustedImageSenders: { type: DataTypes.TEXT, allowNull: true },
+  // Phase 5: the 5-minute checker's cursors (JSON { INBOX: { uidValidity, uidNext }, <sent path>: … })
+  syncState:           { type: DataTypes.TEXT, allowNull: true },
+  lastSyncAt:          { type: DataTypes.DATE, allowNull: true },
 });
 
 module.exports = StaffMailAccount;

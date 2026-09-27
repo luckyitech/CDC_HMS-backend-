@@ -29,6 +29,8 @@ const LabInboxItem        = require('./LabInboxItem');
 const SettingChangeLog    = require('./SettingChangeLog');
 const StaffMailAccount    = require('./StaffMailAccount');
 const StaffMailEvent      = require('./StaffMailEvent');
+const PatientEmailMessage = require('./PatientEmailMessage');
+const StaffMailTraffic    = require('./StaffMailTraffic');
 const Appointment         = require('./Appointment');
 const MedicalEquipment    = require('./MedicalEquipment');
 const EquipmentHistory    = require('./EquipmentHistory');
@@ -231,6 +233,13 @@ StaffMailAccount.belongsTo(User, { as: 'user', foreignKey: 'userId' });
 StaffMailEvent.belongsTo(User, { as: 'user',  foreignKey: 'userId' });
 StaffMailEvent.belongsTo(User, { as: 'actor', foreignKey: 'actorId' });
 StaffMailEvent.belongsTo(Patient, { as: 'patient', foreignKey: 'patientId', constraints: false });
+// Phase 5 — patient email threads + per-message mail traffic (metadata).
+PatientEmailMessage.belongsTo(Patient, { as: 'patient', foreignKey: 'patientId', constraints: false });
+PatientEmailMessage.belongsTo(User, { as: 'mailboxUser', foreignKey: 'mailboxUserId', constraints: false });
+PatientEmailMessage.belongsTo(User, { as: 'linkedBy', foreignKey: 'linkedById', constraints: false });
+PatientEmailMessage.belongsTo(User, { as: 'removedBy', foreignKey: 'removedById', constraints: false });
+StaffMailTraffic.belongsTo(User, { as: 'user', foreignKey: 'userId', constraints: false });
+StaffMailTraffic.belongsTo(Patient, { as: 'patient', foreignKey: 'patientId', constraints: false });
 
 Patient.hasMany(Appointment);
 Appointment.belongsTo(Patient);
@@ -650,6 +659,8 @@ const db = {
   // --- Staff Email (B26) ---
   StaffMailAccount,
   StaffMailEvent,
+  PatientEmailMessage,
+  StaffMailTraffic,
 };
 
 module.exports = db;

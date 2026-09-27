@@ -133,6 +133,10 @@ router.get('/patients', authenticate, authorize(...MAIL), mail.patients);
 router.get('/patients/:uhid/documents', authenticate, authorize(...MAIL), mail.patientDocuments);
 // Phase 4 — "Email patient" from the patient file: who to write to.
 router.get('/patients/:uhid/contact', authenticate, authorize(...MAIL), mail.patientContact);
+// Phase 5 — put a message (or its whole conversation) from YOUR mailbox on a
+// patient's Communications trail. Gated again inside services/mailThreads
+// with the comms.write list (the WhatsApp "link to patient" capability).
+router.post('/messages/:uid/link-patient', authenticate, authorize(...MAIL), mail.linkToPatient);
 router.post('/messages/:uid/attachments/:part/save-to-patient', authenticate, authorize(...MAIL), [
   body('uhid').isString().trim().notEmpty().withMessage('Pick a patient'),
   body('category').optional().isString().isLength({ max: 80 }),

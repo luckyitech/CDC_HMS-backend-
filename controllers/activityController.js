@@ -2,7 +2,7 @@ const { Op } = require('sequelize');
 const { success } = require('../utils/response');
 const db = require('../models');
 
-const { Queue, Patient, MedicalDocument, MedicalEquipment, EquipmentHistory, User, Prescription, LabTest, TreatmentPlan, ConsultationNote, PhysicalExamination, InitialAssessment, UserLoginLog, StaffMailEvent, Appointment, DoctorBlock, BarcodeScan, NeuropathyStudy, LabInboxItem, SettingChangeLog, ConversationMessage, Conversation, ConversationEscalation } = db;
+const { Queue, Patient, MedicalDocument, MedicalEquipment, EquipmentHistory, User, Prescription, LabTest, TreatmentPlan, ConsultationNote, PhysicalExamination, InitialAssessment, UserLoginLog, StaffMailEvent, StaffMailTraffic, Appointment, DoctorBlock, BarcodeScan, NeuropathyStudy, LabInboxItem, SettingChangeLog, ConversationMessage, Conversation, ConversationEscalation } = db;
 
 // ── Shared event shape ────────────────────────────────────────────────────────
 
@@ -631,13 +631,24 @@ const MAIL_EVENT_TYPES = {
   trash_emptied:     { type: 'mail_trash_emptied',     label: 'Emptied Mail Trash' },
   patient_docs_sent: { type: 'patient_docs_emailed',   label: 'Emailed Patient Documents' },
   patient_emailed:   { type: 'mail_patient_emailed',   label: 'Emailed Patient' },
+  linked_to_patient: { type: 'mail_linked_to_patient', label: 'Linked Email to Patient' },
+  patient_email_removed: { type: 'mail_patient_email_removed', label: 'Removed Email from Patient File' },
   saved_to_patient:  { type: 'mail_saved_to_patient',  label: 'Saved Email Attachment to Patient' },
+};
+
+// Phase 5 (Emu, 27 Sep: "every email sent + received"): one row per message a
+// connected mailbox sent or received, from StaffMailTraffic — metadata only.
+// A send made IN the HMS already shows as "Sent Email" (StaffMailEvents), so
+// only mail sent elsewhere (phone / webmail) and mail received appear here.
+const MAIL_TRAFFIC_TYPES = {
+  in:  { type: 'mail_received',       label: 'Email Received' },
+  out: { type: 'mail_sent_elsewhere', label: 'Sent Email (outside the HMS)' },
 };
 
 // Filter groups the Activity Log's "Action" menu offers on top of single types.
 const ACTION_GROUPS = {
-  mail_all: Object.values(MAIL_EVENT_TYPES).map((t) => t.type),
-  mail_patient_docs: ['patient_docs_emailed', 'mail_saved_to_patient', 'mail_patient_emailed'],
+  mail_all: [...Object.values(MAIL_EVENT_TYPES), ...Object.values(MAIL_TRAFFIC_TYPES)].map((t) => t.type),
+  mail_patient_docs: ['patient_docs_emailed', 'mail_saved_to_patient', 'mail_patient_emailed', 'mail_linked_to_patient'],
 };
 
 const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
@@ -658,6 +669,10 @@ const mailDetail = (r, d, actorIsOwner) => {
         docs ? `${plural(docs, 'document')} from the file` : null,
         other ? plural(other, 'other attachment') : null].filter(Boolean).join(' · ');
     }
+    case 'linked_to_patient':
+      return d.how === 'composer' ? 'From the Composer' : `${plural(d.messages || 0, 'message')}${d.how === 'conversation' ? ' (whole conversation)' : ''}`;
+    case 'patient_email_removed':
+      return `${plural(d.messages || 1, 'message')} taken off the patient's trail`;
     case 'saved_to_patient':
       return `1 attachment${d.senderDomain ? ` from ${d.senderDomain}` : ''} · Pending Review`;
     case 'trash_emptied':
@@ -704,6 +719,35 @@ const getMailEvents = async (dateFilter) => {
   });
 };
 
+const getMailTrafficEvents = async (dateFilter) => {
+  const rows = await StaffMailTraffic.findAll({
+    where: {
+      at: dateFilter,
+      [Op.or]: [{ direction: 'in' }, { via: 'elsewhere' }],
+    },
+    include: [
+      { model: User, as: 'user', attributes: ['firstName', 'lastName', 'role'] },
+      { model: Patient, as: 'patient', attributes: ['uhid', 'firstName', 'lastName'] },
+    ],
+  });
+  return rows.map((r) => {
+    const t = MAIL_TRAFFIC_TYPES[r.direction];
+    const domains = r.domains ? r.domains.split(',').filter(Boolean) : [];
+    const where = domains.length ? `${r.direction === 'in' ? 'from' : 'to'} ${domains.slice(0, 3).join(', ')}${domains.length > 3 ? ` +${domains.length - 3}` : ''}` : null;
+    const detail = [
+      where,
+      r.direction === 'out' && r.recipientCount > 1 ? plural(r.recipientCount, 'recipient') : null,
+      r.attachmentCount ? plural(r.attachmentCount, 'attachment') : null,
+      r.direction === 'out' ? 'from phone / webmail' : null,
+    ].filter(Boolean).join(' · ');
+    return makeEvent(
+      t.type, t.label,
+      r.user ? userName(r.user) : 'Unknown', r.patient ? patientName(r.patient) : null, r.patient?.uhid || null, r.at,
+      detail, r.user?.role || null,
+    );
+  });
+};
+
 // views (the Staff File Activity tab) reuse the exact same derivation instead of
 // duplicating it — one source of truth for "what counts as activity".
 const collectAllEvents = async (dateFilter = resolveDateFilter()) => (
@@ -726,6 +770,7 @@ const collectAllEvents = async (dateFilter = resolveDateFilter()) => (
     getCommsEvents(dateFilter),
     getSettingChangeEvents(dateFilter),
     getMailEvents(dateFilter),
+    getMailTrafficEvents(dateFilter),
   ])
 ).flat();
 
@@ -756,4 +801,4 @@ const getActivityLog = async (req, res) => {
   return success(res, { events: filtered, summary });
 };
 
-module.exports = { getActivityLog, collectAllEvents, resolveDateFilter, MAIL_EVENT_TYPES, ACTION_GROUPS };
+module.exports = { getActivityLog, collectAllEvents, resolveDateFilter, MAIL_EVENT_TYPES, MAIL_TRAFFIC_TYPES, ACTION_GROUPS };

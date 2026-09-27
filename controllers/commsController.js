@@ -15,6 +15,9 @@ const metaMessagingApi = require('../services/metaMessagingApi');
 const commsAnalytics = require('../services/commsAnalytics');
 const appointmentController = require('./appointmentController');
 const mailPatients = require('../services/mailPatients');
+const mailThreads = require('../services/mailThreads');
+const mailAnalytics = require('../services/mailAnalytics');
+const { gateResult } = require('../constants/permissions');
 const db = require('../models');
 
 const {
@@ -811,6 +814,15 @@ const analyticsOperations = async (req, res) => {
   }
 };
 
+const analyticsEmail = async (req, res) => {
+  try {
+    return success(res, await mailAnalytics.emailStats({ from: req.query.from, to: req.query.to, staffId: req.query.staffId }));
+  } catch (err) {
+    console.error('Comms.analyticsEmail error:', err);
+    return error(res, 'Failed to load email analytics.', 500);
+  }
+};
+
 const analyticsCosts = async (req, res) => {
   try {
     const data = await commsAnalytics.costs({ from: req.query.from, to: req.query.to, channelId: req.query.channelId });
@@ -818,6 +830,67 @@ const analyticsCosts = async (req, res) => {
   } catch (err) {
     console.error('Comms.analyticsCosts error:', err);
     return error(res, 'Failed to load cost analytics.', 500);
+  }
+};
+
+/** Add { document } (id, file key, name…) to trail messages whose attachment was filed. */
+const withFiledDocuments = (messages, docs) => {
+  const by = new Map((docs || []).map((d) => [d.id, d]));
+  return messages.map((m) => {
+    const d = m.medicalDocumentId ? by.get(m.medicalDocumentId) : null;
+    return d ? {
+      ...m,
+      document: {
+        id: d.id, fileName: d.fileName, category: d.documentCategory, testType: d.testType, date: d.testDate || null,
+        status: d.status, archived: !!d.isArchived, fileKey: path.basename(String(d.fileUrl || d.filePath || '')),
+      },
+    } : m;
+  });
+};
+
+// --- patient email threads (Staff Email phase 5) ------------------------------
+
+// Same list as the route gate (routes/comms.js) — used to decide whether the
+// trail's email rows may carry their subject.
+const PATIENT_EMAIL_VIEW = ['doctor', 'nurse', 'admin', 'patientemail.view'];
+
+/** GET /api/comms/patients/:uhid/email-threads — gated patientemail.view. */
+const patientEmailThreads = async (req, res) => {
+  try {
+    const family = await resolvePatient(req.params.uhid);
+    if (!family) return error(res, 'Patient not found.', 404);
+    const threads = await mailThreads.patientThreads(family, { from: req.query.from, to: req.query.to, viewer: req.user });
+    return success(res, { threads });
+  } catch (err) {
+    console.error('Comms.patientEmailThreads error:', err);
+    return error(res, 'Failed to load the email threads.', 500);
+  }
+};
+
+/** POST /api/comms/patients/:uhid/email-messages/:id/attachments/:index/save — mailbox owner only. */
+const savePatientEmailAttachment = async (req, res) => {
+  try {
+    const family = await resolvePatient(req.params.uhid);
+    if (!family) return error(res, 'Patient not found.', 404);
+    if (family.isDeactivated) return error(res, 'This patient profile is inactive. Documents cannot be filed to it.', 403, { code: 'INACTIVE' });
+    return success(res, await mailThreads.saveThreadAttachment(req.user, family, req.params.id, req.params.index, req.body || {}));
+  } catch (err) {
+    if (err && err.status && err.code) return error(res, err.message, err.status, { code: err.code });
+    console.error('Comms.savePatientEmailAttachment error:', err);
+    return error(res, 'Failed to save the attachment.', 500);
+  }
+};
+
+/** POST /api/comms/patients/:uhid/email-messages/:id/remove { reason } — admins only (soft delete). */
+const removePatientEmail = async (req, res) => {
+  try {
+    const family = await resolvePatient(req.params.uhid);
+    if (!family) return error(res, 'Patient not found.', 404);
+    return success(res, await mailThreads.removeMessage(req.user, family, req.params.id, req.body && req.body.reason));
+  } catch (err) {
+    if (err && err.status && err.code) return error(res, err.message, err.status, { code: err.code });
+    console.error('Comms.removePatientEmail error:', err);
+    return error(res, 'Failed to remove the email.', 500);
   }
 };
 
@@ -841,16 +914,21 @@ const patientTrail = async (req, res) => {
       if (to) { const t = new Date(to); t.setHours(23, 59, 59, 999); where.createdAt[Op.lte] = t; }
     }
     const rows = await ConversationMessage.findAll({ where, include: MSG_INCLUDE, order: [['createdAt', 'DESC']], limit: 500 });
+    // Phase 5b: WhatsApp attachments already filed open from Documents.
+    const filedIds = [...new Set(rows.map((m) => m.medicalDocumentId).filter(Boolean))];
+    const filedDocs = filedIds.length ? await db.MedicalDocument.findAll({
+      where: { id: { [Op.in]: filedIds } }, attributes: ['id', 'fileName', 'fileUrl', 'filePath', 'documentCategory', 'testType', 'testDate', 'status', 'isArchived'],
+    }) : [];
     // Phase 4 (B26): the email side of the trail — metadata rows only, never
     // mail content (the subject of a message sent to the patient excepted).
     // Queries and internal notes are WhatsApp concepts, so those filters hide it.
     const emails = (show === 'queries' || show === 'internal' || (channel && channel !== 'email'))
-      ? [] : await mailPatients.patientEmailTrail(family, { from, to });
+      ? [] : await mailPatients.patientEmailTrail(family, { from, to, canReadText: gateResult(req.user, PATIENT_EMAIL_VIEW) === 'ok' });
     const convIds = [...new Set(rows.map((m) => m.conversationId))];
     const conversations = convIds.length
       ? await Conversation.findAll({ where: { id: convIds }, include: CONV_INCLUDE }) : [];
     return success(res, {
-      messages: rows.map(formatMessage),
+      messages: withFiledDocuments(rows.map(formatMessage), filedDocs),
       conversations: conversations.map(formatConversation),
       emails,
     });
@@ -867,5 +945,5 @@ module.exports = {
   serveMedia, fileToRecord, bookFromChat,
   listReminders, createReminder, updateReminder,
   listTemplates, syncTemplates, listOrganisations, saveOrganisation,
-  analyticsOperations, analyticsCosts, patientTrail,
+  analyticsOperations, analyticsCosts, analyticsEmail, patientTrail, patientEmailThreads, removePatientEmail, savePatientEmailAttachment,
 };

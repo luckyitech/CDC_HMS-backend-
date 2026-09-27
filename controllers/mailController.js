@@ -4,6 +4,7 @@ const accounts = require('../services/mailAccounts');
 const session = require('../services/mailSession');
 const mailSend = require('../services/mailSend');
 const mailPatients = require('../services/mailPatients');
+const mailThreads = require('../services/mailThreads');
 const organise = require('../services/mailOrganise');
 const { checkAddress, getMailConfig, normEmail } = require('../utils/mailConfig');
 
@@ -187,9 +188,14 @@ const messages = async (req, res) => {
 /** GET /api/mail/messages/:uid?folder=&peek=1 — opening marks it read unless peek. */
 const message = async (req, res) => {
   try {
-    return success(res, await session.getMessage(req.user.id, {
+    const msg = await session.getMessage(req.user.id, {
       folder: req.query.folder, uid: req.params.uid, markSeen: req.query.peek !== '1',
-    }));
+    });
+    // Phase 5b: is this email on a patient's trail, with attachments not yet
+    // in their Documents? (The reading pane prompts to save them.) Never fails the read.
+    let patientThreads = [];
+    try { patientThreads = await mailThreads.threadInfoForMessage(req.user, msg.messageId); } catch { patientThreads = []; }
+    return success(res, { ...msg, patientThreads });
   } catch (err) {
     return sendMailError(res, err, 'Mail.message');
   }
@@ -311,6 +317,18 @@ const patients = async (req, res) => {
 };
 
 /** GET /api/mail/patients/:uhid/documents — the documents on a patient's file (whole merge family). */
+/** POST /api/mail/messages/:uid/link-patient { folder, uhid, scope } — phase 5. */
+const linkToPatient = async (req, res) => {
+  try {
+    const b = req.body || {};
+    return success(res, await mailThreads.linkToPatient(req.user, {
+      folder: b.folder, uid: req.params.uid, uhid: b.uhid, scope: b.scope === 'message' ? 'message' : 'thread',
+    }));
+  } catch (err) {
+    return sendMailError(res, err, 'Mail.linkToPatient');
+  }
+};
+
 /** GET /api/mail/patients/:uhid/contact — phase 4 "Email patient": name + address. */
 const patientContact = async (req, res) => {
   try {
@@ -417,6 +435,7 @@ module.exports = {
   patients,
   patientDocuments,
   patientContact,
+  linkToPatient,
   saveToPatient,
   getAccount,
   testAccount,

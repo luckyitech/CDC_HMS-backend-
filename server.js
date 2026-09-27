@@ -44,6 +44,15 @@ sequelize.authenticate()
       } catch (err) {
         console.error('[HR] missed-checkout sweep not started:', err.message);
       }
+
+      // Staff Email phase 5: check every connected mailbox every 5 minutes
+      // (metadata of every email + replies into patient threads). Never
+      // affects the API. MAIL_SYNC_DISABLED=1 turns it off.
+      try {
+        require('./services/mailSync').startScheduler();
+      } catch (err) {
+        console.error('[MailSync] mailbox checker not started:', err.message);
+      }
     });
   })
   .catch((err) => {

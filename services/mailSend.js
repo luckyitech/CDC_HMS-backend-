@@ -4,6 +4,7 @@ const session = require('./mailSession');
 const { checkAddress, getSignatureConfig, logoDataUri } = require('../utils/mailConfig');
 const { walkParts } = require('../utils/mailRender');
 const patientDocs = require('./mailPatients');
+const threads = require('./mailThreads');
 const {
   MAX_RECIPIENTS, parseRecipients, recipientSummary, prefixSubject, replyRecipients,
   threadHeaders, parseIdList, quoteOriginal, htmlToText, outgoingHtml, splitDraftHtml, joinBody, signatureBlock,
@@ -141,7 +142,7 @@ const withPatientDocuments = (attachments, docs) => {
 };
 
 /** Build the RFC 822 message. `keepBcc` for the Sent/Drafts copy only — never for SMTP. */
-const buildRaw = ({ from, rcpt, subject, html, inReplyTo, references, attachments, messageId, date, keepBcc, draft, patientDocumentIds, patientUhids }) => {
+const buildRaw = ({ from, rcpt, subject, html, inReplyTo, references, attachments, messageId, date, keepBcc, draft, patientDocumentIds, patientUhids, linkUhids }) => {
   const MailComposer = require('nodemailer/lib/mail-composer');
   const headers = { 'X-Mailer': 'CDC HMS' };
   if (draft) headers['X-HMS-Draft'] = '1';
@@ -152,6 +153,8 @@ const buildRaw = ({ from, rcpt, subject, html, inReplyTo, references, attachment
   // draft reopened later — here or via "Open in My mail" — keeps its Patient
   // tags and the send is still logged on the patient's file.
   if (draft && patientUhids && patientUhids.length) headers['X-HMS-Patient-Recipients'] = patientUhids.join(',');
+  // Phase 5: patients chosen in the Composer's "Patient file" row (UHIDs only).
+  if (draft && linkUhids && linkUhids.length) headers['X-HMS-Patient-Links'] = linkUhids.join(',');
   const mail = new MailComposer({
     from,
     to: rcpt.to,
@@ -243,7 +246,7 @@ const flagOriginal = async (userId, source) => {
 /**
  * Send. payload: { to, cc, bcc, subject, html, inReplyTo, references,
  * attachments: [{ folder, uid, part }], draftUid?, source?: { mode, folder, uid },
- * patientDocuments?: [ids], patientRecipients?: [uhids] }.
+ * patientDocuments?: [ids], patientRecipients?: [uhids], linkPatients?: [uhids] }.
  */
 const send = async (userId, payload = {}, files = [], { senderName, user } = {}) => {
   const { row, servers, password } = await loadAccount(userId);
@@ -258,6 +261,8 @@ const send = async (userId, payload = {}, files = [], { senderName, user } = {})
   // Phase 4: the recipients picked AS a patient, confirmed against the
   // patient's file. Decides only what is logged — never blocks the send.
   const patientRcpts = await patientDocs.verifyPatientRecipients(user || { id: userId }, payload.patientRecipients, rcpt);
+  // Phase 5: patients the message is LINKED to (Composer "Patient file" row).
+  const linkPatients = await threads.verifyLinkPatients(user || { id: userId }, payload.linkPatients);
   const from = fromHeader(row, senderName);
   const messageId = newMessageId(row.emailAddress);
   const date = new Date();
@@ -314,12 +319,19 @@ const send = async (userId, payload = {}, files = [], { senderName, user } = {})
   // colleague, an insurer — keep the phase 3a patient_docs_sent row.
   const emailedIds = new Set(patientRcpts.map((p) => p.patientId));
   const othersDocs = new Map([...fromFile.byPatient].filter(([id]) => !emailedIds.has(id)));
-  if (othersDocs.size) patientDocs.logPatientDocumentsSent(user || { id: userId }, othersDocs, summary, row.emailAddress);
+  if (othersDocs.size) patientDocs.logPatientDocumentsSent(user || { id: userId }, othersDocs, summary, row.emailAddress, fromFile.idsByPatient);
   if (patientRcpts.length) {
     patientDocs.logPatientEmailed(user || { id: userId }, patientRcpts, {
-      subject, idsByPatient: fromFile.idsByPatient, summary, otherAttachments: mailAttachments.length, emailAddress: row.emailAddress,
+      subject, idsByPatient: fromFile.idsByPatient, summary, otherAttachments: mailAttachments.length, emailAddress: row.emailAddress, messageId,
     });
   }
+  // Phase 5: the traffic row + the message on every patient thread it belongs
+  // to (tagged, linked, or replying into one). Never throws.
+  const threadPatients = await threads.afterHmsSend({
+    user: user || { id: userId }, mailbox: row, messageId, rcpt, subject, html: String(payload.html || ''), date,
+    inReplyTo, references, patientRcpts, linkPatients, idsByPatient: fromFile.idsByPatient,
+    attachmentNames: mailAttachments.map((a) => a.filename),
+  });
   session.forgetRecent(userId);
 
   let sentCopy = { ok: false, reason: 'failed' };
@@ -342,6 +354,7 @@ const send = async (userId, payload = {}, files = [], { senderName, user } = {})
     sent: true,
     messageId,
     loggedToPatients: patientRcpts.map((p) => p.uhid),
+    threadPatients: threadPatients.length,
     sentCopy: sentCopy.ok,
     sentCopyReason: sentCopy.ok ? null : sentCopy.reason,
     draftKept,
@@ -376,12 +389,14 @@ const saveDraft = async (userId, payload = {}, files = [], { senderName, user } 
   const fromFile = await patientDocs.loadPatientDocuments(user || { id: userId }, payload.patientDocuments, { withContent: false });
   const attachments = await gatherAttachments(userId, payload.attachments, files);
   const patientRcpts = await patientDocs.verifyPatientRecipients(user || { id: userId }, payload.patientRecipients, rcpt);
+  const linkPatients = await threads.verifyLinkPatients(user || { id: userId }, payload.linkPatients);
   const messageId = newMessageId(row.emailAddress);
   const raw = await buildRaw({
     from: fromHeader(row, senderName), rcpt, subject: cleanSubject(payload.subject), html: joinBody(payload.html, payload.quotedHtml),
     inReplyTo, references, attachments, messageId, date: new Date(), keepBcc: true, draft: true,
     patientDocumentIds: fromFile.refs.map((r) => r.documentId),
     patientUhids: patientRcpts.map((p) => p.uhid),
+    linkUhids: linkPatients.map((p) => p.uhid),
   });
 
   const saved = await appendTo(userId, 'drafts', raw, ['\\Draft', '\\Seen']);
@@ -439,6 +454,15 @@ const draftPatientDocuments = async (user, headerValue) => {
   return { patientDocuments: kept, patientDocumentsDropped: ids.length - kept.length };
 };
 
+/** A reopened draft's "Patient file" links, re-checked for THIS user. → [{ uhid, name }] */
+const draftLinkPatients = async (user, headerValue) => {
+  const ok = await threads.verifyLinkPatients(user, String(headerValue || '').split(/[\s,]+/).filter(Boolean));
+  if (!ok.length) return [];
+  const db = require('../models');
+  const rows = await db.Patient.findAll({ where: { id: ok.map((p) => p.patientId) }, attributes: ['id', 'uhid', 'firstName', 'lastName'] });
+  return rows.map((p) => ({ uhid: p.uhid, name: `${p.firstName || ''} ${p.lastName || ''}`.trim() }));
+};
+
 const composeContext = async (userId, { folder = 'INBOX', uid, mode }, user) => {
   if (![...MODES, 'draft'].includes(mode)) throw new MailError('BAD_MODE', 'Unknown compose mode.', 400);
   const { row } = await loadAccount(userId);
@@ -451,6 +475,7 @@ const composeContext = async (userId, { folder = 'INBOX', uid, mode }, user) => 
     return {
       mode,
       to: tagged.to, cc: tagged.cc, bcc: tagged.bcc,
+      linkPatients: await draftLinkPatients(user || { id: userId }, msg.hmsPatientLinks),
       subject: msg.subject || '',
       html: body,
       quotedHtml: quote,

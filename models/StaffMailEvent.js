@@ -20,7 +20,7 @@ const StaffMailEvent = defineModel('StaffMailEvent', {
   actorId:      { type: DataTypes.INTEGER, allowNull: true },   // who did it (self, or an admin)
   patientId:    { type: DataTypes.INTEGER, allowNull: true },   // canonical patient (phase 3a events)
   event: {
-    type: DataTypes.ENUM('connected', 'disconnected', 'auth_failed', 'wiped', 'sent', 'patient_docs_sent', 'saved_to_patient', 'trash_emptied', 'patient_emailed'),
+    type: DataTypes.ENUM('connected', 'disconnected', 'auth_failed', 'wiped', 'sent', 'patient_docs_sent', 'saved_to_patient', 'trash_emptied', 'patient_emailed', 'linked_to_patient', 'patient_email_removed'),
     allowNull: false,
   },
   emailAddress: { type: DataTypes.STRING, allowNull: true },

@@ -106,7 +106,10 @@ describe('guard-rails', () => {
     const model = read('models/StaffMailEvent.js');
     const modelEvents = model.match(/ENUM\(([^)]*)\)/)[1].split(',').map((v) => v.trim().replace(/'/g, ''));
     assert.ok(modelEvents.includes('patient_emailed'));
-    for (const e of modelEvents) assert.match(migSrc, new RegExp(`'${e}'`));
+    // The model follows the NEWEST migration that widens the ENUM (phase 5 adds two).
+    const latest = read('migrations/20260926000005-patient-email-threads.js');
+    for (const e of modelEvents) assert.match(latest, new RegExp(`'${e}'`));
+    assert.match(migSrc, /'patient_emailed'/);
     assert.match(migSrc, /bulkDelete\(TABLE, \{ event: 'patient_emailed' \}\)/);
   });
 
