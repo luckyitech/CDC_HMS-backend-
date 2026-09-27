@@ -26,6 +26,8 @@ const { MessagingChannel, Conversation, ConversationMessage } = db;
 // IGSID, NOT a phone number, so there is no phone auto-link. A Messenger/IG
 // thread starts unlinked (contactType 'patient', patientId null) and a human
 // links it to a patient from the Inbox.
+// The sender's NAME is looked up once from Meta (fillProfileName) so the
+// thread is recognisable; it is a label only, never used to auto-link.
 // ---------------------------------------------------------------------------
 
 const STAGING_ROOT = path.join(__dirname, '..', 'private', 'comms');
@@ -81,6 +83,17 @@ const findOrCreateConversation = async (channel, userId) => {
     contactType: 'patient',
     status: 'open',
   });
+};
+
+// Name an unnamed thread from Meta (see metaApi.fetchProfileName). Runs AFTER
+// the message row is saved, so a slow or failed lookup can never cost a
+// message. A thread whose lookup failed stays null and is retried on the
+// person's next message — one Graph call per inbound message for unnamed
+// threads only, negligible at clinic volume. Never overwrites a name.
+const fillProfileName = async (conv, channelType) => {
+  if (conv.profileName) return;
+  const name = await metaApi.fetchProfileName(conv.externalUserId, channelType);
+  if (name) await conv.update({ profileName: name });
 };
 
 // --- media ------------------------------------------------------------------
@@ -163,6 +176,7 @@ const handleMessageEvent = async (channel, channelType, event, cfg) => {
     status: (conv.status === 'archived' || conv.status === 'closed') ? 'open' : conv.status,
   });
   await MessagingChannel.update({ lastInboundAt: now }, { where: { id: channel.id } });
+  await fillProfileName(conv, channelType);
   broadcast('comms_new', { at: now.toISOString(), channel: channelType });   // no PHI
 };
 
@@ -191,6 +205,7 @@ const handlePostbackEvent = async (channel, channelType, event) => {
     lastMessageAt: now, lastMessagePreview: previewFor('button', pb.title || pb.payload),
     status: (conv.status === 'archived' || conv.status === 'closed') ? 'open' : conv.status,
   });
+  await fillProfileName(conv, channelType);
   broadcast('comms_new', { at: now.toISOString(), channel: channelType });
 };
 
@@ -246,4 +261,4 @@ const processWebhook = async (body, channelType) => {
   await recordWebhookSeen().catch(() => {});
 };
 
-module.exports = { processWebhook, previewFor, findOrCreateConversation, STAGING_ROOT };
+module.exports = { processWebhook, previewFor, findOrCreateConversation, fillProfileName, STAGING_ROOT };
