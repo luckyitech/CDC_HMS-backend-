@@ -248,7 +248,33 @@ const shapeFolders = (rows) => {
   .sort((a, b) => (a.order - b.order) || a.path.localeCompare(b.path));
 };
 
+// ---------------------------------------------------------------------------
+// Subjects for DISPLAY. Some senders put HTML entities in the Subject header
+// itself ("OEM inquiry &mdash; in…"). Decode the common named entities and
+// numeric ones so the list, reading pane, toast and Communications tab show
+// the real character. Output is plain text (React escapes it) — never HTML.
+// ---------------------------------------------------------------------------
+const NAMED_ENTITIES = {
+  amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: '\u00a0',
+  mdash: '\u2014', ndash: '\u2013', hellip: '\u2026', rsquo: '\u2019', lsquo: '\u2018',
+  rdquo: '\u201d', ldquo: '\u201c', bull: '\u2022', middot: '\u00b7', copy: '\u00a9',
+  reg: '\u00ae', trade: '\u2122', euro: '\u20ac', pound: '\u00a3', deg: '\u00b0',
+  times: '\u00d7', laquo: '\u00ab', raquo: '\u00bb', eacute: '\u00e9', egrave: '\u00e8',
+};
+const decodeEntities = (s) => String(s || '').replace(/&(#x[0-9a-f]{1,6}|#\d{1,7}|[a-z]{2,8});/gi, (m, e) => {
+  if (e[0] === '#') {
+    const n = e[1] === 'x' || e[1] === 'X' ? parseInt(e.slice(2), 16) : parseInt(e.slice(1), 10);
+    return Number.isFinite(n) && n > 0 && n <= 0x10ffff && !(n >= 0xd800 && n <= 0xdfff) ? String.fromCodePoint(n) : m;
+  }
+  const v = NAMED_ENTITIES[e.toLowerCase()];
+  return v === undefined ? m : v;
+});
+const displaySubject = (s) => decodeEntities(s);
+
 module.exports = {
+  SPECIAL_BY_NAME,
+  displaySubject,
+  decodeEntities,
   walkParts,
   hasAttachments,
   escapeHtml,

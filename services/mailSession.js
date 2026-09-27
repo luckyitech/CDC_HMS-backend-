@@ -3,6 +3,7 @@ const { checkAddress, getMailConfig } = require('../utils/mailConfig');
 const {
   walkParts, hasAttachments, sanitizeHtml, textToHtml, hasRemoteContent,
   inlineCids, addressList, isExternal, shapeFolders, snippetFrom, snippetPart, SNIPPET_BYTES,
+  displaySubject,
 } = require('../utils/mailRender');
 
 // ---------------------------------------------------------------------------
@@ -263,7 +264,7 @@ const toListItem = (msg, domains) => {
   const from = addressList(env.from)[0] || null;
   return {
     uid: msg.uid,
-    subject: env.subject || '',
+    subject: displaySubject(env.subject),
     from,
     to: addressList(env.to),
     date: env.date || msg.internalDate || null,
@@ -327,10 +328,11 @@ const listMessages = async (userId, { folder = 'INBOX', page = 1, pageSize = 50,
   const domains = await allowedDomains();
 
   return withFolder(userId, folder, async (client) => {
-    let total; let fetched = [];
+    let total; let fetched = []; let uidMax = 0;
     if (query) {
       const uids = ((await client.search({ text: query }, { uid: true })) || []).sort((a, b) => b - a);
       total = uids.length;
+      uidMax = uids[0] || 0;
       const pageUids = uids.slice((p - 1) * size, p * size);
       if (pageUids.length) fetched = await client.fetchAll(pageUids.join(','), LIST_QUERY, { uid: true });
     } else {
@@ -339,6 +341,13 @@ const listMessages = async (userId, { folder = 'INBOX', page = 1, pageSize = 50,
       // so ask the server for anything new before trusting the count.
       await client.noop();
       total = client.mailbox.exists || 0;
+      // The newest message's REAL UID. Not mailbox.uidNext: on a pooled
+      // connection NOOP updates `exists` but never uidNext (only SELECT/STATUS
+      // do), so uidNext can trail far behind — select-all would miss mail.
+      if (total) {
+        const newest = await client.fetchOne('*', { uid: true });
+        uidMax = newest && newest.uid ? newest.uid : 0;
+      }
       const end = total - (p - 1) * size;
       if (end >= 1) {
         const start = Math.max(1, end - size + 1);
@@ -351,7 +360,11 @@ const listMessages = async (userId, { folder = 'INBOX', page = 1, pageSize = 50,
     // back-dated message jump pages.
     const messages = fetched.map((m) => ({ ...toListItem(m, domains), snippet: '' })).sort((a, b) => b.uid - a.uid);
     await addSnippets(client, userId, fetched, new Map(messages.map((m) => [m.uid, m])));
-    return { folder: client.mailbox.path, total, page: p, pageSize: size, messages };
+    // uidMax + uidValidity: what "Select all" acts on (never mail that arrives later).
+    return {
+      folder: client.mailbox.path, total, page: p, pageSize: size, messages,
+      uidMax, uidValidity: String(client.mailbox.uidValidity || ''),
+    };
   });
 };
 
@@ -413,7 +426,7 @@ const getMessage = async (userId, { folder = 'INBOX', uid, markSeen = true } = {
     return {
       uid: id,
       folder: client.mailbox.path,
-      subject: env.subject || '',
+      subject: displaySubject(env.subject),
       from,
       to: addressList(env.to),
       cc: addressList(env.cc),

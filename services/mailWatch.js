@@ -1,5 +1,5 @@
 const session = require('./mailSession');
-const { addressList } = require('../utils/mailRender');
+const { addressList, displaySubject } = require('../utils/mailRender');
 
 // ---------------------------------------------------------------------------
 // Staff Email (B26) phase 3b — the live INBOX watcher ("watch + 30 s check",
@@ -51,7 +51,7 @@ const recount = async (userId, w) => {
         uid: msg.uid,
         uidValidity: String(client.mailbox && client.mailbox.uidValidity),
         from: from ? { name: from.name || '', address: from.address } : null,
-        subject: env.subject || '',
+        subject: displaySubject(env.subject),
         date: env.date || msg.internalDate || null,
       };
     }

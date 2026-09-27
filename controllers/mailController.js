@@ -215,7 +215,11 @@ const attachment = async (req, res) => {
 /** POST /api/mail/messages/seen  { folder, uids: [], seen: true|false } */
 const markSeen = async (req, res) => {
   try {
-    const { folder, uids, seen } = req.body || {};
+    const { folder, uids, seen, all } = req.body || {};
+    if (all) {
+      const f = folder || 'INBOX';
+      return success(res, await organise.inBatches(req.user.id, f, all, (batch) => session.setSeen(req.user.id, { folder: f, uids: batch, seen: seen !== false })));
+    }
     return success(res, await session.setSeen(req.user.id, { folder, uids, seen: seen !== false }));
   } catch (err) {
     return sendMailError(res, err, 'Mail.markSeen');
@@ -405,9 +409,38 @@ const organiseMessages = async (req, res) => {
   try {
     const run = ORGANISE[req.params.action];
     if (!run) return error(res, 'Unknown action.', 404);
-    return success(res, await run(req.user.id, req.body || {}));
+    const body = req.body || {};
+    if (body.all) return success(res, await organise.organiseAll(req.params.action, req.user.id, body));
+    return success(res, await run(req.user.id, body));
   } catch (err) {
     return sendMailError(res, err, `Mail.organise.${req.params.action}`);
+  }
+};
+
+/** POST /api/mail/folders { name } — a new folder of the caller's own. */
+const createFolder = async (req, res) => {
+  try {
+    return success(res, await organise.createFolder(req.user.id, { name: req.body.name }));
+  } catch (err) {
+    return sendMailError(res, err, 'Mail.createFolder');
+  }
+};
+
+/** POST /api/mail/folders/rename { path, name } — own folders only. */
+const renameFolder = async (req, res) => {
+  try {
+    return success(res, await organise.renameFolder(req.user.id, { path: req.body.path, name: req.body.name }));
+  } catch (err) {
+    return sendMailError(res, err, 'Mail.renameFolder');
+  }
+};
+
+/** POST /api/mail/folders/delete { path } — own folders, only when empty. */
+const deleteFolder = async (req, res) => {
+  try {
+    return success(res, await organise.deleteFolder(req.user.id, { path: req.body.path }));
+  } catch (err) {
+    return sendMailError(res, err, 'Mail.deleteFolder');
   }
 };
 
@@ -449,6 +482,9 @@ module.exports = {
   attachment,
   markSeen,
   organiseMessages,
+  createFolder,
+  renameFolder,
+  deleteFolder,
   trashInfo,
   emptyTrash,
   send,

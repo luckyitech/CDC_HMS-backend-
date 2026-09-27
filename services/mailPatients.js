@@ -66,6 +66,7 @@ const yearOf = (d) => {
   return m ? m[1] : null;
 };
 const fullName = (p) => `${p.firstName || ''} ${p.lastName || ''}`.trim();
+const { findMatches, normalizeName, similarity } = require('../utils/patientMatch');
 const escapeLike = (s) => String(s).replace(/[\\%_]/g, (c) => `\\${c}`);
 
 // ---- patient search (name / UHID / phone / email / ID) ---------------------
@@ -77,8 +78,10 @@ const escapeLike = (s) => String(s).replace(/[\\%_]/g, (c) => `\\${c}`);
  * used; if it has none, one from the family is borrowed so a duplicate that
  * held the address still makes the patient reachable.
  *
- * Plain LIKE matching: misspellings are not found. (B25's fuzzy matcher lives
- * on another branch; point this at utils/patientMatch once B25 is deployed.)
+ * LIKE matching first; then, for a name-like query that found fewer than
+ * `limit` files, the shared fuzzy matcher (utils/patientMatch — the same one
+ * registration uses, B25) appends misspelling hits ("Mohamed" finds
+ * "Mohammed"), each flagged `fuzzy: true`. Exact hits always come first.
  */
 const searchPatients = async (q, { limit = 8 } = {}) => {
   const text = String(q || '').trim().slice(0, 80);
@@ -122,7 +125,6 @@ const searchPatients = async (q, { limit = 8 } = {}) => {
     limit: 60,
     order: [['updatedAt', 'DESC']],
   });
-  if (!hits.length) return [];
 
   const order = [];
   const borrowed = new Map();   // canonical id -> an email from a merged-away hit
@@ -131,6 +133,23 @@ const searchPatients = async (q, { limit = 8 } = {}) => {
     if (!order.includes(canonical)) order.push(canonical);
     if (h.mergedIntoId && h.email && !borrowed.has(canonical)) borrowed.set(canonical, h.email);
   }
+  // Fuzzy fallback (never reorders or removes the exact hits).
+  const fuzzy = new Set();
+  if (order.length < limit && isNameLike(text)) {
+    const toks = text.split(/\s+/).filter(Boolean);
+    try {
+      const matches = toks.length > 1
+        ? await findMatches({ firstName: toks[0], lastName: toks.slice(1).join(' ') }, { limit: 50 })
+        : await singleNameMatches(toks[0]);
+      for (const m of matches) {
+        if (order.length >= limit) break;
+        if (!order.includes(m.id)) { order.push(m.id); fuzzy.add(m.id); }
+      }
+    } catch (err) {
+      console.error('MailPatients.fuzzySearch error:', err.message);   // suggestions never fail on the fallback
+    }
+  }
+  if (!order.length) return [];
   const ids = order.slice(0, limit);
   const rows = await Patient.findAll({
     where: { id: { [Op.in]: ids }, mergedIntoId: null },
@@ -143,8 +162,43 @@ const searchPatients = async (q, { limit = 8 } = {}) => {
     yearOfBirth: yearOf(p.dateOfBirth),
     phone: p.phone || null,
     email: (p.email || borrowed.get(p.id) || '').trim().toLowerCase() || null,
+    ...(fuzzy.has(p.id) ? { fuzzy: true } : {}),
   }));
 };
+
+// One word typed ("Mohamed", "Wanjiku"): findMatches scores a whole name, so a
+// single word never reaches its threshold. Same blocking idea (SOUNDEX + a
+// 4-letter prefix on either name column), scored word-against-word with the
+// matcher's own similarity. Canonical files only; best first.
+const SINGLE_WORD_MIN = 0.75;
+const singleNameMatches = async (word) => {
+  const norm = normalizeName(word).replace(/\s/g, '');
+  if (norm.length < 3) return [];
+  const sq = db.sequelize;
+  const bucket = (col) => [
+    sq.where(sq.fn('SOUNDEX', sq.col(col)), sq.fn('SOUNDEX', norm)),
+    sq.where(sq.fn('LOWER', sq.col(col)), { [Op.like]: `${escapeLike(norm.slice(0, 4))}%` }),
+  ];
+  const rows = await Patient.findAll({
+    where: { [Op.or]: [...bucket('firstName'), ...bucket('lastName')] },
+    attributes: ['id', 'firstName', 'lastName', 'mergedIntoId', 'status'],
+    limit: 80,
+  });
+  const best = new Map();   // canonical id -> score
+  for (const r of rows) {
+    if ((r.status || '').toLowerCase() === 'inactive' && !r.mergedIntoId) continue;
+    const words = normalizeName(`${r.firstName || ''} ${r.lastName || ''}`).split(' ').filter(Boolean);
+    const score = Math.max(0, ...words.map((w) => similarity(norm, w)));
+    if (score < SINGLE_WORD_MIN) continue;
+    const id = r.mergedIntoId || r.id;
+    if (!best.has(id) || best.get(id) < score) best.set(id, score);
+  }
+  return [...best.entries()].sort((a, b) => b[1] - a[1]).map(([id]) => ({ id }));
+};
+
+// A name-ish query (not a phone, email or UHID fragment) — the same test the
+// patient list's fuzzy fallback uses (B25).
+const isNameLike = (t) => !/^\+?\d[\d\s-]*$/.test(t) && !/@/.test(t) && !/^cdc/i.test(t) && /[a-z]{3,}/i.test(t);
 
 // ---- 1. recipient suggestions ----------------------------------------------
 
@@ -202,7 +256,7 @@ const suggestRecipients = async (user, q) => {
   const patientsShown = canSeePatients(user);
   const patients = patientsShown
     ? (await searchPatients(text, { limit: 6 })).map((p) => ({
-      name: p.name, address: p.email, uhid: p.uhid, yearOfBirth: p.yearOfBirth,
+      name: p.name, address: p.email, uhid: p.uhid, yearOfBirth: p.yearOfBirth, ...(p.fuzzy ? { fuzzy: true } : {}),
     }))
     : [];
 
@@ -221,7 +275,7 @@ const suggestRecipients = async (user, q) => {
 /** GET /api/mail/patients?q= — the patient picker (no emails needed here). */
 const pickPatients = async (user, q) => {
   requireGate(user, DOCUMENT_VIEW, "open patients' documents");
-  return (await searchPatients(q, { limit: 8 })).map(({ uhid, name, yearOfBirth, phone }) => ({ uhid, name, yearOfBirth, phone }));
+  return (await searchPatients(q, { limit: 8 })).map(({ uhid, name, yearOfBirth, phone, fuzzy }) => ({ uhid, name, yearOfBirth, phone, ...(fuzzy ? { fuzzy: true } : {}) }));
 };
 
 /** A stored document's file, resolved safely inside uploads/documents. */
@@ -534,6 +588,79 @@ const patientEmailTrail = async (family, { from, to, canReadText = false } = {})
   }));
 };
 
+// ---- 3b. emailed HMS reports — a copy on the patient's file (debt pass) ------
+//
+// A report printed from the HMS (lab result, prescription, treatment plan…) is
+// turned into a PDF in the browser and attached to the email as an ordinary
+// upload, listed in payload.hmsReports = [{ uhid, filename, title }]. Emu, 27
+// Sep: a copy of EXACTLY what was sent is saved to the patient's Documents —
+// category "Sent Correspondence", status Reviewed (the clinic's own output) —
+// once the email has gone. checkReportCopies runs BEFORE sending (so a refusal
+// reaches no SMTP server); saveReportCopies after, and never throws.
+
+const REPORT_CATEGORY = 'Sent Correspondence';
+const MAX_REPORTS = 10;
+
+const cleanReportTitle = (t) => String(t || 'HMS report').replace(/[\r\n]+/g, ' ').trim().slice(0, 120) || 'HMS report';
+
+const checkReportCopies = async (user, reports, files) => {
+  const list = Array.isArray(reports) ? reports.slice(0, MAX_REPORTS + 1) : [];
+  if (!list.length) return [];
+  if (list.length > MAX_REPORTS) throw new MailError('TOO_MANY', `At most ${MAX_REPORTS} HMS reports per email.`, 400);
+  requireGate(user, DOCUMENT_WRITE, "save a copy to a patient's file");
+  const out = [];
+  const used = new Set();
+  for (const r of list) {
+    const name = String((r && r.filename) || '');
+    const file = (files || []).find((f, i) => !used.has(i) && f.originalname === name && (used.add(i), true));
+    if (!file) throw new MailError('ATTACH_GONE', `The report "${name}" is missing from the email. Attach it again.`, 400);
+    if (!MAGIC[0].test(file.buffer)) throw new MailError('BAD_TYPE', `"${name}" is not a PDF.`, 415);
+    if (file.buffer.length > MAX_SAVE_BYTES) throw new MailError('TOO_BIG', `"${name}" is larger than 25 MB.`, 413);
+    const family = await resolvePatient(String((r && r.uhid) || ''));
+    if (!family) throw new MailError('NOT_FOUND', 'Patient not found for an attached report.', 404);
+    if (family.isDeactivated) {
+      const into = await Patient.findByPk(family.patient.mergedIntoId, { attributes: ['uhid'] });
+      throw new MailError('MERGED', `That report's file was merged into ${into ? into.uhid : 'another file'}. Open that one and try again.`, 409);
+    }
+    if ((family.patient.status || '').toLowerCase() === 'inactive') {
+      throw new MailError('INACTIVE', 'This patient profile is inactive. Documents cannot be filed to it.', 403);
+    }
+    out.push({ family, file, title: cleanReportTitle(r.title) });
+  }
+  return out;
+};
+
+/** After the email has gone: file each copy. → { idsByPatient: Map(canonicalId → [docIds]), filedNames, failed } */
+const saveReportCopies = async (user, checked, { recipients = 0 } = {}) => {
+  const idsByPatient = new Map();
+  const filedNames = [];
+  let failed = 0;
+  for (const { family, file, title } of checked) {
+    const filename = `${crypto.randomBytes(16).toString('hex')}.pdf`;
+    try {
+      if (!fs.existsSync(DOCUMENTS_DIR)) fs.mkdirSync(DOCUMENTS_DIR, { recursive: true });
+      fs.writeFileSync(path.join(DOCUMENTS_DIR, filename), file.buffer);
+      const doc = await createMedicalDocument({
+        patient: family.patient,
+        actingUser: user,
+        file: { originalName: String(file.originalname).replace(/[\r\n"\\/]/g, '_').slice(0, 250), filename, size: file.buffer.length },
+        documentCategory: REPORT_CATEGORY,
+        testDate: clinicToday(),
+        notes: `${title} — emailed from the HMS to ${recipients} recipient${recipients === 1 ? '' : 's'}. This is the exact copy that was sent.`,
+        status: 'Reviewed',
+      });
+      const id = family.patient.id;
+      idsByPatient.set(id, [...(idsByPatient.get(id) || []), doc.id]);
+      filedNames.push(file.originalname);
+    } catch (err) {
+      failed += 1;
+      fs.promises.unlink(path.join(DOCUMENTS_DIR, filename)).catch(() => {});
+      console.error('[Mail] report copy not saved:', err.code || err.name || err.message);
+    }
+  }
+  return { idsByPatient, filedNames, failed };
+};
+
 // ---- 3. save an attachment to a patient file -------------------------------
 
 const MAGIC = [
@@ -661,6 +788,9 @@ module.exports = {
   loadPatientDocuments,
   logPatientDocumentsSent,
   saveAttachmentToPatient,
+  checkReportCopies,
+  saveReportCopies,
+  REPORT_CATEGORY,
   verifyPatientRecipients,
   logPatientEmailed,
   patientContact,

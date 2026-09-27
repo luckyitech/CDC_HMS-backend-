@@ -65,15 +65,28 @@ router.delete('/account', authenticate, authorize(...MAIL), mail.disconnectAccou
 router.get('/unread', authenticate, authorize(...MAIL), mail.unread);
 router.get('/folders', authenticate, authorize(...MAIL), mail.folders);
 router.get('/messages', authenticate, authorize(...MAIL), mail.messages);
+// Either a page's `uids`, or `all` = { uidMax, uidValidity, q } — "select all
+// N in this folder" (debt pass): the server re-finds them, never mail that arrived later.
+const validAll = (all) => {
+  const ok = all && typeof all === 'object' && !Array.isArray(all)
+    && Number.isInteger(Number(all.uidMax)) && Number(all.uidMax) > 0
+    && (all.uidValidity == null || (typeof all.uidValidity === 'string' && all.uidValidity.length <= 40))
+    && (all.q == null || (typeof all.q === 'string' && all.q.length <= 200));
+  if (!ok) throw new Error('Reload the list and select again');
+  return true;
+};
+const allChecks = [body('all').optional().custom(validAll)];
 router.post('/messages/seen', authenticate, authorize(...MAIL), [
-  body('uids').isArray({ min: 1, max: 500 }).withMessage('Pick at least one message'),
+  ...allChecks,
+  body('uids').if(body('all').not().exists()).isArray({ min: 1, max: 500 }).withMessage('Pick at least one message'),
   body('seen').optional().isBoolean().toBoolean(),
   validate,
 ], mail.markSeen);
 // Phase 3b — organise (move / archive / trash / restore / flag): five literal
 // paths (Express 5 has no inline regex params), one handler.
 const organiseChecks = [
-  body('uids').isArray({ min: 1, max: 500 }).withMessage('Pick at least one message'),
+  ...allChecks,
+  body('uids').if(body('all').not().exists()).isArray({ min: 1, max: 500 }).withMessage('Pick at least one message'),
   body('folder').optional().isString().isLength({ min: 1, max: 300 }),
   body('to').optional().isString().isLength({ min: 1, max: 300 }),
   body('flagged').optional().isBoolean().toBoolean(),
@@ -86,6 +99,12 @@ router.post('/messages/archive', authenticate, authorize(...MAIL), asAction('arc
 router.post('/messages/trash', authenticate, authorize(...MAIL), asAction('trash'), organiseChecks, mail.organiseMessages);
 router.post('/messages/restore', authenticate, authorize(...MAIL), asAction('restore'), organiseChecks, mail.organiseMessages);
 router.post('/messages/flag', authenticate, authorize(...MAIL), asAction('flag'), organiseChecks, mail.organiseMessages);
+// Folders (debt pass): the caller's own folders only — create, rename, delete-if-empty.
+const folderNameCheck = body('name').isString().isLength({ min: 1, max: 60 }).withMessage('Give the folder a name');
+const folderPathCheck = body('path').isString().isLength({ min: 1, max: 300 }).withMessage('Pick one of your folders');
+router.post('/folders', authenticate, authorize(...MAIL), [folderNameCheck, validate], mail.createFolder);
+router.post('/folders/rename', authenticate, authorize(...MAIL), [folderPathCheck, folderNameCheck, validate], mail.renameFolder);
+router.post('/folders/delete', authenticate, authorize(...MAIL), [folderPathCheck, validate], mail.deleteFolder);
 router.get('/trash', authenticate, authorize(...MAIL), mail.trashInfo);
 router.post('/trash/empty', authenticate, authorize(...MAIL), emptyTrashLimiter, [
   body('confirm').isString().withMessage('Type EMPTY to confirm'),

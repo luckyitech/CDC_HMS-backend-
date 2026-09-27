@@ -32,6 +32,7 @@ const DOCUMENT_CATEGORIES = [
   'Neuropathy Screening Test',
   'Specialist Consultation Report',
   'Patient File',
+  'Sent Correspondence',   // a copy of an HMS report as it was emailed (Staff Email)
   'Other Medical Document',
 ];
 

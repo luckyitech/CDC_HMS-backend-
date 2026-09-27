@@ -6,7 +6,7 @@ const accounts = require('./mailAccounts');
 const { resolvePatient } = require('../utils/patientFamily');
 const { gateResult } = require('../constants/permissions');
 const { parseIdList, htmlToText, domainOf } = require('../utils/mailCompose');
-const { walkParts } = require('../utils/mailRender');
+const { walkParts, displaySubject } = require('../utils/mailRender');
 
 const { MailError } = session;
 const { PatientEmailMessage, StaffMailTraffic, MedicalDocument, User, Patient } = db;
@@ -430,7 +430,7 @@ const patientThreads = async (family, { from, to, viewer = null } = {}) => {
   const threads = new Map();
   for (const r of rows) {
     const t = threads.get(r.threadKey) || { key: r.threadKey, subject: null, messages: [] };
-    if (!t.subject && r.subject) t.subject = r.subject.replace(/^((re|fw|fwd|aw|sv)\s*:\s*)+/i, '').trim();
+    if (!t.subject && r.subject) t.subject = displaySubject(r.subject).replace(/^((re|fw|fwd|aw|sv)\s*:\s*)+/i, '').trim();
     t.messages.push({
       id: r.id,
       direction: r.direction,
@@ -439,7 +439,7 @@ const patientThreads = async (family, { from, to, viewer = null } = {}) => {
       from: { name: r.fromName, address: r.fromAddress },
       to: parse(r.toList),
       cc: parse(r.ccList),
-      subject: r.subject,
+      subject: displaySubject(r.subject),
       text: r.bodyText || '',
       staff: r.mailboxUser ? { id: r.mailboxUser.id, name: fullName(r.mailboxUser), role: r.mailboxUser.role } : null,
       linkedBy: r.linkedBy ? { id: r.linkedBy.id, name: fullName(r.linkedBy) } : null,

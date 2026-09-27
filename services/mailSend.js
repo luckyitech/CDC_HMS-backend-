@@ -132,6 +132,12 @@ const gatherAttachments = async (userId, refs, files) => {
   return out;
 };
 
+/** Remove each filed name ONCE (two uploads may share a name). */
+const dropFiled = (names, filed) => {
+  const left = [...filed];
+  return names.filter((n) => { const i = left.indexOf(n); if (i >= 0) { left.splice(i, 1); return false; } return true; });
+};
+
 /** Mail attachments + documents from a patient file, held to the same 25 MB / 20-file caps. */
 const withPatientDocuments = (attachments, docs) => {
   const all = [...attachments, ...docs];
@@ -256,6 +262,9 @@ const send = async (userId, payload = {}, files = [], { senderName, user } = {})
   // Patient documents are checked (permission, not archived, file present)
   // BEFORE anything leaves — a refusal here reaches no SMTP server.
   const fromFile = await patientDocs.loadPatientDocuments(user || { id: userId }, payload.patientDocuments);
+  // HMS reports (debt pass): each is an upload that will ALSO be filed on the
+  // patient as Sent Correspondence once the email has gone — checked now.
+  const reportCopies = await patientDocs.checkReportCopies(user || { id: userId }, payload.hmsReports, files);
   const mailAttachments = await gatherAttachments(userId, payload.attachments, files);
   const attachments = withPatientDocuments(mailAttachments, fromFile.attachments);
   // Phase 4: the recipients picked AS a patient, confirmed against the
@@ -314,6 +323,19 @@ const send = async (userId, payload = {}, files = [], { senderName, user } = {})
     userId, actorId: userId, event: 'sent', emailAddress: row.emailAddress,
     detail: JSON.stringify({ recipients: summary.count, domains: summary.domains, attachments: attachments.length }),
   });
+  // The copies of emailed HMS reports go on the file first, so the rows below
+  // list them with the file's other documents (and the trail opens them).
+  let reportCopiesFailed = 0;
+  let filedReportNames = [];
+  if (reportCopies.length) {
+    const saved = await patientDocs.saveReportCopies(user || { id: userId }, reportCopies, { recipients: summary.count });
+    reportCopiesFailed = saved.failed;
+    filedReportNames = saved.filedNames;
+    for (const [pid, ids] of saved.idsByPatient) {
+      fromFile.idsByPatient.set(pid, [...(fromFile.idsByPatient.get(pid) || []), ...ids]);
+      fromFile.byPatient.set(pid, (fromFile.byPatient.get(pid) || 0) + ids.length);
+    }
+  }
   // A patient who was emailed gets ONE row (patient_emailed, listing the file's
   // documents that went with it); documents of any other patient — sent to a
   // colleague, an insurer — keep the phase 3a patient_docs_sent row.
@@ -330,7 +352,9 @@ const send = async (userId, payload = {}, files = [], { senderName, user } = {})
   const threadPatients = await threads.afterHmsSend({
     user: user || { id: userId }, mailbox: row, messageId, rcpt, subject, html: String(payload.html || ''), date,
     inReplyTo, references, patientRcpts, linkPatients, idsByPatient: fromFile.idsByPatient,
-    attachmentNames: mailAttachments.map((a) => a.filename),
+    // A filed report is already on the thread as a Document (idsByPatient) —
+    // listing its name too would prompt "save to Documents" for it again.
+    attachmentNames: dropFiled(mailAttachments.map((a) => a.filename), filedReportNames),
   });
   session.forgetRecent(userId);
 
@@ -358,6 +382,8 @@ const send = async (userId, payload = {}, files = [], { senderName, user } = {})
     sentCopy: sentCopy.ok,
     sentCopyReason: sentCopy.ok ? null : sentCopy.reason,
     draftKept,
+    reportCopies: reportCopies.length - reportCopiesFailed,
+    reportCopiesFailed,
   };
 };
 
@@ -387,7 +413,11 @@ const saveDraft = async (userId, payload = {}, files = [], { senderName, user } 
   const rcpt = recipientsFrom(payload, false);
   const { inReplyTo, references } = threadFrom(payload);
   const fromFile = await patientDocs.loadPatientDocuments(user || { id: userId }, payload.patientDocuments, { withContent: false });
-  const attachments = await gatherAttachments(userId, payload.attachments, files);
+  // HMS report PDFs are never parked in one.com's Drafts (like documents from
+  // a patient file, which drafts carry by reference): they are sent or dropped.
+  const reportNames = new Set((Array.isArray(payload.hmsReports) ? payload.hmsReports : []).map((r) => String((r && r.filename) || '')));
+  const draftFiles = (files || []).filter((f) => !reportNames.has(f.originalname));
+  const attachments = await gatherAttachments(userId, payload.attachments, draftFiles);
   const patientRcpts = await patientDocs.verifyPatientRecipients(user || { id: userId }, payload.patientRecipients, rcpt);
   const linkPatients = await threads.verifyLinkPatients(user || { id: userId }, payload.linkPatients);
   const messageId = newMessageId(row.emailAddress);
