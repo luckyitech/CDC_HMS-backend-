@@ -90,6 +90,7 @@ app.use('/api/users',              require('./routes/users'));
 app.use('/api/staff',              require('./routes/staff'));
 app.use('/api/permission-presets', require('./routes/permissionPresets'));
 app.use('/api/hr',                 require('./routes/hr'));
+app.use('/api/leave',              require('./routes/leave'));   // Leave (B27)
 app.use('/api/documents',          require('./routes/documents'));
 app.use('/api/lab-inbox',          require('./routes/labInbox'));
 app.use('/api/comms',              require('./routes/comms'));

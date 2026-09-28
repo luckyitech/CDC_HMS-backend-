@@ -14,6 +14,7 @@ const { resolveExpected, datesOfMonth, previousMonth } = require('../utils/workH
 const { monthSummary, streakNoRed, clinicHHMM } = require('../utils/attendanceRules');
 const { parseJsonColumn } = require('../utils/jsonColumn');
 const { STAFF_ROLES } = require('../constants/staffRoles');
+const { holidayMap } = require('./leaveService');
 
 const { StaffAttendance, StaffWorkHours, StaffLeave, User, StaffProfile, HrNfcTag, UserDevice, UserEditLog } = db;
 
@@ -21,10 +22,15 @@ const { StaffAttendance, StaffWorkHours, StaffLeave, User, StaffProfile, HrNfcTa
 const workHoursRowsFor = async (userId) =>
   (await StaffWorkHours.findAll({ where: { UserId: userId, status: 'active' } })).map((r) => r.get({ plain: true }));
 
-/** Expected hours for one person on one clinic date. */
+/**
+ * Expected hours for one person on one clinic date. A public holiday means
+ * nobody is expected in (B27 phase 1) unless HR set hours for that very date.
+ */
 const expectedFor = async (userId, clinicDate, cfg, rows) => {
-  const list = rows || await workHoursRowsFor(userId);
-  return resolveExpected({ rows: list, clinicDate, defaults: cfg.hoursDefault, graceDefault: cfg.graceMinutes });
+  const [list, holidays] = await Promise.all([rows || workHoursRowsFor(userId), holidayMap()]);
+  return resolveExpected({
+    rows: list, clinicDate, defaults: cfg.hoursDefault, graceDefault: cfg.graceMinutes, holiday: holidays.get(clinicDate) || null,
+  });
 };
 
 /** The clinic dates (Set) in [from, to] the person is on APPROVED leave. */
@@ -48,13 +54,20 @@ const leaveDatesFor = async (userId, from, to) => {
   return set;
 };
 
-/** One entry per calendar date of a month, with expected hours and leave. */
+/** One entry per calendar date of a month, with expected hours, leave and holidays. */
 const daysForMonth = async (userId, month, cfg, rows, leaveSet) => {
   const dates = datesOfMonth(month);
-  const leave = leaveSet || await leaveDatesFor(userId, dates[0], dates[dates.length - 1]);
+  const [leave, holidays] = await Promise.all([
+    leaveSet || leaveDatesFor(userId, dates[0], dates[dates.length - 1]),
+    holidayMap(),
+  ]);
   return dates.map((date) => {
-    const exp = resolveExpected({ rows, clinicDate: date, defaults: cfg.hoursDefault, graceDefault: cfg.graceMinutes });
-    return { date, expectedStart: exp.start, expectedEnd: exp.end, onLeave: leave.has(date) };
+    const holiday = holidays.get(date) || null;
+    const exp = resolveExpected({ rows, clinicDate: date, defaults: cfg.hoursDefault, graceDefault: cfg.graceMinutes, holiday });
+    return {
+      date, expectedStart: exp.start, expectedEnd: exp.end, onLeave: leave.has(date),
+      holiday: exp.source === 'holiday' ? holiday : null,
+    };
   });
 };
 

@@ -23,7 +23,6 @@ const { Op } = require('sequelize');
 const { success, error } = require('../utils/response');
 const { datesInRange, rangesOverlap } = require('../utils/leaveCalc');
 const { STATUS, OPEN_STATUSES, TAKEN_STATUSES } = require('../utils/leaveWorkflow');
-const { entitlementFor } = require('../utils/leaveBalance');
 const { PERMISSIONS, passesAdminGate } = require('../constants/permissions');
 const { clinicToday } = require('../utils/clinicTime');
 const { parseJsonColumn } = require('../utils/jsonColumn');
@@ -419,57 +418,7 @@ const setBalances = async (req, res) => {
     const bad = balances.find((b) => !known.has(b.leaveType));
     if (bad) return error(res, `Unknown leave type: ${bad.leaveType}`, 400);
 
-    const policy = await leaveService.loadPolicy(year);
-    const profile = policy
-      ? await StaffProfile.findOne({ where: { UserId: userId }, attributes: ['startDate', 'endDate'] })
-      : null;
-    // "Equal to the policy" means equal to what the policy gives THIS person —
-    // after pro-rata — which is the figure the staff file shows. Comparing
-    // with the headline number would freeze a joiner's pro-rated figure the
-    // first time anyone pressed Save.
-    const followsPolicy = (key, value) => {
-      const pt = policy?.types?.[key];
-      if (!pt) return false;
-      const e = entitlementFor({
-        policyType: pt, year, proRate: policy.proRate,
-        employment: { startDate: profile?.startDate || null, endDate: profile?.endDate || null },
-      });
-      return !e.unlimited && e.entitled !== null && Number(value) === e.entitled;
-    };
-    const toValue = (value, key, { checkPolicy }) => {
-      if (value === undefined) return undefined;
-      if (value === null || value === '') return null;
-      if (checkPolicy && followsPolicy(key, value)) return null;
-      return Number(value);
-    };
-
-    await sequelize.transaction(async (t) => {
-      for (const entry of balances) {
-        const entitled = toValue(entry.entitled, entry.leaveType, { checkPolicy: true });
-        const carriedOver = toValue(entry.carriedOver, entry.leaveType, { checkPolicy: false });
-
-        const row = await LeaveBalance.findOne({ where: { UserId: userId, year, leaveType: entry.leaveType }, transaction: t });
-        if (!row) {
-          // No policy published: the pre-B27 screen saves 0 for every type it
-          // shows, which is what "nothing set" meant then — don't store it.
-          const meaningless = (entitled == null || (!policy && entitled === 0))
-            && (carriedOver == null || carriedOver === 0);
-          if (meaningless) continue;
-          await LeaveBalance.create({
-            UserId: userId, year, leaveType: entry.leaveType,
-            entitled: entitled ?? null, carriedOver: carriedOver ?? null,
-            reason, createdBy: req.user.id,
-          }, { transaction: t });
-        } else {
-          await row.update({
-            entitled:    entitled === undefined ? row.entitled : entitled,
-            carriedOver: carriedOver === undefined ? row.carriedOver : carriedOver,
-            reason,
-            updatedBy:   req.user.id,
-          }, { transaction: t });
-        }
-      }
-    });
+    await leaveService.saveOverrides({ userId, year, balances, reason, actorId: req.user.id, policyMode: 'published' });
 
     const saved = await LeaveBalance.findAll({ where: { UserId: userId, year } });
     return success(res, saved.map((b) => ({

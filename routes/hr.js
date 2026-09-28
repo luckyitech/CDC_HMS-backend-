@@ -26,6 +26,9 @@ const CHECKIN = ['doctor', 'staff', 'lab', 'nurse', 'admin', 'hr.checkin'];
 const VIEW    = ['admin', 'hr.view'];
 const WRITE   = ['admin', 'hr.write'];
 const SETTINGS = ['admin', 'hr.settings'];
+// Reading the settings: whoever sees attendance, and whoever may change them
+// (B27 phase 1 — the Leave settings Alerts tab is hr.settings without hr.view).
+const SETTINGS_READ = ['admin', 'hr.view', 'hr.settings'];
 
 // A tap is one request per person per event; 60 a minute per IP is generous
 // for a whole clinic behind one NAT, and caps a scripted flood.
@@ -90,7 +93,7 @@ router.patch('/tags/:id',     authenticate, authorize(...WRITE), [param('id').is
 router.post('/tags/:id/test', authenticate, authorize(...WRITE), [param('id').isInt(), body('url').isString().notEmpty(), validate], hrTags.test);
 
 // ---- Settings ----------------------------------------------------------------
-router.get('/settings', authenticate, authorize(...VIEW),   hrSettings.get);
+router.get('/settings', authenticate, authorize(...SETTINGS_READ), hrSettings.get);
 router.put('/settings', authenticate, authorize(...SETTINGS), [
   body('autoCheckin').optional().isBoolean().toBoolean(),
   body('confirmCheckout').optional().isBoolean().toBoolean(),

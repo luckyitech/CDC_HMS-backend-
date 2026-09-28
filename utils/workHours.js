@@ -69,10 +69,16 @@ const covers = (row, clinicDate) =>
  * @param {string} p.clinicDate  'YYYY-MM-DD'
  * @param {object|string} p.defaults  the clinic default (raw JSON string or parsed)
  * @param {number} p.graceDefault  clinic-wide grace minutes
+ * @param {string|null} [p.holiday]  the public holiday's name when clinicDate is one (B27)
  * @returns {{ startAt:Date|null, endAt:Date|null, start:string|null, end:string|null,
- *             grace:number, source:'date'|'weekday'|'default'|'off'|null }}
+ *             grace:number, source:'date'|'weekday'|'default'|'off'|'holiday'|null,
+ *             holiday?:string }}
+ *
+ * Precedence: a DATED row HR set for that very day (e.g. someone rostered on a
+ * holiday) → a public holiday (nobody is expected in; B27 phase 1) → the
+ * person's weekly row → the clinic default.
  */
-const resolveExpected = ({ rows = [], clinicDate, defaults, graceDefault = 0 }) => {
+const resolveExpected = ({ rows = [], clinicDate, defaults, graceDefault = 0, holiday = null }) => {
   const wd = weekdayOf(clinicDate);
   const active = rows.filter((r) => r && r.status !== 'retired');
   const dated = active.find((r) => r.date && String(r.date) === clinicDate);
@@ -85,6 +91,7 @@ const resolveExpected = ({ rows = [], clinicDate, defaults, graceDefault = 0 }) 
   const source = dated ? 'date' : (weekly ? 'weekday' : (def ? 'default' : null));
   const grace = row && row.graceMinutes != null ? Number(row.graceMinutes) : graceDefault;
 
+  if (holiday && !dated) return { ...none('holiday'), grace, holiday };
   if (row && row.isOff) return { ...none('off'), grace };
 
   let start = row ? toHHMM(row.startTime) : null;

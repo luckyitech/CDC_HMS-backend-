@@ -150,6 +150,9 @@ const sessionsByDay = (rows) => {
  */
 const dayCell = (day, sessions, today) => {
   const cell = { date: day.date, in: null, out: null, leave: !!day.onLeave, off: !day.expectedStart && !day.onLeave, future: day.date > today, absent: false };
+  // A public holiday nobody was rostered for (B27): no stars expected, never
+  // absent; the calendar shows "H". Someone who comes in still earns stars.
+  if (day.holiday) cell.holiday = day.holiday;
   if (cell.future) { cell.off = false; return cell; }
   if (cell.leave) return cell;
   if (!sessions || !sessions.length) {

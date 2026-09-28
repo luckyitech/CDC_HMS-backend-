@@ -630,9 +630,9 @@ const PERMISSION_GROUPS = [
   {
     key: 'hr',
     name: 'HR Suite',
-    description: 'Staff time & attendance, leave and HR settings. Everyone can check in, see '
-      + 'their own record and apply for their own leave; these decide who can see, approve '
-      + 'and change everyone else\'s.',
+    description: 'Staff time & attendance, leave, HR settings and confidential staff documents. '
+      + 'Everyone can check in, see their own record and apply for their own leave; these decide '
+      + 'who can see, approve and change everyone else\'s.',
     areas: [
       { key: 'hr-checkin', name: 'Check in and out', appliesIn: 'HR Suite, entrance tag',
         description: 'Tapping the entrance tag, remembering a phone, and seeing their own '
@@ -672,6 +672,16 @@ const PERMISSION_GROUPS = [
         roleDefault: 'Administrators',
         warning: 'Entrance tag keys are secrets: someone holding a key can make a tag that '
           + 'checks anyone in. Grant this only to whoever runs the HR Suite.' },
+      { key: 'users-confidential', name: 'Confidential staff documents', appliesIn: 'HR Suite, staff files',
+        description: 'Contracts, appraisals, disciplinary letters — anything on a staff file '
+          + 'marked "Admin only", and the archived files. Not part of full administrator '
+          + 'access: an administrator can manage the file without reading what is in the '
+          + 'confidential drawer.',
+        access: PERMISSIONS.HR_CONFIDENTIAL, accessLabel: 'Can see and classify confidential staff documents',
+        roleDefault: 'Nobody by role — must be granted',
+        warning: 'This person will be able to read every confidential document on every '
+          + 'staff file, and to mark documents confidential or share them with the staff '
+          + 'member. Full administrator access does not include this.' },
     ],
   },
   {
@@ -719,16 +729,6 @@ const PERMISSION_GROUPS = [
         access: PERMISSIONS.USERS_VIEW, write: PERMISSIONS.USERS_WRITE,
         accessLabel: 'Can view users', writeLabel: 'Can create and edit users',
         roleDefault: 'Administrators' },
-      { key: 'users-confidential', name: 'Confidential staff documents', appliesIn: 'Admin, HR Suite',
-        description: 'Contracts, appraisals, disciplinary letters — anything on a staff file '
-          + 'marked "Admin only", and the archived files. Not part of full administrator '
-          + 'access: an administrator can manage the file without reading what is in the '
-          + 'confidential drawer.',
-        access: PERMISSIONS.HR_CONFIDENTIAL, accessLabel: 'Can see and classify confidential staff documents',
-        roleDefault: 'Nobody by role — must be granted',
-        warning: 'This person will be able to read every confidential document on every '
-          + 'staff file, and to mark documents confidential or share them with the staff '
-          + 'member. Full administrator access does not include this.' },
       { key: 'config', name: 'Catalog, wards and settings', appliesIn: 'Admin',
         access: null, write: PERMISSIONS.CONFIG_WRITE,
         writeLabel: 'Can change clinical catalog, wards and system settings',

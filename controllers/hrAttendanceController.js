@@ -26,6 +26,7 @@ const { buildTapMessages, titleFor } = require('../utils/tapMessages');
 const { buildChanges } = require('../utils/auditChanges');
 const { parseJsonColumn } = require('../utils/jsonColumn');
 const { canViewHr } = require('../utils/hrAccess');
+const leaveService = require('../services/leaveService');
 const svc = require('../services/hrAttendanceService');
 
 const { sequelize, StaffAttendance, HrNfcTag, User, StaffProfile, StaffLeave, StaffWorkHours } = db;
@@ -226,7 +227,7 @@ const mine = async (req, res) => {
     return success(res, {
       from, to,
       rows: rows.map(svc.serializeSession),
-      today: { clinicDate: today, expected: { start: expected.start, end: expected.end, grace: expected.grace, source: expected.source }, open: open ? svc.serializeSession(open) : null },
+      today: { clinicDate: today, expected: { start: expected.start, end: expected.end, grace: expected.grace, source: expected.source, holiday: expected.holiday || null }, open: open ? svc.serializeSession(open) : null },
     });
   } catch (err) {
     console.error('StaffAttendance.mine error:', err);
@@ -294,7 +295,7 @@ const today = async (req, res) => {
       people.push({
         person: svc.personOf(u),
         state, lateMinutes, flagged,
-        expected: { start: expected.start, end: expected.end },
+        expected: { start: expected.start, end: expected.end, source: expected.source },
         session: (open || last) ? svc.serializeSession(open || last) : null,
         lateIn: lateIn ? first.lateMinutes : 0,
         refusedCount: refused.length,
@@ -307,7 +308,9 @@ const today = async (req, res) => {
       ...todayRows.filter((r) => r.status === 'refused').map((r) => ({ kind: 'refused', session: svc.serializeSession(r) })),
     ];
 
-    return success(res, { clinicDate, now: now.toISOString(), counts, people, attention });
+    // A public holiday (B27): nobody is "not yet in" unless HR rostered them.
+    const holiday = await leaveService.holidayOn(clinicDate);
+    return success(res, { clinicDate, now: now.toISOString(), holiday, counts, people, attention });
   } catch (err) {
     console.error('StaffAttendance.today error:', err);
     return error(res, 'Failed to load today', 500);

@@ -14,9 +14,10 @@
 
 const { Op } = require('sequelize');
 const db = require('../models');
+const sequelize = require('../config/database');
 const { parseJsonColumn } = require('../utils/jsonColumn');
 const { countLeave, countLeaveDays, DEFAULT_WEEK_WEIGHTS } = require('../utils/leaveCalc');
-const { summarise, carriedIn } = require('../utils/leaveBalance');
+const { summarise, carriedIn, entitlementFor } = require('../utils/leaveBalance');
 const { TAKEN_STATUSES, BOOKED_STATUSES } = require('../utils/leaveWorkflow');
 
 const {
@@ -98,6 +99,40 @@ const loadHolidays = async (from, to) => {
   return rows.map((h) => ({ date: String(h.date).slice(0, 10), name: h.name }));
 };
 
+// Every active holiday as a Map date → name, cached briefly. Attendance asks
+// for a day at a time (every tap, every person on the "today" board), and the
+// list is a couple of dozen rows a year. HR's edits clear it at once.
+const HOLIDAY_CACHE_MS = 60 * 1000;
+let holidayCache = { map: null, at: 0 };
+const clearHolidayCache = () => { holidayCache = { map: null, at: 0 }; };
+const holidayMap = async () => {
+  if (holidayCache.map && Date.now() - holidayCache.at < HOLIDAY_CACHE_MS) return holidayCache.map;
+  const rows = await PublicHoliday.findAll({ where: { status: 'active' }, attributes: ['date', 'name'] });
+  const map = new Map(rows.map((h) => [String(h.date).slice(0, 10), h.name]));
+  holidayCache = { map, at: Date.now() };
+  return map;
+};
+/** The holiday's name on this clinic date, or null. */
+const holidayOn = async (date) => (await holidayMap()).get(String(date).slice(0, 10)) || null;
+
+/**
+ * The person's own week for a year (D3), or null. Saved on each of their
+ * override rows for the year (saveOverrides writes it to every type), so the
+ * row for the type being charged is read first and any other row of the same
+ * year is the fallback — e.g. a type HR added after the week was set.
+ */
+const personWeekFor = async (userId, year, leaveType) => {
+  const rows = await LeaveBalance.findAll({ where: { UserId: userId, year }, attributes: ['leaveType', 'weekOverride'] });
+  const own = rows.find((r) => r.leaveType === leaveType);
+  const ownWeek = parseJsonColumn(own?.weekOverride);
+  if (ownWeek) return ownWeek;
+  for (const r of rows) {
+    const w = parseJsonColumn(r.weekOverride);
+    if (w) return w;
+  }
+  return null;
+};
+
 /**
  * What a request costs.
  *
@@ -126,10 +161,7 @@ const costOf = async ({ userId, leaveType, start, end, startPart = 'full', endPa
     return { ok: false, error: 'HALF_DAYS_NOT_ALLOWED', total: 0 };
   }
 
-  const override = userId
-    ? await LeaveBalance.findOne({ where: { UserId: userId, year, leaveType }, attributes: ['weekOverride'] })
-    : null;
-  const personWeek = parseJsonColumn(override?.weekOverride);
+  const personWeek = userId ? await personWeekFor(userId, year, leaveType) : null;
 
   // Holidays for the range plus a little after, so the return date can skip one.
   const after = new Date(`${end}T00:00:00Z`);
@@ -179,10 +211,14 @@ const chargesFor = async (userId, year) => {
  * The balance picture for one person and year (utils/leaveBalance summarise),
  * with carry-in from last year's published policy when there is one.
  */
-const summaryFor = async (userId, year, asOf, { depth = 0 } = {}) => {
+const summaryFor = async (userId, year, asOf, { depth = 0, draft = false, policy: givenPolicy } = {}) => {
+  // `draft` (phase 1): the entitlement grid previews a year HR has not
+  // published yet with its draft policy. Everything else passes nothing and
+  // gets the published policy only. `policy` lets a caller that loops over
+  // every member of staff load the year's policy once.
   const [types, policy, overrideRows, charges, profile] = await Promise.all([
     listTypes({ includeRetired: true }),
-    loadPolicy(year),
+    givenPolicy !== undefined ? givenPolicy : loadPolicy(year, { publishedOnly: !draft }),
     LeaveBalance.findAll({ where: { UserId: userId, year } }),
     chargesFor(userId, year),
     StaffProfile.findOne({ where: { UserId: userId }, attributes: ['startDate', 'endDate'] }),
@@ -229,6 +265,100 @@ const summaryFor = async (userId, year, asOf, { depth = 0 } = {}) => {
   return { year, policy, summary };
 };
 
+/**
+ * Saves one person's entitlement overrides for a year (D1) — the one write
+ * path, used by the staff file's leave tab and HR's entitlement grid.
+ *
+ * Per type: `entitled` / `carriedOver` — undefined leaves the stored value,
+ * null or '' clears it (follow the policy). An `entitled` equal to what the
+ * policy gives THIS person (after pro-rata) is stored as "follow the policy",
+ * so a later policy change reaches them; comparing with the headline number
+ * would freeze a joiner's pro-rated figure the first time anyone pressed Save.
+ *
+ * `weekOverride` (D3): undefined leaves it; null clears it; a clean week
+ * (utils/leavePolicyRules cleanWeek) is written to the row of every active
+ * type, so costOf finds it whatever the leave is charged to.
+ *
+ * `policyMode`: 'published' (the staff file — before a year is published the
+ * old screen saves 0 for every type, which meant "nothing set" and is not
+ * stored) or 'any' (the grid, which previews a draft year).
+ *
+ * @returns {Promise<{ before: object[], after: object[] }>}  plain rows
+ */
+const saveOverrides = async ({ userId, year, balances = [], reason, actorId, weekOverride, policyMode = 'published' }) => {
+  const policy = await loadPolicy(year, { publishedOnly: policyMode === 'published' });
+  const profile = policy
+    ? await StaffProfile.findOne({ where: { UserId: userId }, attributes: ['startDate', 'endDate'] })
+    : null;
+  const followsPolicy = (key, value) => {
+    const pt = policy?.types?.[key];
+    if (!pt) return false;
+    const e = entitlementFor({
+      policyType: pt, year, proRate: policy.proRate,
+      employment: { startDate: profile?.startDate || null, endDate: profile?.endDate || null },
+    });
+    return !e.unlimited && e.entitled !== null && Number(value) === e.entitled;
+  };
+  const toValue = (value, key, { checkPolicy }) => {
+    if (value === undefined) return undefined;
+    if (value === null || value === '') return null;
+    if (checkPolicy && followsPolicy(key, value)) return null;
+    return Number(value);
+  };
+  const plainRow = (b) => ({
+    leaveType: b.leaveType, year: b.year, entitled: num(b.entitled), carriedOver: num(b.carriedOver),
+    reason: b.reason, weekOverride: parseJsonColumn(b.weekOverride),
+  });
+
+  const before = (await LeaveBalance.findAll({ where: { UserId: userId, year } })).map(plainRow);
+
+  await sequelize.transaction(async (t) => {
+    for (const entry of balances) {
+      const entitled = toValue(entry.entitled, entry.leaveType, { checkPolicy: true });
+      const carriedOver = toValue(entry.carriedOver, entry.leaveType, { checkPolicy: false });
+
+      const row = await LeaveBalance.findOne({ where: { UserId: userId, year, leaveType: entry.leaveType }, transaction: t });
+      if (!row) {
+        const meaningless = (entitled == null || (policyMode === 'published' && !policy && entitled === 0))
+          && (carriedOver == null || carriedOver === 0);
+        if (meaningless) continue;
+        await LeaveBalance.create({
+          UserId: userId, year, leaveType: entry.leaveType,
+          entitled: entitled ?? null, carriedOver: carriedOver ?? null,
+          reason, createdBy: actorId,
+        }, { transaction: t });
+      } else {
+        await row.update({
+          entitled:    entitled === undefined ? row.entitled : entitled,
+          carriedOver: carriedOver === undefined ? row.carriedOver : carriedOver,
+          reason,
+          updatedBy:   actorId,
+        }, { transaction: t });
+      }
+    }
+
+    if (weekOverride !== undefined) {
+      const keys = (await LeaveType.findAll({ where: { status: 'active' }, attributes: ['key'], transaction: t })).map((x) => x.key);
+      const existing = await LeaveBalance.findAll({ where: { UserId: userId, year }, transaction: t });
+      const have = new Set(existing.map((r) => r.leaveType));
+      for (const r of existing) {
+        await r.update({ weekOverride, reason, updatedBy: actorId }, { transaction: t });
+      }
+      if (weekOverride !== null) {
+        for (const key of keys.filter((k) => !have.has(k))) {
+          await LeaveBalance.create({
+            UserId: userId, year, leaveType: key, entitled: null, carriedOver: null,
+            weekOverride, reason, createdBy: actorId,
+          }, { transaction: t });
+        }
+      }
+    }
+  });
+
+  const after = (await LeaveBalance.findAll({ where: { UserId: userId, year } })).map(plainRow);
+  return { before, after };
+};
+
 /** Appends one entry to a request's timeline. Never updates or deletes. */
 const recordEvent = (leaveId, actorId, type, { note = null, data = null } = {}, transaction) =>
   LeaveEvent.create({ leaveId, actorId: actorId || null, type, note, data }, { transaction });
@@ -260,9 +390,14 @@ module.exports = {
   isActiveType,
   loadPolicy,
   loadHolidays,
+  holidayMap,
+  holidayOn,
+  clearHolidayCache,
   costOf,
   chargesFor,
   summaryFor,
+  saveOverrides,
+  personWeekFor,
   recordEvent,
   setCharges,
   releaseCharges,
