@@ -1,16 +1,17 @@
 const multer = require('multer');
 const path = require('path');
-const fs = require('fs');
 const crypto = require('crypto');
+const { ensureStaffDocumentDir } = require('../utils/staffDocumentStorage');
 
 // Staff HR documents. A separate multer instance and a separate directory from
 // middleware/upload.js, which handles patient medical documents — mixing staff
 // contracts into the patient document store would put them in patient listings
 // and under patient access rules.
-const uploadDir = path.join(__dirname, '..', 'uploads', 'staff-documents');
-if (!fs.existsSync(uploadDir)) {
-  fs.mkdirSync(uploadDir, { recursive: true });
-}
+//
+// private/staff-documents/ since B27 — never served statically (it used to be
+// uploads/staff-documents/, which anyone with the URL could read). See
+// utils/staffDocumentStorage.js.
+const uploadDir = ensureStaffDocumentDir();
 
 const storage = multer.diskStorage({
   destination: (req, file, cb) => cb(null, uploadDir),

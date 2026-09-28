@@ -18,7 +18,8 @@ const { isConfidential } = require('../controllers/staffDocumentController');
 // remaining `role === 'admin'` on the staff file refused a doctor holding
 // admin.access. These gates now answer the capability question instead:
 //   - adminOrSelf     → users.view (the gate on the directory it is opened from)
-//   - leave approval  → users.write, and never for one's own leave
+//   - leave approval  → leave.manage (or leave.approve when listed as an
+//                       approver) since B27; never for one's own leave
 //   - documents       → hr.confidential for the confidential drawer, an
 //                       explicit grant that admin.access does NOT carry
 // No database: everything here reads req.user / a fake staffUser.
@@ -100,8 +101,11 @@ describe('leave — nobody approves their own', () => {
   test('admin.access approves a colleague\'s leave', () => {
     assert.equal(canDecideLeaveFor(user('doctor', [PERMISSIONS.ADMIN_ACCESS]), colleague), true);
   });
-  test('users.write approves a colleague\'s leave', () => {
-    assert.equal(canDecideLeaveFor(user('staff', [PERMISSIONS.USERS_WRITE]), colleague), true);
+  test('leave.manage approves a colleague\'s leave (B27 — was users.write)', () => {
+    assert.equal(canDecideLeaveFor(user('staff', [PERMISSIONS.LEAVE_MANAGE]), colleague), true);
+  });
+  test('users.write no longer approves leave on its own (B27, D8)', () => {
+    assert.equal(canDecideLeaveFor(user('staff', [PERMISSIONS.USERS_WRITE]), colleague), false);
   });
   test('users.view alone does not approve', () => {
     assert.equal(canDecideLeaveFor(user('staff', [PERMISSIONS.USERS_VIEW]), colleague), false);

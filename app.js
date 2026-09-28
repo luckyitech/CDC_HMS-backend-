@@ -55,6 +55,12 @@ app.get('/api/health', (req, res) => {
   res.json({ success: true, message: 'CDC HMS API is running' });
 });
 
+// Staff HR documents are NEVER served statically (B27). They live in
+// private/staff-documents/ now; this refuses the old public path so a file the
+// move missed — or a bookmarked link — is not readable without a login. Read
+// them through GET /api/staff/:employeeId/documents/:id/file.
+app.use('/uploads/staff-documents', (req, res) => res.status(404).end());
+
 // Serve uploaded documents (static files)
 app.use('/uploads', express.static('uploads'));
 

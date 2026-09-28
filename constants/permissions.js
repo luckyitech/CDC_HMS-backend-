@@ -214,6 +214,27 @@ const PERMISSIONS = {
   HR_VIEW:    'hr.view',
   HR_WRITE:   'hr.write',
 
+  // --- HR Suite phase 2: leave (B27, decision D8 — every HR function its own
+  // capability so an HR manager or a supervisor can be given all or some).
+  // All default to the admin role and are covered by admin.access.
+  //   LEAVE_APPROVE  be a valid approver on someone's leave, and choose which
+  //                  balance(s) the days come off (D7). Nobody ever decides
+  //                  their own leave, whatever they hold.
+  //   LEAVE_MANAGE   see everyone's leave, record leave on someone's behalf
+  //                  (approved on the spot), cancel approved leave.
+  //   LEAVE_POLICY   the yearly leave policy, public holidays and each
+  //                  person's entitlement override. Implies LEAVE_MANAGE.
+  //   HR_SETTINGS    HR Suite settings: check-in rules, entrance tag keys and
+  //                  alert channels. Replaces config.write on those routes.
+  //                  Tag keys are SECRETS — don't put this in a preset lightly.
+  // hr.self, hr.profile.approve and hr.credentials (spec §4) arrive with the
+  // phases whose routes they gate: a capability that gates nothing is a toggle
+  // that lies (tests/permissionVocabulary.test.js).
+  LEAVE_APPROVE: 'leave.approve',
+  LEAVE_MANAGE:  'leave.manage',
+  LEAVE_POLICY:  'leave.policy',
+  HR_SETTINGS:   'hr.settings',
+
   // Confidential staff documents — a contract, an appraisal, a disciplinary
   // letter, anything on a staff file marked "Admin only", and the archived
   // files. Like PERMISSIONS_GRANT this is deliberately NOT covered by
@@ -257,6 +278,7 @@ const IMPLIED_BY = {
   [PERMISSIONS.APPOINTMENTS_WRITE]: PERMISSIONS.APPOINTMENTS_VIEW,
   [PERMISSIONS.CLINICAL_RECORD]:    PERMISSIONS.CLINICAL_VIEW,
   [PERMISSIONS.HR_WRITE]:           PERMISSIONS.HR_VIEW,
+  [PERMISSIONS.LEAVE_POLICY]:       PERMISSIONS.LEAVE_MANAGE,
 };
 
 // Which portals each role reaches without anything being granted.
@@ -399,11 +421,15 @@ const ADMIN_ACCESS_COVERS = [
   PERMISSIONS.HR_CHECKIN,
   PERMISSIONS.HR_VIEW,
   PERMISSIONS.HR_WRITE,
+  PERMISSIONS.HR_SETTINGS,
   PERMISSIONS.INPATIENT_ACCESS,
   PERMISSIONS.INPATIENT_WRITE,
   PERMISSIONS.LAB_VIEW,
   PERMISSIONS.LABINBOX_VIEW,
   PERMISSIONS.LABINBOX_WRITE,
+  PERMISSIONS.LEAVE_APPROVE,
+  PERMISSIONS.LEAVE_MANAGE,
+  PERMISSIONS.LEAVE_POLICY,
   PERMISSIONS.MONITORING_VIEW,
   PERMISSIONS.PATIENT_EMAIL_VIEW,
   PERMISSIONS.PATIENTS_MERGE,
@@ -604,8 +630,9 @@ const PERMISSION_GROUPS = [
   {
     key: 'hr',
     name: 'HR Suite',
-    description: 'Staff time & attendance. Everyone can check in and see their own record; '
-      + 'these decide who can see and amend everyone\'s.',
+    description: 'Staff time & attendance, leave and HR settings. Everyone can check in, see '
+      + 'their own record and apply for their own leave; these decide who can see, approve '
+      + 'and change everyone else\'s.',
     areas: [
       { key: 'hr-checkin', name: 'Check in and out', appliesIn: 'HR Suite, entrance tag',
         description: 'Tapping the entrance tag, remembering a phone, and seeing their own '
@@ -615,12 +642,36 @@ const PERMISSION_GROUPS = [
         roleDefault: 'Everyone' },
       { key: 'hr-attendance', name: 'Time & Attendance', appliesIn: 'HR Suite',
         description: 'Who is in, flagged taps, the register and amendments; working hours '
-          + 'and entrance tags. Tag keys and the check-in rules also need "Catalog, wards '
-          + 'and settings" below.',
+          + 'and entrance tags. Registering a new tag key and changing the check-in rules '
+          + 'also need "HR Suite settings" below.',
         access: PERMISSIONS.HR_VIEW, write: PERMISSIONS.HR_WRITE,
         accessLabel: 'Can see everyone\'s attendance',
         writeLabel: 'Can amend records, set working hours and manage tags',
         roleDefault: 'Administrators' },
+      { key: 'leave-approve', name: 'Approve leave', appliesIn: 'HR Suite',
+        description: 'Can be chosen as an approver on a colleague\'s leave request and decide it — '
+          + 'approve, decline or ask for more information — and choose which balance the days '
+          + 'come off. Nobody can approve their own leave.',
+        access: PERMISSIONS.LEAVE_APPROVE, accessLabel: 'Can approve leave and choose what it is charged to',
+        roleDefault: 'Administrators' },
+      { key: 'leave-manage', name: 'Manage everyone\'s leave', appliesIn: 'HR Suite, staff files',
+        description: 'See every staff member\'s leave — including the type and reason of sick '
+          + 'leave — record leave on someone\'s behalf (approved on the spot) and cancel '
+          + 'approved leave.',
+        access: PERMISSIONS.LEAVE_MANAGE, accessLabel: 'Can see, record and cancel everyone\'s leave',
+        roleDefault: 'Administrators' },
+      { key: 'leave-policy', name: 'Leave policy', appliesIn: 'HR Suite',
+        description: 'The yearly leave policy (days per type, how weekdays count, carry-over), '
+          + 'public holidays, and each person\'s entitlement. Includes managing everyone\'s leave.',
+        access: PERMISSIONS.LEAVE_POLICY, accessLabel: 'Can set the leave policy, holidays and entitlements',
+        roleDefault: 'Administrators' },
+      { key: 'hr-settings', name: 'HR Suite settings', appliesIn: 'HR Suite',
+        description: 'Check-in rules, registering entrance tag keys, and which alerts go out '
+          + 'by bell, email or WhatsApp.',
+        access: PERMISSIONS.HR_SETTINGS, accessLabel: 'Can change HR Suite settings and register tag keys',
+        roleDefault: 'Administrators',
+        warning: 'Entrance tag keys are secrets: someone holding a key can make a tag that '
+          + 'checks anyone in. Grant this only to whoever runs the HR Suite.' },
     ],
   },
   {

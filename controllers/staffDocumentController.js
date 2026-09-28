@@ -3,16 +3,14 @@
 // findStaff has already resolved :employeeId onto req.staffProfile and
 // req.staffUser. See STAFF_PROFILE_DESIGN.md.
 
-const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
 const { success, error } = require('../utils/response');
 const { canViewConfidential } = require('../constants/permissions');
+const { resolveStoredFile } = require('../utils/staffDocumentStorage');
 const db = require('../models');
 
 const { StaffDocument, User } = db;
-
-const UPLOAD_DIR = path.join(__dirname, '..', 'uploads', 'staff-documents');
 
 const CATEGORIES = [
   'Employment Contract', 'National ID', 'Practising Licence',
@@ -61,7 +59,8 @@ const formatDocument = (doc) => {
     visibility: doc.visibility,
     fileName:   doc.fileName,
     fileSize:   doc.fileSize,
-    fileUrl:    doc.fileUrl,
+    // No public URL since B27 — the file is read through the authenticated
+    // /documents/:id/file route only.
     notes:      doc.notes,
     uploadedBy: doc.uploader ? `${doc.uploader.firstName} ${doc.uploader.lastName}` : null,
     uploadedByRole: doc.uploadedByRole,
@@ -168,7 +167,7 @@ const upload = async (req, res) => {
       fileName:   req.file.originalname,
       filePath:   req.file.path,
       fileSize:   formatSize(req.file.size),
-      fileUrl:    `/uploads/staff-documents/${req.file.filename}`,
+      fileUrl:    null,   // private/ — no public URL (B27)
       uploadedById:   req.user.id,
       uploadedByRole: req.user.role,
       expiryDate: expiryDate || null,
@@ -328,14 +327,11 @@ const serveFile = async (req, res) => {
     if (!document) return error(res, 'Document not found', 404);
     if (!confidential && isConfidential(document)) return error(res, 'Access denied', 403);
 
-    // Resolve and confirm the file is inside the upload directory before
-    // reading it, so a tampered filePath cannot be used to read other files.
-    const resolved = path.resolve(document.filePath);
-    if (!resolved.startsWith(path.resolve(UPLOAD_DIR))) {
-      console.error('Staff document path outside upload dir:', document.id);
-      return error(res, 'Document unavailable', 404);
-    }
-    if (!fs.existsSync(resolved)) return error(res, 'File is missing from the server', 404);
+    // Only the stored file NAME is trusted, joined onto the private folder
+    // (or the legacy one, for a file the B27 move missed) — so a tampered
+    // filePath cannot be used to read other files.
+    const resolved = resolveStoredFile(document.filePath);
+    if (!resolved) return error(res, 'File is missing from the server', 404);
 
     return res.download(resolved, document.fileName);
   } catch (err) {

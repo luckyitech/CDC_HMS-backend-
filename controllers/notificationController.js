@@ -12,6 +12,22 @@ const NOTIFY_ALL_DOCTORS = process.env.NOTIFY_ALL_DOCTORS === 'true';
 // Unread notifications are always shown regardless of age.
 const READ_EXPIRY_DAYS = 7;
 
+// Which rows this user's bell may see or change.
+//
+// Document notifications keep their old rule: with NOTIFY_ALL_DOCTORS every
+// DOCTOR sees every patient-document row. Everything else (B27: HR alerts —
+// leave to approve, a decision, an expiry) is only ever for its own
+// recipient, whatever the flag says: a leave request naming a colleague's
+// sick leave must never reach every doctor's bell. Rows written before B27
+// have category 'document' (migration 20260928000004's default).
+const bellScope = (user) => {
+  const own = { assignedDoctorId: user.id };
+  if (NOTIFY_ALL_DOCTORS && user.role === 'doctor') {
+    return { [Op.or]: [{ category: 'document' }, own] };
+  }
+  return own;
+};
+
 /**
  * GET /api/notifications
  * Returns notifications for the logged-in doctor.
@@ -24,14 +40,13 @@ const getAll = async (req, res) => {
     const cutoff = new Date();
     cutoff.setDate(cutoff.getDate() - READ_EXPIRY_DAYS);
 
-    const baseWhere = NOTIFY_ALL_DOCTORS ? {} : { assignedDoctorId: req.user.id };
+    const baseWhere = bellScope(req.user);
 
     // Show all unread OR read notifications created within the last READ_EXPIRY_DAYS days
     const where = {
-      ...baseWhere,
-      [Op.or]: [
-        { isRead: false },
-        { createdAt: { [Op.gte]: cutoff } },
+      [Op.and]: [
+        baseWhere,
+        { [Op.or]: [{ isRead: false }, { createdAt: { [Op.gte]: cutoff } }] },
       ],
     };
 
@@ -42,7 +57,7 @@ const getAll = async (req, res) => {
     });
 
     const unreadCount = await Notification.count({
-      where: { ...baseWhere, isRead: false },
+      where: { [Op.and]: [baseWhere, { isRead: false }] },
     });
 
     return success(res, { notifications, unreadCount });
@@ -58,8 +73,7 @@ const getAll = async (req, res) => {
  */
 const markAsRead = async (req, res) => {
   try {
-    const where = { id: req.params.id };
-    if (!NOTIFY_ALL_DOCTORS) where.assignedDoctorId = req.user.id;
+    const where = { [Op.and]: [{ id: req.params.id }, bellScope(req.user)] };
 
     const notification = await Notification.findOne({ where });
     if (!notification) return error(res, 'Notification not found', 404);
@@ -78,9 +92,7 @@ const markAsRead = async (req, res) => {
  */
 const markAllAsRead = async (req, res) => {
   try {
-    const where = NOTIFY_ALL_DOCTORS
-      ? { isRead: false }
-      : { assignedDoctorId: req.user.id, isRead: false };
+    const where = { [Op.and]: [bellScope(req.user), { isRead: false }] };
 
     await Notification.update({ isRead: true }, { where });
     return success(res, { marked: true });
@@ -90,4 +102,4 @@ const markAllAsRead = async (req, res) => {
   }
 };
 
-module.exports = { getAll, markAsRead, markAllAsRead };
+module.exports = { getAll, markAsRead, markAllAsRead, bellScope };

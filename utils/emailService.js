@@ -571,7 +571,29 @@ const sendPasswordRotationNoticeEmail = async ({
 // ============================================================
 // EXPORTS
 // ============================================================
+// ============================================================
+// EMAIL: HR Suite notice (B27) — a leave request to decide, a decision, an
+// expiry reminder. Plain words and a link into the HMS; the detail stays in
+// the HMS behind a login. Callers (services/hrNotify.js) never put a sick-leave
+// type, a reason or a document's contents into `title` / `body`.
+// ============================================================
+const escapeHtml = (value) => String(value ?? '')
+  .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+  .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+
+const sendHrNoticeEmail = async ({ to, name, title, body, link }) => {
+  const url = link ? `${FRONTEND_URL}${link.startsWith('/') ? '' : '/'}${link}` : FRONTEND_URL;
+  const html = `
+    <h2 style="margin:0 0 8px 0;font-size:20px;color:#111827;">${escapeHtml(title)}</h2>
+    <p style="margin:0 0 8px 0;font-size:14px;color:#374151;">Dear ${escapeHtml(name || 'colleague')},</p>
+    <p style="margin:0 0 8px 0;font-size:14px;color:#374151;white-space:pre-line;">${escapeHtml(body || '')}</p>
+    ${primaryButton('Open in CDC HMS', url)}
+  `;
+  await sendEmail(to, `CDC HMS — ${title}`, baseTemplate(html));
+};
+
 module.exports = {
+  sendHrNoticeEmail,
   sendStaffWelcomeEmail,
   sendPatientWelcomeEmail,
   sendEmailUpdatedEmail,

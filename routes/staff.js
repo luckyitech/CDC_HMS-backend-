@@ -13,8 +13,14 @@ const staffDocumentController = require('../controllers/staffDocumentController'
 
 const EMPLOYMENT_STATUSES = ['Active', 'On Leave', 'Suspended', 'Resigned', 'Terminated'];
 const EMPLOYMENT_TYPES    = ['Full-time', 'Part-time', 'Contract', 'Consultant', 'Locum', 'Temporary'];
-const LEAVE_TYPES         = leaveController.LEAVE_TYPES;
 const LEAVE_DECISIONS     = ['Approved', 'Rejected', 'Cancelled'];
+
+// Leave (B27, D8). Deciding: leave.approve or leave.manage — who may decide
+// WHICH request is checked inline (leaveController.canDecideLeaveFor: never
+// your own; leave.approve only when you were listed as an approver).
+// Entitlement: leave.policy. Both used to be users.write.
+const LEAVE_DECIDE = ['admin', 'leave.approve', 'leave.manage'];
+const LEAVE_POLICY = ['admin', 'leave.policy'];
 
 // Lets a staff member reach their own record, and anyone who may view staff
 // reach any record. Declared here rather than inside the controllers so the
@@ -30,6 +36,15 @@ const adminOrSelf = (req, res, next) => {
   if (passesAdminGate(req.user, PERMISSIONS.USERS_VIEW)) return next();
   if (req.staffUser && req.staffUser.id === req.user.id) return next();
   return error(res, 'Access denied', 403);
+};
+
+// The leave list and recording leave: adminOrSelf, plus a leave.manage holder
+// (B27) — managing everyone's leave means opening anyone's leave tab, even
+// without users.view. What a users.view-only viewer sees of someone else's
+// sick leave is trimmed in the controller (health data).
+const leaveViewOrSelf = (req, res, next) => {
+  if (passesAdminGate(req.user, PERMISSIONS.LEAVE_MANAGE)) return next();
+  return adminOrSelf(req, res, next);
 };
 
 // Multer rejects an oversized or wrong-typed file by throwing, which Express
@@ -101,31 +116,35 @@ router.get('/:employeeId/activity', authenticate, authorize('admin', 'users.view
 // Leave
 // ============================================================
 
-router.get('/:employeeId/leaves', authenticate, findStaff, adminOrSelf, leaveController.list);
+router.get('/:employeeId/leaves', authenticate, findStaff, leaveViewOrSelf, leaveController.list);
 
-// Staff may request their own leave; it is created Pending. An admin's entry is
-// approved immediately.
-router.post('/:employeeId/leaves', authenticate, findStaff, adminOrSelf, [
-  body('leaveType').isIn(LEAVE_TYPES).withMessage('Invalid leave type'),
-  body('startDate').isISO8601().withMessage('Valid start date is required'),
-  body('endDate').isISO8601().withMessage('Valid end date is required'),
+// Staff may request their own leave; it is created Pending. A leave.manage
+// holder's entry for someone else is approved immediately. The leave type is
+// checked against LeaveTypes in the controller (it is data since B27).
+router.post('/:employeeId/leaves', authenticate, findStaff, leaveViewOrSelf, [
+  body('leaveType').isString().trim().notEmpty().withMessage('Leave type is required'),
+  body('startDate').isISO8601({ strict: true }).withMessage('Valid start date is required'),
+  body('endDate').isISO8601({ strict: true }).withMessage('Valid end date is required'),
+  body('startPart').optional().isIn(['full', 'pm']).withMessage('Invalid start part'),
+  body('endPart').optional().isIn(['full', 'am']).withMessage('Invalid end part'),
   body('reason').optional({ nullable: true }).isString(),
   body('excludeWeekends').optional().isBoolean(),
   validate,
 ], leaveController.create);
 
-router.patch('/:employeeId/leaves/:id', authenticate, authorize('admin', 'users.write'), findStaff, [
+router.patch('/:employeeId/leaves/:id', authenticate, authorize(...LEAVE_DECIDE), findStaff, [
   body('status').isIn(LEAVE_DECISIONS).withMessage('Invalid decision'),
   body('decisionNote').optional({ nullable: true }).isString(),
   validate,
 ], leaveController.decide);
 
-router.put('/:employeeId/leave-balances', authenticate, authorize('admin', 'users.write'), findStaff, [
-  body('year').isInt({ min: 2000, max: 2100 }).withMessage('Invalid year'),
+router.put('/:employeeId/leave-balances', authenticate, authorize(...LEAVE_POLICY), findStaff, [
+  body('year').isInt({ min: 2000, max: 2100 }).toInt().withMessage('Invalid year'),
   body('balances').isArray({ min: 1 }).withMessage('Balances must be a non-empty list'),
-  body('balances.*.leaveType').isIn(LEAVE_TYPES).withMessage('Invalid leave type'),
-  body('balances.*.entitled').optional().isInt({ min: 0 }).withMessage('Entitlement must be a positive number'),
-  body('balances.*.carriedOver').optional().isInt({ min: 0 }).withMessage('Carried-over days must be a positive number'),
+  body('balances.*.leaveType').isString().trim().notEmpty().withMessage('Invalid leave type'),
+  body('balances.*.entitled').optional({ nullable: true }).isFloat({ min: 0, max: 366 }).withMessage('Entitlement must be between 0 and 366 days'),
+  body('balances.*.carriedOver').optional({ nullable: true }).isFloat({ min: 0, max: 366 }).withMessage('Carried-over days must be between 0 and 366'),
+  body('reason').optional({ nullable: true }).isString(),
   validate,
 ], leaveController.setBalances);
 
@@ -157,3 +176,4 @@ module.exports = router;
 // Exposed for tests/adminLiteralGates.test.js, which exercises the gate with a
 // fake req/res and no database.
 module.exports.adminOrSelf = adminOrSelf;
+module.exports.leaveViewOrSelf = leaveViewOrSelf;

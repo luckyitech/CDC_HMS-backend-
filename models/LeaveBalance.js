@@ -2,6 +2,12 @@ const { defineModel, DataTypes } = require('../utils/defineModel');
 
 // Entitlement per staff member, per year, per leave type.
 //
+// B27 (migration 20260928000001): this is now the PER-PERSON OVERRIDE row. The
+// clinic's allowance comes from the year's LeavePolicy; a row here changes it
+// for one person (D1), with a reason. entitled / carriedOver NULL = use the
+// policy. weekOverride = that person's own week values (D3), e.g. a
+// part-timer who works Mon–Wed. DECIMAL arrives as a string — Number() it.
+//
 // `taken` is NOT stored here — it is summed from approved StaffLeave rows on
 // read. Storing it would mean two places could disagree, and the leave rows are
 // the record of what actually happened; a cached total is only ever a summary
@@ -14,20 +20,26 @@ const LeaveBalance = defineModel('LeaveBalance', {
     allowNull: false,
   },
   leaveType: {
-    type: DataTypes.ENUM(
-      'Annual', 'Sick', 'Maternity', 'Paternity', 'Compassionate', 'Study', 'Unpaid'
-    ),
+    type: DataTypes.STRING(40),   // a LeaveTypes.key
     allowNull: false,
   },
   entitled: {
-    type: DataTypes.INTEGER,
-    allowNull: false,
-    defaultValue: 0,
+    type: DataTypes.DECIMAL(6, 2),
+    allowNull: true,
+    defaultValue: null,
   },
   carriedOver: {
-    type: DataTypes.INTEGER,
-    allowNull: false,
-    defaultValue: 0,
+    type: DataTypes.DECIMAL(6, 2),
+    allowNull: true,
+    defaultValue: null,
+  },
+  reason: {
+    type: DataTypes.TEXT,         // why this person differs from the policy
+    defaultValue: null,
+  },
+  weekOverride: {
+    type: DataTypes.JSON,         // { "0": 0, "1": 1, … "6": 0 } or null
+    defaultValue: null,
   },
 
   // --- Accountability ---

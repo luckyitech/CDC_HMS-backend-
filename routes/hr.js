@@ -18,13 +18,14 @@ const hrSettings = require('../controllers/hrSettingsController');
 //          capability so it can be granted or, more usefully, WITHDRAWN from
 //          one person (authorize checks a withdrawal first).
 // VIEW / WRITE: the admin role, admin.access (via the bypass), or a grant.
-// CONFIG: settings and tag keys, like every other settings write.
+// SETTINGS: HR Suite settings and tag keys — hr.settings (B27, D8: every HR
+//          function its own capability). Was config.write until B27.
 // The vocabulary test derives ADMIN_ACCESS_COVERS from these lists.
 // =====================================================================
 const CHECKIN = ['doctor', 'staff', 'lab', 'nurse', 'admin', 'hr.checkin'];
 const VIEW    = ['admin', 'hr.view'];
 const WRITE   = ['admin', 'hr.write'];
-const CONFIG  = ['admin', 'config.write'];
+const SETTINGS = ['admin', 'hr.settings'];
 
 // A tap is one request per person per event; 60 a minute per IP is generous
 // for a whole clinic behind one NAT, and caps a scripted flood.
@@ -78,8 +79,8 @@ router.put('/work-hours/:userId', authenticate, authorize(...WRITE), [param('use
 
 // ---- Entrance tags -----------------------------------------------------------
 router.get('/tags',          authenticate, authorize(...WRITE), hrTags.list);
-router.get('/tags/new-key',  authenticate, authorize(...CONFIG), hrTags.newKey);
-router.post('/tags',         authenticate, strictLimiter, authorize(...CONFIG), [
+router.get('/tags/new-key',  authenticate, authorize(...SETTINGS), hrTags.newKey);
+router.post('/tags',         authenticate, strictLimiter, authorize(...SETTINGS), [
   body('uid').matches(HEX14).withMessage('The tag UID must be 14 hex characters'),
   body('key').matches(/^[0-9a-fA-F]{32}$/).withMessage('The tag key must be 32 hex characters'),
   body('label').isString().trim().notEmpty().withMessage('A label is required'),
@@ -90,7 +91,7 @@ router.post('/tags/:id/test', authenticate, authorize(...WRITE), [param('id').is
 
 // ---- Settings ----------------------------------------------------------------
 router.get('/settings', authenticate, authorize(...VIEW),   hrSettings.get);
-router.put('/settings', authenticate, authorize(...CONFIG), [
+router.put('/settings', authenticate, authorize(...SETTINGS), [
   body('autoCheckin').optional().isBoolean().toBoolean(),
   body('confirmCheckout').optional().isBoolean().toBoolean(),
   body('positiveFeedback').optional().isBoolean().toBoolean(),

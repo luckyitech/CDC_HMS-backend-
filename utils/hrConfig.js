@@ -24,6 +24,35 @@ const K = {
   graceMinutes:      'hr.punctuality.graceMinutes',
   positiveFeedback:  'hr.punctuality.positiveFeedback',
   deviceDays:        'hr.devices.expiryDays',
+  alerts:            'hr.alerts',                   // JSON, see ALERT_EVENTS below (B27)
+};
+
+// B27 (decision D9): which HR alerts go out on which channel. HR chooses per
+// event × channel. The person's own Leave tab always shows everything — that
+// is not a channel you can switch off. WhatsApp stays off (and greyed in the
+// UI) until the HMS WhatsApp number is registered (B18).
+const ALERT_EVENTS = [
+  'leave_to_approve', 'leave_decided', 'leave_info_requested', 'leave_info_replied',
+  'leave_acknowledge', 'leave_cancelled', 'change_request_decided', 'expiry_self', 'expiry_hr',
+];
+const ALERT_CHANNELS = ['bell', 'email', 'whatsapp'];
+const DEFAULT_ALERTS = Object.fromEntries(ALERT_EVENTS.map((e) => [e, { bell: true, email: true, whatsapp: false }]));
+
+/** A stored alerts value, completed with defaults so every event × channel has an answer. */
+const normaliseAlerts = (value) => {
+  let parsed = value;
+  if (typeof value === 'string') {
+    try { parsed = JSON.parse(value); } catch { parsed = null; }
+  }
+  const out = {};
+  for (const event of ALERT_EVENTS) {
+    const row = parsed && typeof parsed === 'object' ? parsed[event] : null;
+    out[event] = {};
+    for (const ch of ALERT_CHANNELS) {
+      out[event][ch] = row && typeof row[ch] === 'boolean' ? row[ch] : DEFAULT_ALERTS[event][ch];
+    }
+  }
+  return out;
 };
 
 const DEFAULTS = {
@@ -37,6 +66,7 @@ const DEFAULTS = {
   graceMinutes: 0,
   positiveFeedback: true,
   deviceDays: 90,
+  alerts: DEFAULT_ALERTS,
 };
 
 const GEO_MODES = ['off', 'log'];
@@ -52,6 +82,7 @@ const FIELDS = {
   graceMinutes:      { key: K.graceMinutes,      label: 'Grace (minutes)' },
   positiveFeedback:  { key: K.positiveFeedback,  label: 'Positive feedback on tap' },
   deviceDays:        { key: K.deviceDays,        label: 'Remembered phones expire after (days)' },
+  alerts:            { key: K.alerts,            label: 'HR alert channels' },
 };
 
 let cached = { rows: null, at: 0 };
@@ -89,6 +120,7 @@ const getHrConfig = async () => {
     graceMinutes:      int(m[K.graceMinutes], DEFAULTS.graceMinutes, 0, 240),
     positiveFeedback:  bool(m[K.positiveFeedback], DEFAULTS.positiveFeedback),
     deviceDays:        int(m[K.deviceDays], DEFAULTS.deviceDays, 1, 3650),
+    alerts:            normaliseAlerts(m[K.alerts]),
   };
 };
 
@@ -123,8 +155,19 @@ const setHrConfig = async (changes = {}) => {
     await write(K.hoursDefault, JSON.stringify(obj));
   }
 
+  if (changes.alerts !== undefined) {
+    const obj = typeof changes.alerts === 'string' ? JSON.parse(changes.alerts) : changes.alerts;
+    if (!obj || typeof obj !== 'object' || Array.isArray(obj)) throw new Error('HR alert channels must be an object of events.');
+    const unknown = Object.keys(obj).filter((e) => !ALERT_EVENTS.includes(e));
+    if (unknown.length) throw new Error(`Each HR alert must be one of the known events (unknown: ${unknown[0]}).`);
+    await write(K.alerts, JSON.stringify(normaliseAlerts(obj)));
+  }
+
   clearHrCache();
   return getHrConfig();
 };
 
-module.exports = { KEYS: K, DEFAULTS, FIELDS, GEO_MODES, getHrConfig, setHrConfig, clearHrCache };
+module.exports = {
+  KEYS: K, DEFAULTS, FIELDS, GEO_MODES, ALERT_EVENTS, ALERT_CHANNELS, normaliseAlerts,
+  getHrConfig, setHrConfig, clearHrCache,
+};

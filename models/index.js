@@ -12,6 +12,16 @@ const StaffProfile        = require('./StaffProfile');
 const LabTechProfile      = require('./LabTechProfile');
 const StaffLeave          = require('./StaffLeave');
 const LeaveBalance        = require('./LeaveBalance');
+const LeaveType           = require('./LeaveType');
+const LeavePolicy         = require('./LeavePolicy');
+const LeavePolicyType     = require('./LeavePolicyType');
+const PublicHoliday       = require('./PublicHoliday');
+const LeaveParticipant    = require('./LeaveParticipant');
+const LeaveCharge         = require('./LeaveCharge');
+const LeaveEvent          = require('./LeaveEvent');
+const StaffChangeRequest  = require('./StaffChangeRequest');
+const CpdActivity         = require('./CpdActivity');
+const ExpiryReminder      = require('./ExpiryReminder');
 const StaffDocument       = require('./StaffDocument');
 const Patient             = require('./Patient');
 const PatientVital        = require('./PatientVital');
@@ -133,6 +143,37 @@ StaffLeave.belongsTo(User, { as: 'approvedBy', foreignKey: 'approvedById' });
 
 User.hasMany(LeaveBalance);
 LeaveBalance.belongsTo(User);
+
+// --- B27: leave policy, the request workflow, profile requests, CPD ---
+// leaveId / policyId / leaveTypeId and every *ById / documentId are explicitly
+// aliased camelCase keys; the person on a participant, change request or CPD
+// row is the association-generated PascalCase UserId (A4).
+StaffLeave.belongsTo(StaffDocument, { as: 'attachment', foreignKey: 'attachmentDocumentId' });
+StaffLeave.hasMany(LeaveParticipant, { as: 'participants', foreignKey: 'leaveId' });
+LeaveParticipant.belongsTo(StaffLeave, { as: 'leave', foreignKey: 'leaveId' });
+User.hasMany(LeaveParticipant);
+LeaveParticipant.belongsTo(User);
+StaffLeave.hasMany(LeaveCharge, { as: 'charges', foreignKey: 'leaveId' });
+LeaveCharge.belongsTo(StaffLeave, { as: 'leave', foreignKey: 'leaveId' });
+LeaveCharge.belongsTo(User, { as: 'setBy', foreignKey: 'setById' });
+StaffLeave.hasMany(LeaveEvent, { as: 'events', foreignKey: 'leaveId' });
+LeaveEvent.belongsTo(StaffLeave, { as: 'leave', foreignKey: 'leaveId' });
+LeaveEvent.belongsTo(User, { as: 'actor', foreignKey: 'actorId' });
+
+LeavePolicy.hasMany(LeavePolicyType, { as: 'types', foreignKey: 'policyId' });
+LeavePolicyType.belongsTo(LeavePolicy, { as: 'policy', foreignKey: 'policyId' });
+LeavePolicyType.belongsTo(LeaveType, { as: 'type', foreignKey: 'leaveTypeId' });
+LeavePolicy.belongsTo(User, { as: 'publishedBy', foreignKey: 'publishedById' });
+
+User.hasMany(StaffChangeRequest);
+StaffChangeRequest.belongsTo(User);
+StaffChangeRequest.belongsTo(User, { as: 'decidedBy', foreignKey: 'decidedById' });
+StaffChangeRequest.belongsTo(StaffDocument, { as: 'attachment', foreignKey: 'attachmentDocumentId' });
+
+User.hasMany(CpdActivity);
+CpdActivity.belongsTo(User);
+CpdActivity.belongsTo(User, { as: 'verifiedBy', foreignKey: 'verifiedById' });
+CpdActivity.belongsTo(StaffDocument, { as: 'document', foreignKey: 'documentId' });
 
 User.hasMany(StaffDocument);
 StaffDocument.belongsTo(User);
@@ -572,6 +613,16 @@ const db = {
   LabTechProfile,
   StaffLeave,
   LeaveBalance,
+  LeaveType,
+  LeavePolicy,
+  LeavePolicyType,
+  PublicHoliday,
+  LeaveParticipant,
+  LeaveCharge,
+  LeaveEvent,
+  StaffChangeRequest,
+  CpdActivity,
+  ExpiryReminder,
   StaffDocument,
   Patient,
   PatientVital,

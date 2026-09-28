@@ -4,11 +4,20 @@ const { defineModel, DataTypes } = require('../utils/defineModel');
 //
 // UserId (the staff member) and approvedById are added by the associations in
 // index.js. See STAFF_PROFILE_DESIGN.md.
+//
+// B27 (migration 20260928000001): leaveType is a LeaveTypes.key (was an ENUM of
+// the original seven); days is DECIMAL (half days); the status list is wider;
+// the request carries its part days, return date, contact details and the
+// calculator's breakdown. WHICH BALANCE the days come off is LeaveCharge, not
+// leaveType — leaveType is what the person asked for.
+//
+// DECIMAL arrives from mysql2 as a STRING ("5.00"): always Number(leave.days)
+// before adding. Adding strings concatenates.
+const STATUSES = ['Pending', 'InfoRequested', 'Approved', 'Rejected', 'Withdrawn', 'CancelRequested', 'Cancelled'];
+
 const StaffLeave = defineModel('StaffLeave', {
   leaveType: {
-    type: DataTypes.ENUM(
-      'Annual', 'Sick', 'Maternity', 'Paternity', 'Compassionate', 'Study', 'Unpaid'
-    ),
+    type: DataTypes.STRING(40),
     allowNull: false,
   },
   startDate: {
@@ -24,7 +33,7 @@ const StaffLeave = defineModel('StaffLeave', {
   // number, and recomputing it later — after someone changes what counts as a
   // working day — would silently restate balances for leave already taken.
   days: {
-    type: DataTypes.INTEGER,
+    type: DataTypes.DECIMAL(6, 2),
     allowNull: false,
   },
 
@@ -33,7 +42,7 @@ const StaffLeave = defineModel('StaffLeave', {
     defaultValue: null,
   },
   status: {
-    type: DataTypes.ENUM('Pending', 'Approved', 'Rejected', 'Cancelled'),
+    type: DataTypes.ENUM(...STATUSES),
     allowNull: false,
     defaultValue: 'Pending',
   },
@@ -55,10 +64,25 @@ const StaffLeave = defineModel('StaffLeave', {
     defaultValue: null,
   },
 
+  // --- B27 request details ---
+  startPart:   { type: DataTypes.ENUM('full', 'pm'), allowNull: false, defaultValue: 'full' },  // 'pm' = starts after lunch
+  endPart:     { type: DataTypes.ENUM('full', 'am'), allowNull: false, defaultValue: 'full' },  // 'am' = back after lunch
+  returnDate:  { type: DataTypes.DATEONLY, defaultValue: null },
+  reachable:   { type: DataTypes.BOOLEAN, defaultValue: null },
+  contactNote: { type: DataTypes.STRING(255), defaultValue: null },
+  submittedAt: { type: DataTypes.DATE, defaultValue: null },
+  policyYear:  { type: DataTypes.INTEGER, defaultValue: null },
+  // The calculator's day-by-day answer when the request was made. Display
+  // only — never recomputed, so a later policy change can't restate it.
+  breakdown:   { type: DataTypes.JSON, defaultValue: null },
+  onBehalf:    { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },   // recorded by HR
+
   // --- Accountability ---
   createdBy: { type: DataTypes.INTEGER, defaultValue: null },
   updatedBy: { type: DataTypes.INTEGER, defaultValue: null },
 });
+
+StaffLeave.STATUSES = STATUSES;
 
 // The (UserId, startDate) index is created by the migration, NOT declared here.
 //

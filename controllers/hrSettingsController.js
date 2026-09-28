@@ -1,4 +1,5 @@
-// HR Suite (B21) — check-in rules and clinic-wide hours (config.write).
+// HR Suite (B21) — check-in rules and clinic-wide hours (hr.settings since B27;
+// was config.write).
 const { success, error } = require('../utils/response');
 const { getHrConfig, setHrConfig, FIELDS } = require('../utils/hrConfig');
 const { recordSettingChanges } = require('../services/settingChangeLog');
