@@ -17,6 +17,7 @@ const jwt = require('jsonwebtoken');
 const { Op } = require('sequelize');
 const db = require('../models');
 const { success, error } = require('../utils/response');
+const { sendCsv } = require('../utils/csv');
 const { clinicToday } = require('../utils/clinicTime');
 const { getHrConfig } = require('../utils/hrConfig');
 const { verifySun } = require('../utils/ntag424');
@@ -223,7 +224,7 @@ const mine = async (req, res) => {
     const today = clinicToday();
     const expected = await svc.expectedFor(req.user.id, today, cfg);
     const open = rows.find((r) => r.clinicDate === today && r.status === 'open');
-    if (req.query.format === 'csv') return sendCsv(res, rows, `my-attendance-${from}-${to}.csv`);
+    if (req.query.format === 'csv') return sendRegisterCsv(res, rows, `my-attendance-${from}-${to}.csv`);
     return success(res, {
       from, to,
       rows: rows.map(svc.serializeSession),
@@ -330,18 +331,16 @@ const STATUS_FILTERS = {
   voided:    { status: 'voided' },
 };
 
-const csvCell = (v) => { const s = String(v ?? ''); return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
-const sendCsv = (res, rows, filename) => {
+// CSV through the shared utils/csv (HR Tier 2 — also used by the leave register).
+const sendRegisterCsv = (res, rows, filename) => {
   const headers = ['Date', 'Person', 'Employee ID', 'Role', 'In', 'Out', 'Hours', 'In star', 'Out star', 'Late min', 'Early-out min', 'Method', 'Verification', 'Door', 'Status', 'Amended by'];
   const lines = rows.map(svc.serializeSession).map((s) => [
     s.clinicDate, s.person?.name, s.person?.employeeId, s.person?.role, s.checkInHHMM, s.checkOutHHMM,
     s.minutesWorked == null ? '' : `${Math.floor(s.minutesWorked / 60)}:${String(s.minutesWorked % 60).padStart(2, '0')}`,
     starFor('in', s.checkInPunctuality) || '', starFor('out', s.checkOutPunctuality) || '',
     s.lateMinutes ?? '', s.earlyOutMinutes ?? '', s.checkInMethod, s.checkInVerification, s.door || '', s.status, s.amendedBy || '',
-  ].map(csvCell).join(','));
-  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
-  res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
-  return res.status(200).send(`﻿${[headers.join(','), ...lines].join('\r\n')}`);
+  ]);
+  return sendCsv(res, filename, headers, lines);
 };
 
 const list = async (req, res) => {
@@ -354,7 +353,7 @@ const list = async (req, res) => {
     const include = svc.SESSION_INCLUDE.map((i) => ({ ...i }));
     if (req.query.role) include[0] = { ...include[0], where: { role: req.query.role } };
     const rows = await StaffAttendance.findAll({ where, include, order: [['clinicDate', 'DESC'], ['checkInAt', 'DESC']], limit: 5000 });
-    if (req.query.format === 'csv') return sendCsv(res, rows, `time-attendance-${from}-${to}.csv`);
+    if (req.query.format === 'csv') return sendRegisterCsv(res, rows, `time-attendance-${from}-${to}.csv`);
     const people = new Set(rows.map((r) => r.UserId));
     return success(res, { from, to, count: rows.length, people: people.size, rows: rows.map(svc.serializeSession) });
   } catch (err) {

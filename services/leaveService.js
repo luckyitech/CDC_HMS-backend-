@@ -19,6 +19,7 @@ const { parseJsonColumn } = require('../utils/jsonColumn');
 const { countLeave, countLeaveDays, DEFAULT_WEEK_WEIGHTS } = require('../utils/leaveCalc');
 const { summarise, carriedIn, entitlementFor } = require('../utils/leaveBalance');
 const { TAKEN_STATUSES, BOOKED_STATUSES } = require('../utils/leaveWorkflow');
+const { observedDayFor } = require('../utils/leaveCalc');
 const { resolveExpected } = require('../utils/workHours');
 const { getHrConfig } = require('../utils/hrConfig');
 
@@ -94,13 +95,68 @@ const loadPolicy = async (year, { publishedOnly = true } = {}) => {
   };
 };
 
+// Holidays that count: active, and — when HR has switched off "a holiday on a
+// Sunday is also observed" (HR Tier 2) — without the 'auto' observed days. The
+// switch hides those rows; it never deletes them. ONE where-clause for every read.
+const countingWhere = async (extra = {}) => {
+  const cfg = await getHrConfig();
+  const where = { status: 'active', ...extra };
+  if (!cfg.observeSundayHolidays) where.source = { [Op.ne]: 'auto' };
+  return where;
+};
+
 /** Active public holidays between two dates, as [{ date, name }]. */
 const loadHolidays = async (from, to) => {
   const rows = await PublicHoliday.findAll({
-    where: { status: 'active', date: { [Op.between]: [from, to] } },
+    where: await countingWhere({ date: { [Op.between]: [from, to] } }),
     order: [['date', 'ASC']],
   });
   return rows.map((h) => ({ date: String(h.date).slice(0, 10), name: h.name }));
+};
+
+/**
+ * Keep the observed days in step with the Sunday holidays (HR Tier 2). For
+ * every active holiday on a Sunday with no observed day yet, add one ('auto',
+ * pointing at it) on the next day that isn't already a holiday — unless any row
+ * already holds that date (a retired one there is HR's decision; left alone).
+ * An observed day whose Sunday holiday was retired is retired with it, and
+ * comes back with it — but one HR retired themselves (updatedBy set) stays
+ * retired. System writes leave updatedBy null. Idempotent; cheap (a few dozen
+ * rows a year). Called on every holiday add/edit, on listing a year and when
+ * the switch is turned on.
+ * @returns {number} rows added or changed
+ */
+const syncObservedDays = async () => {
+  const cfg = await getHrConfig();
+  if (!cfg.observeSundayHolidays) return 0;
+  const rows = await PublicHoliday.findAll();
+  const byDate = new Map(rows.map((h) => [String(h.date).slice(0, 10), h]));
+  const activeDates = new Set(rows.filter((h) => h.status === 'active').map((h) => String(h.date).slice(0, 10)));
+  let changed = 0;
+  for (const h of rows) {
+    if (h.source === 'auto') continue;
+    const day = String(h.date).slice(0, 10);
+    const child = rows.find((x) => x.source === 'auto' && x.observedForId === h.id) || null;
+    if (h.status !== 'active') {
+      if (child && child.status === 'active') { await child.update({ status: 'retired', updatedBy: null }); changed += 1; }
+      continue;
+    }
+    if (child) {
+      if (child.status === 'retired' && child.updatedBy == null) { await child.update({ status: 'active' }); changed += 1; }
+      continue;
+    }
+    const observed = observedDayFor(day, activeDates);
+    if (!observed || byDate.has(observed)) continue;
+    const row = await PublicHoliday.create({
+      date: observed, name: `${h.name} (observed)`.slice(0, 120), status: 'active', source: 'auto', observedForId: h.id,
+      createdBy: null, updatedBy: null,
+    });
+    byDate.set(observed, row);
+    activeDates.add(observed);
+    changed += 1;
+  }
+  if (changed) clearHolidayCache();
+  return changed;
 };
 
 // Every active holiday as a Map date → name, cached briefly. Attendance asks
@@ -111,7 +167,7 @@ let holidayCache = { map: null, at: 0 };
 const clearHolidayCache = () => { holidayCache = { map: null, at: 0 }; };
 const holidayMap = async () => {
   if (holidayCache.map && Date.now() - holidayCache.at < HOLIDAY_CACHE_MS) return holidayCache.map;
-  const rows = await PublicHoliday.findAll({ where: { status: 'active' }, attributes: ['date', 'name'] });
+  const rows = await PublicHoliday.findAll({ where: await countingWhere(), attributes: ['date', 'name'] });
   const map = new Map(rows.map((h) => [String(h.date).slice(0, 10), h.name]));
   holidayCache = { map, at: Date.now() };
   return map;
@@ -423,6 +479,7 @@ module.exports = {
   isActiveType,
   loadPolicy,
   loadHolidays,
+  syncObservedDays,
   holidayMap,
   holidayOn,
   clearHolidayCache,

@@ -13,6 +13,7 @@ const staffController = require('../controllers/staffController');
 const leaveController = require('../controllers/leaveController');
 const staffDocumentController = require('../controllers/staffDocumentController');
 const cpdController = require('../controllers/cpdController');
+const requiredApproverController = require('../controllers/requiredApproverController');
 
 const EMPLOYMENT_STATUSES = ['Active', 'On Leave', 'Suspended', 'Resigned', 'Terminated'];
 const EMPLOYMENT_TYPES    = ['Full-time', 'Part-time', 'Contract', 'Consultant', 'Locum', 'Temporary'];
@@ -126,6 +127,11 @@ router.get('/:employeeId/activity', authenticate, authorize('admin', 'users.view
 // ============================================================
 
 router.get('/:employeeId/leaves', authenticate, findStaff, leaveViewOrSelf, leaveController.list);
+// Required approvers (HR Tier 2): read with the Leave tab; set by leave.manage, never on your own file.
+router.get('/:employeeId/required-approvers', authenticate, findStaff, leaveViewOrSelf, requiredApproverController.list);
+router.put('/:employeeId/required-approvers', authenticate, authorize(...LEAVE_MANAGE), findStaff, [
+  body('approverIds').isArray({ max: 5 }).withMessage('Choose up to five people'), validate,
+], requiredApproverController.set);
 
 // Record on behalf (phase 3): leave.manage, approved on the spot. Never your
 // own file — the controller refuses; your own leave goes through My leave.

@@ -24,7 +24,9 @@ const { isIsoDate, rangesOverlap } = require('../utils/leaveCalc');
 const { checkBalance } = require('../utils/leaveBalance');
 const {
   STATUS, OPEN_STATUSES, TAKEN_STATUSES, KIND, DECISION, WorkflowError, validateParticipants, applyEvent,
+  mergeRequired, coverError,
 } = require('../utils/leaveWorkflow');
+const { activeRequiredIds } = require('./requiredApproverController');
 const {
   applicationCheck, clashes, documentNeededFor, offeredKeys, noticeFor, describe,
 } = require('../utils/leaveApply');
@@ -89,9 +91,11 @@ const detailIncludes = () => [
  * @param {boolean} [opts.redact]    a viewer who may not see a private type's
  *                                   type and reason (phase 3; never the applicant)
  * @param {string} [opts.today]
+ * @param {boolean} [opts.datesOnly]  the cover person (HR Tier 2): dates only —
+ *                                   no type, reason or document for ANY type
  */
-const formatApplication = (leave, { typeNames = {}, redact = false, today = clinicToday() } = {}) => {
-  const hide = redact && leaveService.PRIVATE_TYPES.has(leave.leaveType);
+const formatApplication = (leave, { typeNames = {}, redact = false, today = clinicToday(), datesOnly = false } = {}) => {
+  const hide = datesOnly || (redact && leaveService.PRIVATE_TYPES.has(leave.leaveType));
   const snap = parseJsonColumn(leave.breakdown) || {};
   const participants = (leave.participants || [])
     .slice()
@@ -118,7 +122,7 @@ const formatApplication = (leave, { typeNames = {}, redact = false, today = clin
       createdAt: e.createdAt,
     }));
   const charges = (leave.charges || []).filter((c) => c.status === 'active')
-    .map((c) => ({ leaveType: hide && leaveService.PRIVATE_TYPES.has(c.leaveType) ? 'Private' : c.leaveType, days: num(c.days) }));
+    .map((c) => ({ leaveType: datesOnly || (hide && leaveService.PRIVATE_TYPES.has(c.leaveType)) ? 'Private' : c.leaveType, days: num(c.days) }));
 
   const startDate = String(leave.startDate).slice(0, 10);
   const endDate = String(leave.endDate).slice(0, 10);
@@ -320,6 +324,20 @@ const evaluate = async ({ user, body, today, asHr = false }) => {
   if (out.clashes.people.length) out.warnings.push(describe('CLASH'));
   if (out.clashes.overLimit.length) out.warnings.push(describe('OVER_LIMIT'));
 
+  // HR Tier 2 — is the cover person away themselves? Dates only, never why.
+  const coverId = Number(body.cover);
+  if (!asHr && Number.isInteger(coverId) && coverId > 0 && coverId !== user.id) {
+    const away = await StaffLeave.count({
+      where: {
+        UserId: coverId,
+        status: { [Op.in]: [...OPEN_STATUSES, ...TAKEN_STATUSES] },
+        startDate: { [Op.lte]: endDate },
+        endDate: { [Op.gte]: startDate },
+      },
+    });
+    if (away > 0) out.warnings.push(describe('COVER_AWAY'));
+  }
+
   out.ok = out.errors.length === 0;
   if (out.ok) out.status = 200;
   return out;
@@ -474,6 +492,11 @@ const PARTICIPANT_MESSAGES = {
   INACTIVE: 'One of the people you chose is no longer active.',
   BAD_USER: 'One of the people you chose could not be found.',
   BAD_KIND: 'Choose approver or acknowledger for each person.',
+  // HR Tier 2 — cover
+  BAD_COVER: 'Your cover could not be found.',
+  COVER_SELF: 'You cannot cover your own leave.',
+  COVER_LISTED: 'Your cover is already listed as an approver or to be told — choose one role for each person.',
+  COVER_INACTIVE: 'Your cover is no longer active.',
 };
 
 /** Active internal colleagues among these ids, with what the gate needs. */
@@ -505,9 +528,12 @@ const submit = async (req, res) => {
       return error(res, first.message, result.status, { code: first.code, errors: result.errors, balance: result.balance, overlap: result.overlap });
     }
 
-    // The people.
-    const list = Array.isArray(body.participants) ? body.participants.map((p) => ({ userId: Number(p?.userId), kind: p?.kind })) : [];
-    const colleagues = await loadColleagues([...new Set(list.map((p) => p.userId).filter((n) => Number.isInteger(n) && n > 0))]);
+    // The people — with HR's required approvers forced in (HR Tier 2; the
+    // applicant cannot remove them, whatever the client sends).
+    const chosen = Array.isArray(body.participants) ? body.participants.map((p) => ({ userId: Number(p?.userId), kind: p?.kind })) : [];
+    const list = mergeRequired(chosen, await activeRequiredIds(me.id), me.id).map((p) => ({ userId: p.userId, kind: p.kind }));
+    const coverRaw = body.cover === undefined || body.cover === null || body.cover === '' ? null : body.cover;
+    const colleagues = await loadColleagues([...new Set([...list.map((p) => p.userId), Number(coverRaw)].filter((n) => Number.isInteger(n) && n > 0))]);
     const activeUsers = new Set(colleagues.map((u) => u.id));
     const approveHolders = new Set(colleagues.filter((u) => passesAdminGate(u, PERMISSIONS.LEAVE_APPROVE)).map((u) => u.id));
     const people = validateParticipants(list, me.id, { approveHolders, activeUsers });
@@ -515,6 +541,9 @@ const submit = async (req, res) => {
       const code = people.errors[0];
       return error(res, PARTICIPANT_MESSAGES[code] || 'Check the people you chose.', 400, { code, errors: people.errors });
     }
+    const coverCode = coverError(coverRaw, me.id, list, activeUsers);
+    if (coverCode) return error(res, PARTICIPANT_MESSAGES[coverCode], 400, { code: coverCode });
+    const coverId = coverRaw === null ? null : Number(coverRaw);
 
     // A document offered now must be the applicant's own, live one.
     let attachmentId = null;
@@ -562,6 +591,11 @@ const submit = async (req, res) => {
         decision: p.kind === KIND.APPROVER ? DECISION.PENDING : DECISION.NOTIFIED,
         sortOrder: i,
       })), { transaction: t });
+      if (coverId) {
+        await LeaveParticipant.create({
+          leaveId: row.id, UserId: coverId, kind: KIND.COVER, decision: DECISION.PENDING, sortOrder: list.length,
+        }, { transaction: t });
+      }
 
       await leaveService.setCharges(row.id, [{ leaveType: result.leaveType, days: result.total }], me.id, t);
       await leaveService.recordEvent(row.id, me.id, 'submitted', {
@@ -589,6 +623,17 @@ const submit = async (req, res) => {
       link: approverLink(leave.id),
       actorName: fullName(me),
     });
+
+    if (coverId) {
+      // The cover is told the dates only — never the type or the reason.
+      await hrNotify.notify('leave_cover_request', {
+        recipients: [coverId],
+        title: `${fullName(me)} asked you to cover their work`,
+        body: `${rangeText(result.startDate, result.endDate)}.\nOpen the HMS to say whether you can cover.`,
+        link: approverLink(leave.id),
+        actorName: fullName(me),
+      });
+    }
 
     await leave.reload({ include: detailIncludes() });
     return success(res, formatApplication(leave, { typeNames, today }), 201);
@@ -773,7 +818,11 @@ const approvers = async (req, res) => {
     const me = await loadMe(req.user.id);
     if (!me) return error(res, 'Account not found', 404);
     const q = typeof req.query.q === 'string' ? req.query.q.trim().slice(0, 60) : '';
-    const where = { id: { [Op.ne]: me.id }, isActive: true, role: { [Op.in]: INTERNAL_ROLES } };
+    // includeSelf=1 (HR Tier 2): the staff-file "required approvers" picker, where
+    // the HR person may name themselves for someone else's leave.
+    const where = req.query.includeSelf === '1'
+      ? { isActive: true, role: { [Op.in]: INTERNAL_ROLES } }
+      : { id: { [Op.ne]: me.id }, isActive: true, role: { [Op.in]: INTERNAL_ROLES } };
     if (q) {
       where[Op.or] = [
         { firstName: { [Op.like]: `%${q}%` } },
@@ -789,6 +838,8 @@ const approvers = async (req, res) => {
       limit: 200,
     });
     const suggestedId = me.StaffProfile?.reportsToId || null;
+    // HR Tier 2 — the approvers HR made required for me (locked in the wizard).
+    const requiredIds = await activeRequiredIds(me.id);
     const people = users
       .filter((u) => !u.StaffProfile || !u.StaffProfile.deletedAt)
       .map((u) => ({
@@ -799,7 +850,20 @@ const approvers = async (req, res) => {
         canApprove: passesAdminGate(u, PERMISSIONS.LEAVE_APPROVE),
         suggested: u.id === suggestedId,
       }));
-    return success(res, { people, suggestedId });
+    // A required approver is always offered, even when the search would miss them.
+    const missing = requiredIds.filter((id) => !people.some((p) => p.id === id));
+    if (missing.length) {
+      const extra = await User.findAll({
+        where: { id: { [Op.in]: missing } },
+        attributes: ['id', 'firstName', 'lastName', 'role', 'permissions', 'deniedPermissions', 'staffType'],
+        include: [{ model: StaffProfile, attributes: ['position'], required: false }],
+      });
+      extra.forEach((u) => people.push({
+        id: u.id, name: fullName(u), role: u.role, position: u.StaffProfile?.position || null,
+        canApprove: passesAdminGate(u, PERMISSIONS.LEAVE_APPROVE), suggested: u.id === suggestedId,
+      }));
+    }
+    return success(res, { people, suggestedId, requiredIds });
   } catch (err) {
     console.error('SelfLeave.approvers error:', err);
     return error(res, 'Failed to load colleagues', 500);

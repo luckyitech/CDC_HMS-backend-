@@ -30,7 +30,10 @@ const OPEN_STATUSES = [STATUS.PENDING, STATUS.INFO_REQUESTED];
 const TAKEN_STATUSES = [STATUS.APPROVED, STATUS.CANCEL_REQUESTED];
 const BOOKED_STATUSES = OPEN_STATUSES;
 
-const KIND = Object.freeze({ APPROVER: 'approver', ACKNOWLEDGER: 'acknowledger' });
+// COVER (HR Tier 2, 2 Oct 2026): the colleague who covers the applicant's work.
+// Never an approver — approversOf() and every decision rule ignore it; their
+// "agreed"/"can't cover" is stored as decision approved/declined and shown only.
+const KIND = Object.freeze({ APPROVER: 'approver', ACKNOWLEDGER: 'acknowledger', COVER: 'cover' });
 const DECISION = Object.freeze({
   PENDING: 'pending', APPROVED: 'approved', DECLINED: 'declined', INFO: 'info_requested', NOTIFIED: 'notified',
 });
@@ -70,6 +73,42 @@ const validateParticipants = (list, applicantId, { approveHolders = new Set(), a
 
   const unique = [...new Set(errors)];
   return { ok: unique.length === 0, errors: unique };
+};
+
+/**
+ * The applicant's chosen people with HR's required approvers forced in (HR
+ * Tier 2): a required person already listed becomes an approver; a missing
+ * one is added as an approver, first. The applicant is never added to their
+ * own request. Pure — the controller passes only active required approvers.
+ *
+ * @param {object[]} list          [{ userId, kind }]
+ * @param {number[]} requiredIds
+ * @param {number}   applicantId
+ * @returns {object[]}             [{ userId, kind, required? }]
+ */
+const mergeRequired = (list, requiredIds = [], applicantId) => {
+  const req = [...new Set(requiredIds.map(Number))].filter((id) => Number.isInteger(id) && id > 0 && id !== Number(applicantId));
+  const out = (Array.isArray(list) ? list : []).map((p) => (req.includes(Number(p?.userId))
+    ? { ...p, userId: Number(p.userId), kind: KIND.APPROVER, required: true }
+    : { ...p }));
+  const missing = req.filter((id) => !out.some((p) => Number(p.userId) === id))
+    .map((id) => ({ userId: id, kind: KIND.APPROVER, required: true }));
+  return [...missing, ...out];
+};
+
+/**
+ * Is this cover choice acceptable? → null or an error code.
+ *   BAD_COVER — not a person; COVER_SELF — the applicant; COVER_LISTED — already
+ *   an approver/acknowledger (one role each); COVER_INACTIVE — archived or gone.
+ */
+const coverError = (coverId, applicantId, list = [], activeUsers = null) => {
+  if (coverId === undefined || coverId === null || coverId === '') return null;
+  const id = Number(coverId);
+  if (!Number.isInteger(id) || id <= 0) return 'BAD_COVER';
+  if (id === Number(applicantId)) return 'COVER_SELF';
+  if (list.some((p) => Number(p?.userId) === id)) return 'COVER_LISTED';
+  if (activeUsers && !activeUsers.has(id)) return 'COVER_INACTIVE';
+  return null;
 };
 
 const clone = (participants) => participants.map((p) => ({ ...p }));
@@ -221,6 +260,8 @@ module.exports = {
   DECISION,
   WorkflowError,
   validateParticipants,
+  mergeRequired,
+  coverError,
   applyEvent,
   isLastApprover,
   chargeValid,

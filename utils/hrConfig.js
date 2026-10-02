@@ -36,6 +36,10 @@ const K = {
   cpdPeriodStart:       'hr.cpd.periodStart',          // 'MM-DD' — reset day (calendar year: 01-01)
   expiryThresholds:     'hr.expiry.thresholds',        // JSON [60,30,7,0]
   calendarVisibleTypes: 'hr.calendar.visibleTypes',    // JSON [leave type keys]
+  // HR Tier 2 (2 Oct 2026): a holiday on a Sunday is also observed on the next
+  // day that isn't a holiday ('auto' PublicHolidays rows). Off = those rows are
+  // ignored everywhere (leaveService), not deleted.
+  observeSundayHolidays: 'hr.holidays.observeSunday', // 'true' | 'false'
 };
 
 // B27 (decision D9): which HR alerts go out on which channel. HR chooses per
@@ -47,6 +51,8 @@ const ALERT_EVENTS = [
   'leave_acknowledge', 'leave_cancelled', 'change_request_decided', 'expiry_self', 'expiry_hr',
   // 2 Oct 2026 (B27 debt): tell hr.profile.approve holders a change request is waiting.
   'change_request_new',
+  // HR Tier 2: the cover person is asked; the applicant hears their answer.
+  'leave_cover_request', 'leave_cover_answered',
 ];
 const ALERT_CHANNELS = ['bell', 'email', 'whatsapp'];
 const DEFAULT_ALERTS = Object.fromEntries(ALERT_EVENTS.map((e) => [e, { bell: true, email: true, whatsapp: false }]));
@@ -103,6 +109,7 @@ const DEFAULTS = {
   cpdPeriodStart: '01-01',
   expiryThresholds: DEFAULT_THRESHOLDS,
   calendarVisibleTypes: [],
+  observeSundayHolidays: true,
 };
 
 const GEO_MODES = ['off', 'log'];
@@ -123,6 +130,7 @@ const FIELDS = {
   cpdPeriodStart:       { key: K.cpdPeriodStart,       label: 'CPD period start' },
   expiryThresholds:     { key: K.expiryThresholds,     label: 'Expiry reminder days' },
   calendarVisibleTypes: { key: K.calendarVisibleTypes, label: 'Team calendar — visible leave types' },
+  observeSundayHolidays: { key: K.observeSundayHolidays, label: 'Holiday on a Sunday also observed on the next day' },
 };
 
 let cached = { rows: null, at: 0 };
@@ -165,6 +173,7 @@ const getHrConfig = async () => {
     cpdPeriodStart:    /^\d{2}-\d{2}$/.test(m[K.cpdPeriodStart] || '') ? m[K.cpdPeriodStart] : DEFAULTS.cpdPeriodStart,
     expiryThresholds:  cleanThresholds(safeParse(m[K.expiryThresholds])) || [...DEFAULT_THRESHOLDS],
     calendarVisibleTypes: cleanVisibleTypes(m[K.calendarVisibleTypes]),
+    observeSundayHolidays: bool(m[K.observeSundayHolidays], DEFAULTS.observeSundayHolidays),
   };
 };
 
@@ -222,6 +231,9 @@ const setHrConfig = async (changes = {}) => {
     const clean = cleanThresholds(arr);
     if (!clean) throw new Error('Expiry reminder days must be one or more whole numbers of days.');
     await write(K.expiryThresholds, JSON.stringify(clean));
+  }
+  if (changes.observeSundayHolidays !== undefined) {
+    await write(K.observeSundayHolidays, changes.observeSundayHolidays ? 'true' : 'false');
   }
   if (changes.calendarVisibleTypes !== undefined) {
     const arr = typeof changes.calendarVisibleTypes === 'string' ? safeParse(changes.calendarVisibleTypes) : changes.calendarVisibleTypes;

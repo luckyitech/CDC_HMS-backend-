@@ -40,6 +40,8 @@ const MESSAGES = {
   CLASH:              'Colleagues in your role are also away on some of these days.',
   OVER_LIMIT:         'More of your role would be away on some days than the clinic usually allows.',
   OVER_BALANCE:       'This takes the balance below zero. It will still be recorded.',
+  // HR Tier 2 — the cover person has leave of their own on some of these days.
+  COVER_AWAY:         'Your cover has leave on some of these days. Choose someone else, or keep them and tell your approvers.',
 };
 
 const yearOf = (iso) => Number(String(iso).slice(0, 4));

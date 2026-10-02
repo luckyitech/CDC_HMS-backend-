@@ -28,6 +28,8 @@ const leaveCalendar = require('../controllers/leaveCalendarController');
 // always "Away", other types only if HR ticked them).
 // =====================================================================
 const POLICY = ['admin', 'leave.policy'];
+// The leave register download (HR Tier 2): whoever manages leave.
+const MANAGE = ['admin', 'leave.manage'];
 const PARTICIPATE = ['doctor', 'staff', 'lab', 'nurse', 'admin', 'leave.approve', 'leave.manage'];
 
 const YEAR = param('year').isInt({ min: 2020, max: 2100 }).withMessage('Choose a year');
@@ -64,6 +66,8 @@ router.post('/holidays', authenticate, authorize(...POLICY), [
   validate,
 ], leaveSettings.createHoliday);
 router.patch('/holidays/:id', authenticate, authorize(...POLICY), [param('id').isInt(), validate], leaveSettings.updateHoliday);
+// HR Tier 2 — a holiday on a Sunday is also observed on the next day (switch).
+router.put('/holidays/observe-sunday', authenticate, authorize(...POLICY), [body('on').isBoolean().withMessage('Say on or off'), validate], leaveSettings.setObserveSunday);
 
 // ---- Entitlements ------------------------------------------------------------
 router.get('/entitlements', authenticate, authorize(...POLICY), [
@@ -100,6 +104,11 @@ router.post('/requests/:id/decide', authenticate, authorize(...PARTICIPATE), [
   body('charges').optional().isArray({ min: 1, max: 8 }),
   validate,
 ], leaveApproval.decide);
+// The cover person's answer (HR Tier 2) — the controller checks they are the cover.
+router.post('/requests/:id/cover', authenticate, authorize(...PARTICIPATE), [
+  REQUEST, body('answer').isIn(['agree', 'decline']).withMessage('Say whether you can cover'),
+  body('note').optional({ nullable: true }).isString(), validate,
+], leaveApproval.answerCover);
 // Save the split without deciding (B27 debt fix) — canSplit is checked in the controller.
 router.post('/requests/:id/split', authenticate, authorize(...PARTICIPATE), [
   REQUEST, body('charges').isArray({ min: 1, max: 8 }).withMessage('Say which balance(s) the days come off'), validate,
@@ -108,6 +117,11 @@ router.post('/requests/:id/cancel', authenticate, authorize(...PARTICIPATE), [
   REQUEST, body('note').optional({ nullable: true }).isString(), validate,
 ], leaveApproval.cancel);
 router.get('/requests/:id/attachment', authenticate, authorize(...PARTICIPATE), [REQUEST, validate], leaveApproval.attachment);
+
+// ---- Leave register export (HR Tier 2) — leave.manage; names sick leave, logged ----
+router.get('/register', authenticate, authorize(...MANAGE), [
+  query('year').optional().isInt({ min: 2020, max: 2100 }), validate,
+], leaveApproval.register);
 
 // ---- Audit ---------------------------------------------------------------------
 router.get('/changes', authenticate, authorize(...POLICY), leaveSettings.recentChanges);

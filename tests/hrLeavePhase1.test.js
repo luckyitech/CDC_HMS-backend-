@@ -219,7 +219,10 @@ describe('permissions: the HR Suite card and the new routes (revision C)', () =>
     const routes = src.split('\n').filter((l) => /^router\.(get|put|post|patch|delete)\(/.test(l));
     // Phase 5 added the team calendar under the same PARTICIPATE gate.
     const approvals = routes.filter((l) => /'\/(inbox|requests|calendar)/.test(l));
-    const settings = routes.filter((l) => !approvals.includes(l));
+    // HR Tier 2: the leave register download is leave.manage.
+    const manage = routes.filter((l) => /'\/register'/.test(l));
+    for (const line of manage) assert.match(line, /authenticate, authorize\(\.\.\.MANAGE\)/, line);
+    const settings = routes.filter((l) => !approvals.includes(l) && !manage.includes(l));
     assert.ok(settings.length >= 12);
     for (const line of settings) assert.match(line, /authenticate, authorize\(\.\.\.POLICY\)/, line);
     for (const line of approvals) assert.match(line, /authenticate, authorize\(\.\.\.PARTICIPATE\)/, line);

@@ -36,6 +36,8 @@ const {
 } = require('../utils/leaveWorkflow');
 const { PERMISSIONS, passesAdminGate } = require('../constants/permissions');
 const { resolveStoredFile } = require('../utils/staffDocumentStorage');
+const { sendCsv } = require('../utils/csv');
+const { recordSettingChanges } = require('../services/settingChangeLog');
 const leaveService = require('../services/leaveService');
 const hrNotify = require('../services/hrNotify');
 const {
@@ -82,6 +84,9 @@ const standing = (leave, user) => {
     participant,
     isApprover,
     isAcknowledger: participant?.kind === KIND.ACKNOWLEDGER,
+    // HR Tier 2 — the cover person: opens it (redacted — dates only), answers
+    // "I'll cover" / "I can't cover"; never decides.
+    isCover: participant?.kind === KIND.COVER,
     manage,
     legacy,
     // users.view: read-only and redacted (see the header).
@@ -182,6 +187,10 @@ const detailFor = async (leave, user) => {
   );
   const canSplit = canDecide && holdsApprove(user);
   const isLast = canDecide && (st.legacy || isLastApprover(participants, user.id));
+  // The cover person answers while the leave is live and not yet over; they may change their answer.
+  const coverLive = [...OPEN_STATUSES, STATUS.APPROVED, STATUS.CANCEL_REQUESTED].includes(leave.status)
+    && String(leave.endDate).slice(0, 10) >= today;
+  const canAnswerCover = st.isCover && coverLive;
   const canCancel = !st.isApplicant && (
     (st.manage && [...OPEN_STATUSES, STATUS.APPROVED, STATUS.CANCEL_REQUESTED].includes(leave.status))
     || (st.isApprover && leave.status === STATUS.CANCEL_REQUESTED)
@@ -195,7 +204,7 @@ const detailFor = async (leave, user) => {
 
   const profile = leave.User?.StaffProfile;
   return {
-    application: formatApplication(leave, { typeNames, redact: st.redact, today }),
+    application: formatApplication(leave, { typeNames, redact: st.redact, today, datesOnly: st.isCover }),
     applicant: {
       id: leave.UserId,
       name: fullName(leave.User) || 'Former colleague',
@@ -221,6 +230,8 @@ const detailFor = async (leave, user) => {
       isLast,
       canCancel,
       viewOnly: st.viewOnly,
+      isCover: st.isCover,
+      canAnswerCover,
       canOpenDocument: !st.redact,
     },
   };
@@ -243,8 +254,8 @@ const getRequest = async (req, res) => {
 // ---------------------------------------------------------------------------
 
 const inboxRow = (leave, { typeNames, redact, me }) => {
-  const a = formatApplication(leave, { typeNames, redact });
   const mine = (leave.participants || []).find((p) => p.UserId === me);
+  const a = formatApplication(leave, { typeNames, redact, datesOnly: mine?.kind === KIND.COVER });
   return {
     id: leave.id,
     applicant: fullName(leave.User) || 'Former colleague',
@@ -258,9 +269,13 @@ const inboxRow = (leave, { typeNames, redact, me }) => {
     submittedAt: a.submittedAt,
     participants: a.participants.map((p) => ({ kind: p.kind, decision: p.decision })),
     myDecision: mine?.decision || null,
-    waitingOnMe: !!mine && mine.kind === KIND.APPROVER
-      && ((OPEN_STATUSES.includes(leave.status) && mine.decision === DECISION.PENDING)
-        || leave.status === STATUS.CANCEL_REQUESTED),
+    waitingOnMe: !!mine && (
+      (mine.kind === KIND.APPROVER
+        && ((OPEN_STATUSES.includes(leave.status) && mine.decision === DECISION.PENDING)
+          || leave.status === STATUS.CANCEL_REQUESTED))
+      || (mine.kind === KIND.COVER && mine.decision === DECISION.PENDING
+        && [...OPEN_STATUSES, STATUS.APPROVED].includes(leave.status))),
+    myKind: mine?.kind || null,
     flags: a.flags,
   };
 };
@@ -279,6 +294,13 @@ const waitingWhere = (me, { withAsked = true } = {}) => ({
       '$participants.decision$': { [Op.in]: withAsked ? [DECISION.PENDING, DECISION.INFO] : [DECISION.PENDING] },
     },
     { status: STATUS.CANCEL_REQUESTED, '$participants.UserId$': me, '$participants.kind$': KIND.APPROVER },
+    // HR Tier 2 — asked to cover and not yet answered.
+    {
+      status: { [Op.in]: [...OPEN_STATUSES, STATUS.APPROVED] },
+      '$participants.UserId$': me,
+      '$participants.kind$': KIND.COVER,
+      '$participants.decision$': DECISION.PENDING,
+    },
   ],
 });
 
@@ -547,6 +569,49 @@ const saveSplit = async (req, res) => {
 };
 
 /**
+ * POST /api/leave/requests/:id/cover { answer: 'agree'|'decline', note? }
+ * HR Tier 2 (T2-1): the cover person says whether they can cover. Shown to the
+ * applicant and the approvers; NEVER blocks or decides the request. They may
+ * change their answer while the leave is live and not over. The applicant is
+ * told (leave_cover_answered) — the notice carries no note.
+ */
+const answerCover = async (req, res) => {
+  const answer = req.body?.answer;
+  const note = typeof req.body?.note === 'string' && req.body.note.trim() ? req.body.note.trim().slice(0, 2000) : null;
+  if (!['agree', 'decline'].includes(answer)) return error(res, 'Say whether you can cover', 400, { code: 'BAD_ANSWER' });
+  try {
+    const leave = await loadRequest(req.params.id);
+    if (!leave) return error(res, 'Leave request not found', 404);
+    const st = standing(leave, req.user);
+    if (!st.mayOpen) return error(res, 'Leave request not found', 404);
+    const detail = await detailFor(leave, req.user);
+    if (!detail.me.canAnswerCover) {
+      return error(res, st.isCover ? 'This leave is over or closed.' : 'You are not the cover on this request.', 403, { code: 'NOT_COVER' });
+    }
+    const decision = answer === 'agree' ? DECISION.APPROVED : DECISION.DECLINED;
+    if (st.participant.decision === decision) return error(res, 'That is already your answer', 400, { code: 'NO_CHANGE' });
+    await sequelize.transaction(async (t) => {
+      await LeaveParticipant.update({ decision, decidedAt: new Date(), note }, { where: { id: st.participant.id }, transaction: t });
+      await leaveService.recordEvent(leave.id, req.user.id, answer === 'agree' ? 'cover_agreed' : 'cover_declined', { note }, t);
+    });
+    const actor = await loadMe(req.user.id);
+    const range = rangeText(String(leave.startDate).slice(0, 10), String(leave.endDate).slice(0, 10));
+    await hrNotify.notify('leave_cover_answered', {
+      recipients: [leave.UserId],
+      title: answer === 'agree' ? `${fullName(actor)} will cover your work` : `${fullName(actor)} can't cover your work`,
+      body: answer === 'agree' ? `${range}.` : `${range}. You may want to arrange someone else and tell your approvers.`,
+      link: applicantLink(leave.id),
+      actorName: fullName(actor),
+    });
+    const fresh = await loadRequest(leave.id);
+    return success(res, await detailFor(fresh, req.user));
+  } catch (err) {
+    console.error('LeaveApproval.answerCover error:', err);
+    return error(res, 'Failed to record your answer', 500);
+  }
+};
+
+/**
  * POST /api/leave/requests/:id/cancel { note }
  * leave.manage: any live request. A listed approver: a request whose applicant
  * asked to cancel. Never your own — ask to cancel from My leave.
@@ -623,12 +688,80 @@ const attachment = async (req, res) => {
   }
 };
 
+// ---------------------------------------------------------------------------
+// The leave register (HR Tier 2, T2-4 / T2-5)
+// ---------------------------------------------------------------------------
+
+const REGISTER_STATUS = {
+  Pending: 'Waiting', InfoRequested: 'Question asked', Approved: 'Approved', Rejected: 'Declined',
+  Withdrawn: 'Withdrawn', CancelRequested: 'Asked to cancel', Cancelled: 'Cancelled',
+};
+const COVER_ANSWER = { approved: 'agreed', declined: 'can\'t cover', pending: 'not answered' };
+const fmtNum = (n) => (n === null || n === undefined ? '' : String(Math.round(Number(n) * 100) / 100));
+const shortName = (u) => (u ? `${(u.firstName || '').charAt(0)} ${u.lastName || ''}`.trim() : '');
+
+/**
+ * GET /api/leave/register?year= — every request starting in the year, as a
+ * .csv that opens in Excel (leave.manage). One row per request. It NAMES sick
+ * leave (Emu, T2-4: only leave.manage can download, and they see it in the
+ * HMS) — the file is health data once it leaves the HMS, so every download is
+ * written to the Leave policy trail (who, when, which year).
+ */
+const register = async (req, res) => {
+  const year = parseInt(req.query.year, 10) || Number(clinicToday().slice(0, 4));
+  try {
+    const leaves = await StaffLeave.findAll({
+      where: { startDate: { [Op.between]: [`${year}-01-01`, `${year}-12-31`] } },
+      include: [...detailIncludes(), applicantInclude()],
+      order: [['startDate', 'ASC'], ['id', 'ASC']],
+    });
+    const typeNames = await typeNameMap();
+    const headers = ['Employee ID', 'Name', 'Role', 'Type', 'From', 'To', 'Days', 'Charged to', 'Status',
+      'Approvers', 'Approved by', 'Cover', 'Recorded by HR', 'Applied on', 'Backdated'];
+    const rows = leaves.map((l) => {
+      const a = formatApplication(l, { typeNames, redact: false });
+      const parts = l.participants || [];
+      const approvers = parts.filter((p) => p.kind === KIND.APPROVER);
+      const cover = parts.find((p) => p.kind === KIND.COVER);
+      const profile = l.User?.StaffProfile;
+      return [
+        profile?.employeeId || '',
+        fullName(l.User) || 'Former colleague',
+        l.User?.role || '',
+        typeNames[l.leaveType] || l.leaveType,
+        a.startDate,
+        a.endDate,
+        fmtNum(a.days),
+        a.charges.map((c) => `${typeNames[c.leaveType] || c.leaveType} ${fmtNum(c.days)}`).join('; '),
+        REGISTER_STATUS[l.status] || l.status,
+        approvers.map((p) => shortName(p.User)).join('; '),
+        approvers.filter((p) => p.decision === DECISION.APPROVED).map((p) => shortName(p.User)).join('; '),
+        cover ? `${shortName(cover.User)} (${COVER_ANSWER[cover.decision] || cover.decision})` : '',
+        l.onBehalf ? 'Yes' : 'No',
+        a.submittedAt ? new Date(a.submittedAt).toISOString().slice(0, 10) : '',
+        a.flags?.backdated ? 'Yes' : 'No',
+      ];
+    });
+    recordSettingChanges({
+      user: req.user, area: 'Leave policy',
+      before: { d: null }, after: { d: `${year} — ${rows.length} request${rows.length === 1 ? '' : 's'}` },
+      fields: { d: { key: 'leave.register.download', label: 'Leave register downloaded' } },
+    });
+    return sendCsv(res, `leave-register-${year}.csv`, headers, rows);
+  } catch (err) {
+    console.error('LeaveApproval.register error:', err);
+    return error(res, 'Failed to build the leave register', 500);
+  }
+};
+
 module.exports = {
+  register,
   inbox,
   inboxCount,
   getRequest,
   decide,
   saveSplit,
+  answerCover,
   cancel,
   attachment,
   // tests

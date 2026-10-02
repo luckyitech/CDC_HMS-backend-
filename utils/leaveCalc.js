@@ -197,8 +197,30 @@ const validWeekWeights = (weights) => {
   return Object.keys(weights).every((k) => /^[0-6]$/.test(k));
 };
 
+/**
+ * The day a holiday that falls on a Sunday is observed (HR Tier 2; Kenya's
+ * Public Holidays Act: the next following day that is not itself a public
+ * holiday). → 'YYYY-MM-DD', or null when the date is not a Sunday.
+ * e.g. Christmas on a Sunday: Boxing Day is Monday, so Christmas is observed Tuesday.
+ *
+ * @param {string} date               the holiday, YYYY-MM-DD
+ * @param {Set<string>} holidayDates  every active holiday date
+ */
+const observedDayFor = (date, holidayDates = new Set()) => {
+  const d = toUtcDate(date);
+  if (!d || d.getUTCDay() !== 0) return null;
+  const next = new Date(d.getTime());
+  for (let i = 0; i < 14; i += 1) {
+    next.setUTCDate(next.getUTCDate() + 1);
+    const iso = next.toISOString().slice(0, 10);
+    if (!holidayDates.has(iso)) return iso;
+  }
+  return null;
+};
+
 module.exports = {
   DEFAULT_WEEK_WEIGHTS,
+  observedDayFor,
   dayValue,
   countLeave,
   groupBreakdown,

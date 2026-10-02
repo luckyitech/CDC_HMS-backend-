@@ -25,6 +25,7 @@ const { clinicToday } = require('../utils/clinicTime');
 const { parseJsonColumn } = require('../utils/jsonColumn');
 const { recordSettingChanges } = require('../services/settingChangeLog');
 const leaveService = require('../services/leaveService');
+const { getHrConfig, setHrConfig, FIELDS } = require('../utils/hrConfig');
 const { writeUserEditLog, internalUsers, personOf } = require('../services/hrAttendanceService');
 const rules = require('../utils/leavePolicyRules');
 const sequelize = require('../config/database');
@@ -434,16 +435,20 @@ const updateType = async (req, res) => {
 
 const holidayOut = (h) => ({
   id: h.id, date: String(h.date).slice(0, 10), name: h.name, status: h.status, source: h.source,
+  observedForId: h.observedForId || null,
 });
 
 /** GET /api/leave/holidays?year=&all=1 — active (and with all=1, retired) holidays. */
 const listHolidays = async (req, res) => {
   try {
+    // HR Tier 2: make sure every Sunday holiday has its observed day (idempotent).
+    await leaveService.syncObservedDays();
+    const { observeSundayHolidays } = await getHrConfig();
     const year = parseInt(req.query.year, 10) || Number(clinicToday().slice(0, 4));
     const where = { date: { [Op.between]: [`${year}-01-01`, `${year}-12-31`] } };
     if (!(req.query.all === '1' || req.query.all === 'true')) where.status = 'active';
     const rows = await PublicHoliday.findAll({ where, order: [['date', 'ASC']] });
-    return success(res, { year, holidays: rows.map(holidayOut) });
+    return success(res, { year, holidays: rows.map(holidayOut), observeSundayHolidays });
   } catch (err) {
     console.error('PublicHoliday.list error:', err);
     return error(res, 'Failed to load public holidays', 500);
@@ -478,6 +483,7 @@ const createHoliday = async (req, res) => {
       row = await PublicHoliday.create({ date, name, status: 'active', source: 'hr', createdBy: req.user.id, updatedBy: req.user.id });
     }
     leaveService.clearHolidayCache();
+    await leaveService.syncObservedDays();
     recordSettingChanges({
       user: req.user, area: AREA, before: { h: existing ? `${existing.name} (retired)` : null }, after: { h: name },
       fields: { h: { key: `leave.holiday.${date}`, label: `Public holiday ${date}` } },
@@ -509,6 +515,7 @@ const updateHoliday = async (req, res) => {
     const before = { h: row.status === 'active' ? row.name : `${row.name} (retired)` };
     await row.update({ ...changes, updatedBy: req.user.id });
     leaveService.clearHolidayCache();
+    await leaveService.syncObservedDays();
     recordSettingChanges({
       user: req.user, area: AREA, before, after: { h: row.status === 'active' ? row.name : `${row.name} (retired)` },
       fields: { h: { key: `leave.holiday.${date}`, label: `Public holiday ${date}` } },
@@ -517,6 +524,29 @@ const updateHoliday = async (req, res) => {
   } catch (err) {
     console.error('PublicHoliday.update error:', err);
     return error(res, 'Failed to update the public holiday', 500);
+  }
+};
+
+/**
+ * PUT /api/leave/holidays/observe-sunday { on } — HR Tier 2. When on, a holiday
+ * that falls on a Sunday is also observed on the next day that isn't a holiday
+ * (rows added at once); when off, those days stop counting (kept, not deleted).
+ */
+const setObserveSunday = async (req, res) => {
+  if (typeof req.body?.on !== 'boolean') return error(res, 'Say on or off.', 400);
+  try {
+    const before = (await getHrConfig()).observeSundayHolidays;
+    await setHrConfig({ observeSundayHolidays: req.body.on });
+    leaveService.clearHolidayCache();
+    const added = req.body.on ? await leaveService.syncObservedDays() : 0;
+    recordSettingChanges({
+      user: req.user, area: AREA, before: { o: before ? 'On' : 'Off' }, after: { o: req.body.on ? 'On' : 'Off' },
+      fields: { o: { key: FIELDS.observeSundayHolidays.key, label: FIELDS.observeSundayHolidays.label } },
+    });
+    return success(res, { observeSundayHolidays: req.body.on, added });
+  } catch (err) {
+    console.error('PublicHoliday.observeSunday error:', err);
+    return error(res, 'Failed to save the setting', 500);
   }
 };
 
@@ -721,6 +751,7 @@ module.exports = {
   createType,
   updateType,
   listHolidays,
+  setObserveSunday,
   createHoliday,
   updateHoliday,
   entitlements,

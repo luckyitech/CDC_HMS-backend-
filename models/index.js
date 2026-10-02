@@ -22,6 +22,7 @@ const LeaveEvent          = require('./LeaveEvent');
 const StaffChangeRequest  = require('./StaffChangeRequest');
 const CpdActivity         = require('./CpdActivity');
 const ExpiryReminder      = require('./ExpiryReminder');
+const StaffRequiredApprover = require('./StaffRequiredApprover');
 const StaffDocument       = require('./StaffDocument');
 const Patient             = require('./Patient');
 const PatientVital        = require('./PatientVital');
@@ -169,6 +170,10 @@ User.hasMany(StaffChangeRequest);
 StaffChangeRequest.belongsTo(User);
 StaffChangeRequest.belongsTo(User, { as: 'decidedBy', foreignKey: 'decidedById' });
 StaffChangeRequest.belongsTo(StaffDocument, { as: 'attachment', foreignKey: 'attachmentDocumentId' });
+
+User.hasMany(StaffRequiredApprover, { as: 'requiredApprovers' });
+StaffRequiredApprover.belongsTo(User);
+StaffRequiredApprover.belongsTo(User, { as: 'approver', foreignKey: 'approverId' });
 
 User.hasMany(CpdActivity);
 CpdActivity.belongsTo(User);
@@ -623,6 +628,7 @@ const db = {
   StaffChangeRequest,
   CpdActivity,
   ExpiryReminder,
+  StaffRequiredApprover,
   StaffDocument,
   Patient,
   PatientVital,

@@ -5,10 +5,14 @@ const { defineModel, DataTypes } = require('../utils/defineModel');
 // are only told (decision 'notified'). The workflow rules are in
 // utils/leaveWorkflow.js.
 //
+// 'cover' (HR Tier 2, migration 20260928000009): the colleague who covers the
+// applicant's work. Asked to agree (decision 'approved' = agreed, 'declined' =
+// can't cover); the answer is shown to approvers and NEVER blocks approval.
+//
 // Association-injected: leaveId (camelCase → StaffLeaves), UserId (PascalCase
 // → Users). Indexes live in the migration.
 const LeaveParticipant = defineModel('LeaveParticipant', {
-  kind:      { type: DataTypes.ENUM('approver', 'acknowledger'), allowNull: false },
+  kind:      { type: DataTypes.ENUM('approver', 'acknowledger', 'cover'), allowNull: false },
   decision:  { type: DataTypes.ENUM('pending', 'approved', 'declined', 'info_requested', 'notified'), allowNull: false, defaultValue: 'pending' },
   decidedAt: { type: DataTypes.DATE, allowNull: true },
   note:      { type: DataTypes.TEXT, allowNull: true },
