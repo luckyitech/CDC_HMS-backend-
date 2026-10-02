@@ -1,5 +1,7 @@
 const db = require('../models');
 const { parseHoursDefault } = require('./workHours');
+const { DEFAULT_TARGETS, cleanTargets } = require('./cpd');
+const { cleanThresholds, DEFAULT_THRESHOLDS } = require('./expiry');
 
 const { Setting } = db;
 
@@ -10,21 +12,30 @@ const { Setting } = db;
 // fallback code was not built: every phone has NFC), so nothing is encrypted
 // and getHrConfig() is safe to return to an HR user as-is.
 //
+// B27 phase 5 adds three more settings here (still area 'HR Suite'): CPD
+// targets per cadre, expiry-reminder thresholds, and which leave types the team
+// calendar shows non-managers by name.
+//
 // Every write is audited by the controller through
 // services/settingChangeLog.js recordSettingChanges (area 'HR Suite').
 // ---------------------------------------------------------------------------
 
 const K = {
-  debounceSeconds:   'hr.checkin.debounceSeconds',
-  minSessionMinutes: 'hr.checkin.minSessionMinutes',
-  autoCheckin:       'hr.checkin.autoCheckin',
-  confirmCheckout:   'hr.checkin.confirmCheckout',
-  geo:               'hr.checkin.geo',              // 'off' | 'log'
-  hoursDefault:      'hr.hours.default',            // JSON, see utils/workHours.js parseHoursDefault
-  graceMinutes:      'hr.punctuality.graceMinutes',
-  positiveFeedback:  'hr.punctuality.positiveFeedback',
-  deviceDays:        'hr.devices.expiryDays',
-  alerts:            'hr.alerts',                   // JSON, see ALERT_EVENTS below (B27)
+  debounceSeconds:      'hr.checkin.debounceSeconds',
+  minSessionMinutes:    'hr.checkin.minSessionMinutes',
+  autoCheckin:          'hr.checkin.autoCheckin',
+  confirmCheckout:      'hr.checkin.confirmCheckout',
+  geo:                  'hr.checkin.geo',              // 'off' | 'log'
+  hoursDefault:         'hr.hours.default',            // JSON, see utils/workHours.js parseHoursDefault
+  graceMinutes:         'hr.punctuality.graceMinutes',
+  positiveFeedback:     'hr.punctuality.positiveFeedback',
+  deviceDays:           'hr.devices.expiryDays',
+  alerts:               'hr.alerts',                   // JSON, see ALERT_EVENTS below (B27)
+  // B27 phase 5
+  cpdTargets:           'hr.cpd.targets',              // JSON { doctor, nurse, lab, staff }
+  cpdPeriodStart:       'hr.cpd.periodStart',          // 'MM-DD' — reset day (calendar year: 01-01)
+  expiryThresholds:     'hr.expiry.thresholds',        // JSON [60,30,7,0]
+  calendarVisibleTypes: 'hr.calendar.visibleTypes',    // JSON [leave type keys]
 };
 
 // B27 (decision D9): which HR alerts go out on which channel. HR chooses per
@@ -55,6 +66,22 @@ const normaliseAlerts = (value) => {
   return out;
 };
 
+const safeParse = (v) => {
+  if (typeof v !== 'string') return v;
+  try { return JSON.parse(v); } catch { return null; }
+};
+
+// Team-calendar visible leave types (phase 5). Sick and any private type are
+// LOCKED private (health data) and stripped here as well as at read in the
+// calendar controller — leaveService.PRIVATE_TYPES is the source of truth;
+// this small mirror avoids a circular require (leaveService requires hrConfig).
+const LOCKED_CALENDAR_TYPES = new Set(['Sick']);
+const cleanVisibleTypes = (value) => {
+  const arr = safeParse(value);
+  if (!Array.isArray(arr)) return [];
+  return [...new Set(arr.map((k) => String(k).slice(0, 40)).filter((k) => k && !LOCKED_CALENDAR_TYPES.has(k)))];
+};
+
 const DEFAULTS = {
   debounceSeconds: 120,
   minSessionMinutes: 10,
@@ -67,22 +94,33 @@ const DEFAULTS = {
   positiveFeedback: true,
   deviceDays: 90,
   alerts: DEFAULT_ALERTS,
+  // Phase 5. CPD is counted per calendar year (Emu, 29 Sep). Visible types
+  // defaults to EMPTY: until HR ticks a type, everyone without leave.manage sees
+  // only "Away" (names and dates), which is the most private starting point.
+  cpdTargets: DEFAULT_TARGETS,
+  cpdPeriodStart: '01-01',
+  expiryThresholds: DEFAULT_THRESHOLDS,
+  calendarVisibleTypes: [],
 };
 
 const GEO_MODES = ['off', 'log'];
 
 // The audit labels, shared by the controller so the fields map is written once.
 const FIELDS = {
-  debounceSeconds:   { key: K.debounceSeconds,   label: 'Ignore repeat taps within (seconds)' },
-  minSessionMinutes: { key: K.minSessionMinutes, label: 'Shortest session counted (minutes)' },
-  autoCheckin:       { key: K.autoCheckin,       label: 'First tap checks in immediately' },
-  confirmCheckout:   { key: K.confirmCheckout,   label: 'Check-out asks for confirmation' },
-  geo:               { key: K.geo,               label: 'Phone location' },
-  hoursDefault:      { key: K.hoursDefault,      label: 'Clinic-wide default hours' },
-  graceMinutes:      { key: K.graceMinutes,      label: 'Grace (minutes)' },
-  positiveFeedback:  { key: K.positiveFeedback,  label: 'Positive feedback on tap' },
-  deviceDays:        { key: K.deviceDays,        label: 'Remembered phones expire after (days)' },
-  alerts:            { key: K.alerts,            label: 'HR alert channels' },
+  debounceSeconds:      { key: K.debounceSeconds,      label: 'Ignore repeat taps within (seconds)' },
+  minSessionMinutes:    { key: K.minSessionMinutes,    label: 'Shortest session counted (minutes)' },
+  autoCheckin:          { key: K.autoCheckin,          label: 'First tap checks in immediately' },
+  confirmCheckout:      { key: K.confirmCheckout,      label: 'Check-out asks for confirmation' },
+  geo:                  { key: K.geo,                  label: 'Phone location' },
+  hoursDefault:         { key: K.hoursDefault,         label: 'Clinic-wide default hours' },
+  graceMinutes:         { key: K.graceMinutes,         label: 'Grace (minutes)' },
+  positiveFeedback:     { key: K.positiveFeedback,     label: 'Positive feedback on tap' },
+  deviceDays:           { key: K.deviceDays,           label: 'Remembered phones expire after (days)' },
+  alerts:               { key: K.alerts,               label: 'HR alert channels' },
+  cpdTargets:           { key: K.cpdTargets,           label: 'CPD targets (points per year)' },
+  cpdPeriodStart:       { key: K.cpdPeriodStart,       label: 'CPD period start' },
+  expiryThresholds:     { key: K.expiryThresholds,     label: 'Expiry reminder days' },
+  calendarVisibleTypes: { key: K.calendarVisibleTypes, label: 'Team calendar — visible leave types' },
 };
 
 let cached = { rows: null, at: 0 };
@@ -121,6 +159,10 @@ const getHrConfig = async () => {
     positiveFeedback:  bool(m[K.positiveFeedback], DEFAULTS.positiveFeedback),
     deviceDays:        int(m[K.deviceDays], DEFAULTS.deviceDays, 1, 3650),
     alerts:            normaliseAlerts(m[K.alerts]),
+    cpdTargets:        cleanTargets(m[K.cpdTargets]) || { ...DEFAULT_TARGETS },
+    cpdPeriodStart:    /^\d{2}-\d{2}$/.test(m[K.cpdPeriodStart] || '') ? m[K.cpdPeriodStart] : DEFAULTS.cpdPeriodStart,
+    expiryThresholds:  cleanThresholds(safeParse(m[K.expiryThresholds])) || [...DEFAULT_THRESHOLDS],
+    calendarVisibleTypes: cleanVisibleTypes(m[K.calendarVisibleTypes]),
   };
 };
 
@@ -161,6 +203,28 @@ const setHrConfig = async (changes = {}) => {
     const unknown = Object.keys(obj).filter((e) => !ALERT_EVENTS.includes(e));
     if (unknown.length) throw new Error(`Each HR alert must be one of the known events (unknown: ${unknown[0]}).`);
     await write(K.alerts, JSON.stringify(normaliseAlerts(obj)));
+  }
+
+  // ---- Phase 5 -------------------------------------------------------------
+  if (changes.cpdTargets !== undefined) {
+    const t = cleanTargets(changes.cpdTargets);
+    if (!t) throw new Error('CPD targets must be a number of points for each cadre.');
+    await write(K.cpdTargets, JSON.stringify(t));
+  }
+  if (changes.cpdPeriodStart !== undefined) {
+    if (!/^\d{2}-\d{2}$/.test(String(changes.cpdPeriodStart))) throw new Error('CPD period start must be MM-DD.');
+    await write(K.cpdPeriodStart, String(changes.cpdPeriodStart));
+  }
+  if (changes.expiryThresholds !== undefined) {
+    const arr = typeof changes.expiryThresholds === 'string' ? safeParse(changes.expiryThresholds) : changes.expiryThresholds;
+    const clean = cleanThresholds(arr);
+    if (!clean) throw new Error('Expiry reminder days must be one or more whole numbers of days.');
+    await write(K.expiryThresholds, JSON.stringify(clean));
+  }
+  if (changes.calendarVisibleTypes !== undefined) {
+    const arr = typeof changes.calendarVisibleTypes === 'string' ? safeParse(changes.calendarVisibleTypes) : changes.calendarVisibleTypes;
+    if (!Array.isArray(arr)) throw new Error('Team calendar visible types must be a list of leave types.');
+    await write(K.calendarVisibleTypes, JSON.stringify(cleanVisibleTypes(JSON.stringify(arr))));
   }
 
   clearHrCache();

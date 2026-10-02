@@ -16,7 +16,44 @@ const db = require('../models');
 const { clinicToday } = require('../utils/clinicTime');
 const { parseJsonColumn } = require('../utils/jsonColumn');
 
-const { StaffAttendance } = db;
+const { TAKEN_STATUSES, employmentFlips } = require('../utils/leaveWorkflow');
+const { runExpiryReminders } = require('./expiryReminders');
+
+const { StaffAttendance, StaffLeave, StaffProfile } = db;
+
+// B27 phase 3 — the On Leave sweep rides on the same five-minute timer: the
+// staff-file pill says "On Leave" while approved leave covers today and goes
+// back to Active the day after it ends (utils/leaveWorkflow employmentFlips —
+// never over a status HR set by hand, never over Suspended/Resigned/Terminated).
+const addDays = (iso, n) => {
+  const d = new Date(`${iso}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + n);
+  return d.toISOString().slice(0, 10);
+};
+
+const runLeaveStatusSweep = async (now = new Date()) => {
+  const today = clinicToday(now);
+  const weekAgo = addDays(today, -7);
+  const [covering, ended, profiles] = await Promise.all([
+    StaffLeave.findAll({ where: { status: { [Op.in]: TAKEN_STATUSES }, startDate: { [Op.lte]: today }, endDate: { [Op.gte]: today } }, attributes: ['UserId'], raw: true }),
+    StaffLeave.findAll({ where: { status: { [Op.in]: TAKEN_STATUSES }, endDate: { [Op.gte]: weekAgo, [Op.lt]: today } }, attributes: ['UserId'], raw: true }),
+    StaffProfile.findAll({ where: { employmentStatus: { [Op.in]: ['Active', 'On Leave'] } }, attributes: ['UserId', 'employmentStatus'], raw: true }),
+  ]);
+  const flips = employmentFlips({
+    profiles: profiles.map((p) => ({ userId: p.UserId, status: p.employmentStatus })),
+    coveringToday: new Set(covering.map((r) => r.UserId)),
+    endedRecently: new Set(ended.map((r) => r.UserId)),
+  });
+  if (flips.toOnLeave.length) {
+    await StaffProfile.update({ employmentStatus: 'On Leave' }, { where: { UserId: { [Op.in]: flips.toOnLeave }, employmentStatus: 'Active' } });
+  }
+  if (flips.toActive.length) {
+    await StaffProfile.update({ employmentStatus: 'Active' }, { where: { UserId: { [Op.in]: flips.toActive }, employmentStatus: 'On Leave' } });
+  }
+  const n = flips.toOnLeave.length + flips.toActive.length;
+  if (n) console.log(`[HR] leave status sweep: ${flips.toOnLeave.length} on leave, ${flips.toActive.length} back`);
+  return flips;
+};
 
 const INTERVAL_MS = 5 * 60 * 1000;
 let timer = null;
@@ -32,16 +69,23 @@ const runSweep = async (now = new Date()) => {
   return stale.length;
 };
 
+// Each sweep in its own catch: one failing never stops the others. The expiry
+// pass (B27 phase 5) rides the same timer but only does real work once a day,
+// after 06:00 Nairobi (services/expiryReminders guards this).
+const runAll = () => {
+  runSweep().catch((err) => console.error('[HR] missed-checkout sweep failed:', err.message));
+  runLeaveStatusSweep().catch((err) => console.error('[HR] leave status sweep failed:', err.message));
+  runExpiryReminders().catch((err) => console.error('[HR] expiry reminders failed:', err.message));
+};
+
 const startScheduler = () => {
   if (timer) return;
-  runSweep().catch((err) => console.error('[HR] missed-checkout sweep failed:', err.message));
-  timer = setInterval(() => {
-    runSweep().catch((err) => console.error('[HR] missed-checkout sweep failed:', err.message));
-  }, INTERVAL_MS);
+  runAll();
+  timer = setInterval(runAll, INTERVAL_MS);
   if (timer.unref) timer.unref();
   console.log('[HR] missed-checkout sweep armed (every 5 minutes).');
 };
 
 const stopScheduler = () => { if (timer) { clearInterval(timer); timer = null; } };
 
-module.exports = { runSweep, startScheduler, stopScheduler };
+module.exports = { runSweep, runLeaveStatusSweep, runExpiryReminders, startScheduler, stopScheduler };

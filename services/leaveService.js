@@ -19,9 +19,12 @@ const { parseJsonColumn } = require('../utils/jsonColumn');
 const { countLeave, countLeaveDays, DEFAULT_WEEK_WEIGHTS } = require('../utils/leaveCalc');
 const { summarise, carriedIn, entitlementFor } = require('../utils/leaveBalance');
 const { TAKEN_STATUSES, BOOKED_STATUSES } = require('../utils/leaveWorkflow');
+const { resolveExpected } = require('../utils/workHours');
+const { getHrConfig } = require('../utils/hrConfig');
 
 const {
   LeaveType, LeavePolicy, LeavePolicyType, PublicHoliday, LeaveBalance, LeaveCharge, LeaveEvent, StaffLeave, StaffProfile,
+  StaffWorkHours,
 } = db;
 
 // The one leave type whose type and reason are health data (spec §11): shown
@@ -68,6 +71,7 @@ const loadPolicy = async (year, { publishedOnly = true } = {}) => {
       docRule: pt.docRule,
       docOverDays: num(pt.docOverDays),
       minNoticeDays: pt.minNoticeDays,
+      proRate: !!pt.proRate,
       enabled: !!pt.enabled,
     };
   }
@@ -134,14 +138,39 @@ const personWeekFor = async (userId, year, leaveType) => {
 };
 
 /**
+ * Own-hours counting (policy countingMode 'own_hours', D3): is this person
+ * expected in on a date, by their HR working hours (utils/workHours — dated
+ * row, then weekly row, then the clinic default)? Holidays are left to
+ * countLeave, which never counts them. When nothing at all is known for a date
+ * — no row and no clinic default — the weekday value stands rather than
+ * making every day free.
+ *
+ * @returns {Promise<(date: string) => boolean>}
+ */
+const expectedForPerson = async (userId) => {
+  const [rows, cfg] = await Promise.all([
+    StaffWorkHours.findAll({ where: { UserId: userId, status: 'active' } }).then((r) => r.map((x) => x.get({ plain: true }))),
+    getHrConfig(),
+  ]);
+  return (date) => {
+    const r = resolveExpected({ rows, clinicDate: date, defaults: cfg.hoursDefault, graceDefault: cfg.graceMinutes });
+    if (r.source === null) return true;
+    return !!r.startAt;
+  };
+};
+
+/**
  * What a request costs.
  *
  * With a published policy for the start date's year: the weekday values, the
- * type's counting (working/calendar), holidays, part days, and the person's
- * own week if HR set one. Without: the pre-B27 count (every day, or weekdays
- * only when `excludeWeekends`), whole days only.
+ * type's counting (working/calendar), holidays, part days, and — in order —
+ * the person's own week if HR set one, else their own working hours when the
+ * policy counts by own hours, else the clinic week. Without: the pre-B27
+ * count (every day, or weekdays only when `excludeWeekends`), whole days only.
  *
- * @returns {{ ok, error?, total, breakdown|null, returnDate|null, policyYear|null, usedPolicy }}
+ * breakdown.mode says which week was used: 'own_week' | 'own_hours' | 'clinic_week'.
+ *
+ * @returns {{ ok, error?, total, breakdown|null, returnDate|null, returnPart|null, policyYear|null, usedPolicy }}
  */
 const costOf = async ({ userId, leaveType, start, end, startPart = 'full', endPart = 'full', excludeWeekends = false }) => {
   const year = Number(String(start).slice(0, 4));
@@ -153,7 +182,7 @@ const costOf = async ({ userId, leaveType, start, end, startPart = 'full', endPa
     }
     const total = countLeaveDays(start, end, { excludeWeekends: !!excludeWeekends });
     if (total <= 0) return { ok: false, error: 'END_BEFORE_START', total: 0 };
-    return { ok: true, total, breakdown: null, returnDate: null, policyYear: null, usedPolicy: false };
+    return { ok: true, total, breakdown: null, returnDate: null, returnPart: null, policyYear: null, usedPolicy: false };
   }
 
   const pt = policy.types[leaveType] || { countedAs: 'working', halfDaysAllowed: true };
@@ -168,19 +197,23 @@ const costOf = async ({ userId, leaveType, start, end, startPart = 'full', endPa
   after.setUTCDate(after.getUTCDate() + 60);
   const holidays = policy.excludeHolidays ? await loadHolidays(start, after.toISOString().slice(0, 10)) : [];
 
-  // Own-hours mode needs the person's working hours; that lookup arrives with
-  // the application wizard (phase 2). Until then own_hours reads as the clinic
-  // week — stated here so nobody assumes otherwise.
+  // A personal week wins; otherwise own-hours mode asks the person's HR hours
+  // (phase 2), and clinic-week mode uses the policy's weekday values.
+  const ownHours = !personWeek && policy.countingMode === 'own_hours' && userId;
+  const expectedFor = ownHours ? await expectedForPerson(userId) : null;
+  const mode = personWeek ? 'own_week' : (ownHours ? 'own_hours' : 'clinic_week');
+
   const r = countLeave({
     start, end, startPart, endPart, countedAs: pt.countedAs,
-    weekWeights: policy.weekWeights, mode: 'clinic_week', personWeek, holidays,
+    weekWeights: policy.weekWeights, mode: ownHours ? 'own_hours' : 'clinic_week', personWeek, expectedFor, holidays,
   });
   if (!r.ok) return { ok: false, error: r.error, total: 0 };
   return {
     ok: true,
     total: r.total,
-    breakdown: { groups: r.groups, holidays: r.holidaysInRange, countedAs: pt.countedAs },
+    breakdown: { groups: r.groups, holidays: r.holidaysInRange, countedAs: pt.countedAs, mode },
     returnDate: r.returnDate,
+    returnPart: r.returnPart,
     policyYear: year,
     usedPolicy: true,
   };
@@ -253,7 +286,7 @@ const summaryFor = async (userId, year, asOf, { depth = 0, draft = false, policy
     asOf,
     types: shown,
     policy: policy
-      ? { carryExpiry: policy.carryExpiry, proRate: policy.proRate, allowNegative: policy.allowNegative, visibleTypes: policy.visibleTypes }
+      ? { carryExpiry: policy.carryExpiry, allowNegative: policy.allowNegative, visibleTypes: policy.visibleTypes }
       : {},
     policyTypes: policy ? policy.types : {},
     overrides,
@@ -294,7 +327,7 @@ const saveOverrides = async ({ userId, year, balances = [], reason, actorId, wee
     const pt = policy?.types?.[key];
     if (!pt) return false;
     const e = entitlementFor({
-      policyType: pt, year, proRate: policy.proRate,
+      policyType: pt, year, proRate: !!pt.proRate,
       employment: { startDate: profile?.startDate || null, endDate: profile?.endDate || null },
     });
     return !e.unlimited && e.entitled !== null && Number(value) === e.entitled;

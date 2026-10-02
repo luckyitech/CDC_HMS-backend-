@@ -4,6 +4,8 @@ const { body, param, query } = require('express-validator');
 const validate = require('../middleware/validate');
 const { authenticate, authorize } = require('../middleware/auth');
 const leaveSettings = require('../controllers/leaveSettingsController');
+const leaveApproval = require('../controllers/leaveApprovalController');
+const leaveCalendar = require('../controllers/leaveCalendarController');
 
 // =====================================================================
 // Leave (B27) — /api/leave
@@ -14,10 +16,19 @@ const leaveSettings = require('../controllers/leaveSettingsController');
 // changed WHEN (a year that has ended is frozen, publish is one-way) is
 // decided in the controller by utils/leavePolicyRules.
 //
-// The application and approval routes (phases 2–3) join this file with their
-// own gates.
+// Phase 3: the approvals inbox and the request an approver opens. Anyone of
+// staff may be listed on a colleague's request (the applicant chooses — D5),
+// so PARTICIPATE is every internal role by role, plus leave.approve /
+// leave.manage for a grant. WHICH request someone may open or decide is the
+// controller's (listed on it, or leave.manage; never your own).
+// Applying for your own leave is /api/hr/me (routes/hrSelf.js).
+//
+// Phase 5: the team calendar — every internal role sees it (PARTICIPATE); the
+// controller redacts the leave type for anyone without leave.manage (Sick is
+// always "Away", other types only if HR ticked them).
 // =====================================================================
 const POLICY = ['admin', 'leave.policy'];
+const PARTICIPATE = ['doctor', 'staff', 'lab', 'nurse', 'admin', 'leave.approve', 'leave.manage'];
 
 const YEAR = param('year').isInt({ min: 2020, max: 2100 }).withMessage('Choose a year');
 
@@ -64,6 +75,35 @@ router.put('/entitlements/:userId/:year', authenticate, authorize(...POLICY), [
   body('reason').isString().trim().isLength({ min: 3 }).withMessage('Say why this person differs from the policy'),
   validate,
 ], leaveSettings.saveEntitlement);
+
+// ---- Team calendar (phase 5) -------------------------------------------------
+router.get('/calendar', authenticate, authorize(...PARTICIPATE), [
+  query('from').optional().isISO8601(),
+  query('to').optional().isISO8601(),
+  query('cadre').optional().isString(),
+  validate,
+], leaveCalendar.calendar);
+
+// ---- Approvals (phase 3) ----------------------------------------------------------
+const REQUEST = param('id').isInt({ min: 1 }).withMessage('Unknown request');
+router.get('/inbox', authenticate, authorize(...PARTICIPATE), [
+  query('tab').optional().isIn(['waiting', 'decided', 'all']),
+  query('year').optional().isInt({ min: 2020, max: 2100 }),
+  validate,
+], leaveApproval.inbox);
+router.get('/inbox/count', authenticate, authorize(...PARTICIPATE), leaveApproval.inboxCount);
+router.get('/requests/:id', authenticate, authorize(...PARTICIPATE), [REQUEST, validate], leaveApproval.getRequest);
+router.post('/requests/:id/decide', authenticate, authorize(...PARTICIPATE), [
+  REQUEST,
+  body('decision').isIn(['approve', 'decline', 'info']).withMessage('Choose approve, decline or ask'),
+  body('note').optional({ nullable: true }).isString(),
+  body('charges').optional().isArray({ min: 1, max: 8 }),
+  validate,
+], leaveApproval.decide);
+router.post('/requests/:id/cancel', authenticate, authorize(...PARTICIPATE), [
+  REQUEST, body('note').optional({ nullable: true }).isString(), validate,
+], leaveApproval.cancel);
+router.get('/requests/:id/attachment', authenticate, authorize(...PARTICIPATE), [REQUEST, validate], leaveApproval.attachment);
 
 // ---- Audit ---------------------------------------------------------------------
 router.get('/changes', authenticate, authorize(...POLICY), leaveSettings.recentChanges);

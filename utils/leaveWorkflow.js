@@ -188,7 +188,30 @@ const chargeValid = (charges, totalDays, enabledTypes = null) => {
   return { ok: true };
 };
 
+/**
+ * The On Leave sweep (phase 3): which staff profiles change today.
+ *
+ *   - Active → On Leave: approved leave covers today.
+ *   - On Leave → Active: no approved leave covers today AND approved leave
+ *     ended within the last week. The second condition is what keeps a
+ *     status HR set by hand (no leave record behind it) from being undone.
+ *   Suspended / Resigned / Terminated are never touched.
+ *
+ * @param {object} args
+ * @param {{ userId:number, status:string }[]} args.profiles
+ * @param {Set<number>} args.coveringToday
+ * @param {Set<number>} args.endedRecently
+ * @returns {{ toOnLeave: number[], toActive: number[] }}
+ */
+const employmentFlips = ({ profiles = [], coveringToday = new Set(), endedRecently = new Set() } = {}) => ({
+  toOnLeave: profiles.filter((p) => p.status === 'Active' && coveringToday.has(p.userId)).map((p) => p.userId),
+  toActive: profiles
+    .filter((p) => p.status === 'On Leave' && !coveringToday.has(p.userId) && endedRecently.has(p.userId))
+    .map((p) => p.userId),
+});
+
 module.exports = {
+  employmentFlips,
   STATUS,
   ALL_STATUSES,
   OPEN_STATUSES,

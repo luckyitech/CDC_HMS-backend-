@@ -214,9 +214,14 @@ describe('permissions: the HR Suite card and the new routes (revision C)', () =>
   test('every /api/leave settings route is gated on leave.policy and nothing wider', () => {
     const src = readRoute('leave.js');
     assert.match(src, /const POLICY = \['admin', 'leave\.policy'\];/);
+    // Phase 3 added the approvals inbox and requests to this file under their
+    // own gate (PARTICIPATE); every SETTINGS route stays leave.policy.
     const routes = src.split('\n').filter((l) => /^router\.(get|put|post|patch|delete)\(/.test(l));
-    assert.ok(routes.length >= 12);
-    for (const line of routes) assert.match(line, /authenticate, authorize\(\.\.\.POLICY\)/, line);
+    const approvals = routes.filter((l) => /'\/(inbox|requests)/.test(l));
+    const settings = routes.filter((l) => !approvals.includes(l));
+    assert.ok(settings.length >= 12);
+    for (const line of settings) assert.match(line, /authenticate, authorize\(\.\.\.POLICY\)/, line);
+    for (const line of approvals) assert.match(line, /authenticate, authorize\(\.\.\.PARTICIPATE\)/, line);
   });
   test('whoever may change HR settings may also read them (the Alerts tab)', () => {
     const src = readRoute('hr.js');

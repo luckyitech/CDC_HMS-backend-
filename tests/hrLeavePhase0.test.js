@@ -41,7 +41,9 @@ describe('the leave and HR-settings capabilities (D8)', () => {
   });
   test('users.write and config.write no longer gate leave decisions, entitlement or HR settings', () => {
     const staff = readRoute('staff.js');
-    assert.doesNotMatch(staff.match(/router\.patch\('\/:employeeId\/leaves\/:id'[^\n]*/)[0], /users\.write/);
+    // Phase 3 removed the staff-file decide route (deciding is /api/leave/requests/:id).
+    const decideRoute = staff.match(/router\.patch\('\/:employeeId\/leaves\/:id'[^\n]*/);
+    assert.ok(!decideRoute || !/users\.write/.test(decideRoute[0]));
     assert.doesNotMatch(staff.match(/router\.put\('\/:employeeId\/leave-balances'[^\n]*/)[0], /users\.write/);
     assert.doesNotMatch(readRoute('hr.js'), /authorize\([^)]*config\.write/);
     assert.doesNotMatch(readRoute('hr.js'), /\[[^\]]*'config\.write'/);

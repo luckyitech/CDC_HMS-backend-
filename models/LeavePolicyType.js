@@ -6,6 +6,7 @@ const { defineModel, DataTypes } = require('../utils/defineModel');
 //   countedAs   'working' (weekday values + holidays) or 'calendar' (every day)
 //   grant       'up_front' | 'monthly' (accrues) | 'per_event' | 'unlimited'
 //   docRule     'never' | 'always' | 'over_days' (docOverDays)
+//   proRate     pro-rate joiners/leavers for this type (yearly types only)
 //
 // DECIMAL columns arrive from mysql2 as strings — convert with Number() before
 // doing arithmetic (utils/leaveBalance does).
@@ -21,6 +22,10 @@ const LeavePolicyType = defineModel('LeavePolicyType', {
   docRule:         { type: DataTypes.ENUM('never', 'always', 'over_days'), allowNull: false, defaultValue: 'never' },
   docOverDays:     { type: DataTypes.DECIMAL(6, 2), allowNull: true },
   minNoticeDays:   { type: DataTypes.INTEGER, allowNull: true },
+  // Phase 1b (migration 20260928000007): pro-rate joiners and leavers for THIS
+  // type. Only meaningful for a yearly allowance (up_front / monthly); the
+  // rules store false for per-event and no-limit types.
+  proRate:         { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
   enabled:         { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: true },
 });
 

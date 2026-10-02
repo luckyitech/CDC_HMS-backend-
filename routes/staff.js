@@ -13,13 +13,12 @@ const staffDocumentController = require('../controllers/staffDocumentController'
 
 const EMPLOYMENT_STATUSES = ['Active', 'On Leave', 'Suspended', 'Resigned', 'Terminated'];
 const EMPLOYMENT_TYPES    = ['Full-time', 'Part-time', 'Contract', 'Consultant', 'Locum', 'Temporary'];
-const LEAVE_DECISIONS     = ['Approved', 'Rejected', 'Cancelled'];
 
-// Leave (B27, D8). Deciding: leave.approve or leave.manage — who may decide
-// WHICH request is checked inline (leaveController.canDecideLeaveFor: never
-// your own; leave.approve only when you were listed as an approver).
-// Entitlement: leave.policy. Both used to be users.write.
-const LEAVE_DECIDE = ['admin', 'leave.approve', 'leave.manage'];
+// Leave (B27, D8). Recording on someone's behalf: leave.manage (phase 3 —
+// deciding a request moved to /api/leave/requests/:id, where the approvers the
+// applicant chose decide it). Entitlement: leave.policy. Both used to be
+// users.write.
+const LEAVE_MANAGE = ['admin', 'leave.manage'];
 const LEAVE_POLICY = ['admin', 'leave.policy'];
 
 // Lets a staff member reach their own record, and anyone who may view staff
@@ -118,10 +117,10 @@ router.get('/:employeeId/activity', authenticate, authorize('admin', 'users.view
 
 router.get('/:employeeId/leaves', authenticate, findStaff, leaveViewOrSelf, leaveController.list);
 
-// Staff may request their own leave; it is created Pending. A leave.manage
-// holder's entry for someone else is approved immediately. The leave type is
-// checked against LeaveTypes in the controller (it is data since B27).
-router.post('/:employeeId/leaves', authenticate, findStaff, leaveViewOrSelf, [
+// Record on behalf (phase 3): leave.manage, approved on the spot. Never your
+// own file — the controller refuses; your own leave goes through My leave.
+// The leave type is checked against LeaveTypes in the controller.
+const RECORD_FIELDS = [
   body('leaveType').isString().trim().notEmpty().withMessage('Leave type is required'),
   body('startDate').isISO8601({ strict: true }).withMessage('Valid start date is required'),
   body('endDate').isISO8601({ strict: true }).withMessage('Valid end date is required'),
@@ -129,14 +128,11 @@ router.post('/:employeeId/leaves', authenticate, findStaff, leaveViewOrSelf, [
   body('endPart').optional().isIn(['full', 'am']).withMessage('Invalid end part'),
   body('reason').optional({ nullable: true }).isString(),
   body('excludeWeekends').optional().isBoolean(),
-  validate,
-], leaveController.create);
-
-router.patch('/:employeeId/leaves/:id', authenticate, authorize(...LEAVE_DECIDE), findStaff, [
-  body('status').isIn(LEAVE_DECISIONS).withMessage('Invalid decision'),
-  body('decisionNote').optional({ nullable: true }).isString(),
-  validate,
-], leaveController.decide);
+];
+router.post('/:employeeId/leaves/preview', authenticate, authorize(...LEAVE_MANAGE), findStaff, [
+  body('startPart').optional().isIn(['full', 'pm']), body('endPart').optional().isIn(['full', 'am']), validate,
+], leaveController.previewOnBehalf);
+router.post('/:employeeId/leaves', authenticate, authorize(...LEAVE_MANAGE), findStaff, [...RECORD_FIELDS, validate], leaveController.create);
 
 router.put('/:employeeId/leave-balances', authenticate, authorize(...LEAVE_POLICY), findStaff, [
   body('year').isInt({ min: 2000, max: 2100 }).toInt().withMessage('Invalid year'),

@@ -5,8 +5,11 @@ const { defineModel, DataTypes } = require('../utils/defineModel');
 // and new charge split) — read it through parseJsonColumn.
 //
 // Association-injected: leaveId (→ StaffLeaves), actorId (→ Users).
+//
+// 'document_added' (phase 2, migration 20260928000008): the applicant added a
+// supporting document they had owed.
 const EVENT_TYPES = ['submitted', 'approved', 'declined', 'info_requested', 'info_replied', 'charge_changed',
-  'withdrawn', 'cancel_requested', 'cancelled', 'recorded', 'notified'];
+  'withdrawn', 'cancel_requested', 'cancelled', 'recorded', 'notified', 'document_added'];
 
 const LeaveEvent = defineModel('LeaveEvent', {
   type: { type: DataTypes.ENUM(...EVENT_TYPES), allowNull: false },

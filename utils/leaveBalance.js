@@ -113,8 +113,8 @@ const carriedIn = ({ prevRemaining, carryCap, overrideCarried } = {}) => {
  * @param {number}  args.year
  * @param {string}  args.asOf              YYYY-MM-DD (today, from the caller)
  * @param {object[]} args.types            [{ key, name }]
- * @param {object}  args.policy            { carryExpiry:'MM-DD'|null, proRate, allowNegative, visibleTypes:[keys]|null }
- * @param {object}  args.policyTypes       { [key]: LeavePolicyType-like }
+ * @param {object}  args.policy            { carryExpiry:'MM-DD'|null, allowNegative, visibleTypes:[keys]|null }
+ * @param {object}  args.policyTypes       { [key]: LeavePolicyType-like } — each carries its own `proRate`
  * @param {object}  args.overrides         { [key]: { entitled, carriedOver } }
  * @param {object}  args.carried           { [key]: number } days carried in (from carriedIn())
  * @param {object[]} args.charges          [{ leaveType, days, startDate, state: 'taken'|'booked' }]
@@ -130,7 +130,8 @@ const summarise = ({
 
   return types.map(({ key, name }) => {
     const ent = entitlementFor({
-      policyType: policyTypes[key], override: overrides[key], employment, year, asOf, proRate: !!policy.proRate,
+      // Phase 1b: pro-rata is the TYPE's choice (Annual yes, Sick no).
+      policyType: policyTypes[key], override: overrides[key], employment, year, asOf, proRate: !!policyTypes[key]?.proRate,
     });
     // `carried` is already the carried-in figure (carriedIn() applied the cap);
     // HR's override for this year still wins over it.

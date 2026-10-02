@@ -85,9 +85,11 @@ const editability = ({ year, today, policy }) => {
 /**
  * Validate a policy body from the Leave settings screen.
  *
- * @param {object} body         { weekWeights, countingMode, allowNegative, proRate,
+ * @param {object} body         { weekWeights, countingMode, allowNegative,
  *                                carryExpiry, minNoticeDays, maxCadreAwayPerDay,
  *                                blockDoctorSlots, visibleTypes, types: { [key]: row } }
+ *                                A type row: { enabled, days, countedAs, grant, carryCap,
+ *                                proRate, halfDaysAllowed, docRule, docOverDays, minNoticeDays }
  * @param {object} ctx
  * @param {string[]} ctx.activeKeys   keys of active LeaveTypes
  * @returns {{ ok: boolean, errors: string[], value: object }}
@@ -121,7 +123,12 @@ const validatePolicy = (body = {}, { activeKeys = [] } = {}) => {
   if (!COUNTING_MODES.includes(value.countingMode)) errors.push('Counting must be the clinic week or each person\'s own hours.');
 
   value.allowNegative = !!body.allowNegative;
-  value.proRate = body.proRate === undefined ? true : !!body.proRate;
+  // Phase 1b: pro-rata is chosen per type (below). A body-level `proRate` is
+  // only a fallback for a type row that doesn't say — e.g. a copy of a policy
+  // saved before the per-type switch. value.proRate is then DERIVED ("at least
+  // one type is pro-rated") and kept on LeavePolicies so a rollback of
+  // migration 20260928000007 leaves the old code a sensible switch.
+  const proRateFallback = body.proRate === undefined ? false : !!body.proRate;
   value.blockDoctorSlots = body.blockDoctorSlots === undefined ? true : !!body.blockDoctorSlots;
   // D3: public holidays are never counted. The screen shows it locked on;
   // the API keeps it that way whatever is sent.
@@ -179,14 +186,19 @@ const validatePolicy = (body = {}, { activeKeys = [] } = {}) => {
     } else clean.days = round2(days);
 
     // Carry-over only means something for a yearly allowance.
+    const isYearly = clean.grant === 'up_front' || clean.grant === 'monthly';
     const cap = numOrNull(r.carryCap);
-    if (clean.grant === 'up_front' || clean.grant === 'monthly') {
+    if (isYearly) {
       if (cap === null) clean.carryCap = 0;
       else if (Number.isNaN(cap) || cap < 0 || cap > 366) errors.push(`${name}: carry cap must be between 0 and 366 days.`);
       else if (clean.days !== undefined && clean.days !== null && cap > clean.days) errors.push(`${name}: carry cap cannot be more than the yearly allowance.`);
       else clean.carryCap = round2(cap);
     } else clean.carryCap = 0;
 
+    // Pro-rata (phase 1b) — also only for a yearly allowance. Per-event types
+    // (maternity, paternity) are a statutory allowance per event; a no-limit
+    // type has nothing to divide.
+    clean.proRate = isYearly ? (r.proRate === undefined ? proRateFallback : !!r.proRate) : false;
     clean.halfDaysAllowed = !!r.halfDaysAllowed;
     if (clean.countedAs === 'calendar' && clean.halfDaysAllowed) {
       errors.push(`${name}: half days are not possible for leave counted in calendar days.`);
@@ -207,6 +219,7 @@ const validatePolicy = (body = {}, { activeKeys = [] } = {}) => {
 
     value.types[key] = clean;
   }
+  value.proRate = Object.values(value.types).some((t) => t.enabled && t.proRate);
 
   return { ok: errors.length === 0, errors, value };
 };

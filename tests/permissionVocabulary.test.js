@@ -59,7 +59,8 @@ const isPortal = (p) => p.startsWith('portal.');
  */
 const capsIn = (text) => {
   const caps = new Set();
-  for (const m of text.matchAll(/'([a-z0-9]+\.[a-z0-9]+)'/g)) {
+  // One or more dotted segments: 'leave.approve', 'hr.profile.approve' (B27 phase 4).
+  for (const m of text.matchAll(/'([a-z0-9]+(?:\.[a-z0-9]+)+)'/g)) {
     if (!m[1].endsWith('.js')) caps.add(m[1]);
   }
   for (const m of text.matchAll(/PERMISSIONS\.([A-Z0-9_]+)/g)) {

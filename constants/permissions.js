@@ -227,9 +227,21 @@ const PERMISSIONS = {
   //   HR_SETTINGS    HR Suite settings: check-in rules, entrance tag keys and
   //                  alert channels. Replaces config.write on those routes.
   //                  Tag keys are SECRETS — don't put this in a preset lightly.
-  // hr.self, hr.profile.approve and hr.credentials (spec §4) arrive with the
-  // phases whose routes they gate: a capability that gates nothing is a toggle
-  // that lies (tests/permissionVocabulary.test.js).
+  //   HR_SELF        (phase 2) one's OWN record: apply for leave, follow and
+  //                  withdraw one's own requests (routes/hrSelf.js, /api/hr/me).
+  //                  Every internal role holds it by role, like HR_CHECKIN, so
+  //                  withdrawing it stops one person using self-service.
+  //   HR_PROFILE_APPROVE (phase 4) decide colleagues' profile change requests
+  //                  — name, National ID, date of birth, licence and
+  //                  qualification details they may not edit themselves (D11).
+  //   HR_CREDENTIALS (phase 5, D12) verify colleagues' CPD (confirming or
+  //                  adjusting the points) and receive the clinic-wide licence
+  //                  and document expiry alerts. Ships with its first route
+  //                  (PATCH /api/hr/cpd/:id/verify) — a capability that gates
+  //                  nothing is a toggle that lies (tests/permissionVocabulary).
+  HR_SELF:       'hr.self',
+  HR_PROFILE_APPROVE: 'hr.profile.approve',
+  HR_CREDENTIALS: 'hr.credentials',
   LEAVE_APPROVE: 'leave.approve',
   LEAVE_MANAGE:  'leave.manage',
   LEAVE_POLICY:  'leave.policy',
@@ -422,6 +434,9 @@ const ADMIN_ACCESS_COVERS = [
   PERMISSIONS.HR_VIEW,
   PERMISSIONS.HR_WRITE,
   PERMISSIONS.HR_SETTINGS,
+  PERMISSIONS.HR_SELF,
+  PERMISSIONS.HR_PROFILE_APPROVE,
+  PERMISSIONS.HR_CREDENTIALS,
   PERMISSIONS.INPATIENT_ACCESS,
   PERMISSIONS.INPATIENT_WRITE,
   PERMISSIONS.LAB_VIEW,
@@ -634,6 +649,12 @@ const PERMISSION_GROUPS = [
       + 'Everyone can check in, see their own record and apply for their own leave; these decide '
       + 'who can see, approve and change everyone else\'s.',
     areas: [
+      { key: 'hr-self', name: 'My record', appliesIn: 'HR Suite → My leave',
+        description: 'Their own leave: applying, following a request, answering a question '
+          + 'from an approver, withdrawing it or asking to cancel it. Held by every member of '
+          + 'staff; withdraw it to stop one person using self-service.',
+        access: PERMISSIONS.HR_SELF, accessLabel: 'Can apply for and follow their own leave',
+        roleDefault: 'Everyone' },
       { key: 'hr-checkin', name: 'Check in and out', appliesIn: 'HR Suite, entrance tag',
         description: 'Tapping the entrance tag, remembering a phone, and seeing their own '
           + 'attendance and stars. Held by every member of staff; withdraw it to stop one '
@@ -664,6 +685,18 @@ const PERMISSION_GROUPS = [
         description: 'The yearly leave policy (days per type, how weekdays count, carry-over), '
           + 'public holidays, and each person\'s entitlement. Includes managing everyone\'s leave.',
         access: PERMISSIONS.LEAVE_POLICY, accessLabel: 'Can set the leave policy, holidays and entitlements',
+        roleDefault: 'Administrators' },
+      { key: 'hr-profile-approve', name: 'Profile change requests', appliesIn: 'HR Suite → Profile requests',
+        description: 'Decide what colleagues ask to change on their own record that they cannot edit '
+          + 'themselves — name, National ID, date of birth, licence and qualification details. '
+          + 'An approved change is written to their staff file and logged.',
+        access: PERMISSIONS.HR_PROFILE_APPROVE, accessLabel: 'Can approve or reject profile change requests',
+        roleDefault: 'Administrators' },
+      { key: 'hr-credentials', name: 'Verify CPD & credentials', appliesIn: 'HR Suite → Profile requests',
+        description: 'Verify colleagues\' continuing professional development (CPD) — confirming or '
+          + 'adjusting the points before it counts — and receive the clinic-wide licence and '
+          + 'staff-document expiry reminders.',
+        access: PERMISSIONS.HR_CREDENTIALS, accessLabel: 'Can verify CPD and receive credential expiry alerts',
         roleDefault: 'Administrators' },
       { key: 'hr-settings', name: 'HR Suite settings', appliesIn: 'HR Suite',
         description: 'Check-in rules, registering entrance tag keys, and which alerts go out '

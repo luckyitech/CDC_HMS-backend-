@@ -10,6 +10,8 @@ const hrDevices = require('../controllers/hrDevicesController');
 const hrWorkHours = require('../controllers/hrWorkHoursController');
 const hrTags = require('../controllers/hrTagsController');
 const hrSettings = require('../controllers/hrSettingsController');
+const hrProfile = require('../controllers/hrProfileController');
+const cpd = require('../controllers/cpdController');
 
 // =====================================================================
 // HR Suite (B21) — /api/hr
@@ -20,6 +22,9 @@ const hrSettings = require('../controllers/hrSettingsController');
 // VIEW / WRITE: the admin role, admin.access (via the bypass), or a grant.
 // SETTINGS: HR Suite settings and tag keys — hr.settings (B27, D8: every HR
 //          function its own capability). Was config.write until B27.
+// CREDENTIALS: verify CPD and receive clinic-wide expiry alerts — hr.credentials
+//          (B27 phase 5). Shipped with its first route so the vocabulary test
+//          stays green (a capability that gates nothing is a toggle that lies).
 // The vocabulary test derives ADMIN_ACCESS_COVERS from these lists.
 // =====================================================================
 const CHECKIN = ['doctor', 'staff', 'lab', 'nurse', 'admin', 'hr.checkin'];
@@ -29,6 +34,11 @@ const SETTINGS = ['admin', 'hr.settings'];
 // Reading the settings: whoever sees attendance, and whoever may change them
 // (B27 phase 1 — the Leave settings Alerts tab is hr.settings without hr.view).
 const SETTINGS_READ = ['admin', 'hr.view', 'hr.settings'];
+// Profile change requests (B27 phase 4, D11): deciding what colleagues ask to
+// change on their own record. Never your own — the controller refuses.
+const PROFILE_APPROVE = ['admin', 'hr.profile.approve'];
+// CPD verification and credential expiry alerts (B27 phase 5, D12).
+const CREDENTIALS = ['admin', 'hr.credentials'];
 
 // A tap is one request per person per event; 60 a minute per IP is generous
 // for a whole clinic behind one NAT, and caps a scripted flood.
@@ -100,5 +110,33 @@ router.put('/settings', authenticate, authorize(...SETTINGS), [
   body('positiveFeedback').optional().isBoolean().toBoolean(),
   validate,
 ], hrSettings.update);
+
+// ---- Profile change requests (B27 phase 4) ------------------------------------
+router.get('/change-requests', authenticate, authorize(...PROFILE_APPROVE), [
+  query('status').optional().isIn(['pending', 'decided']), validate,
+], hrProfile.hrList);
+router.get('/change-requests/count', authenticate, authorize(...PROFILE_APPROVE), hrProfile.hrCount);
+router.patch('/change-requests/:id', authenticate, authorize(...PROFILE_APPROVE), [
+  param('id').isInt({ min: 1 }),
+  body('decision').isIn(['approve', 'reject']).withMessage('Choose approve or reject'),
+  body('note').optional({ nullable: true }).isString(),
+  validate,
+], hrProfile.hrDecide);
+
+// ---- CPD verification (B27 phase 5, hr.credentials) ---------------------------
+router.get('/cpd', authenticate, authorize(...CREDENTIALS), [
+  query('status').optional().isIn(['pending', 'decided']),
+  query('year').optional().isInt({ min: 2020, max: 2100 }),
+  validate,
+], cpd.hrList);
+router.get('/cpd/count', authenticate, authorize(...CREDENTIALS), cpd.hrCount);
+router.patch('/cpd/:id/verify', authenticate, authorize(...CREDENTIALS), [
+  param('id').isInt({ min: 1 }),
+  body('decision').isIn(['verify', 'reject']).withMessage('Choose verify or reject'),
+  body('points').optional({ nullable: true }),
+  body('note').optional({ nullable: true }).isString(),
+  validate,
+], cpd.verify);
+router.get('/cpd/:id/certificate', authenticate, authorize(...CREDENTIALS), [param('id').isInt({ min: 1 }), validate], cpd.certificate);
 
 module.exports = router;

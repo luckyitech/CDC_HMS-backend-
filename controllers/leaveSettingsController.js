@@ -107,7 +107,7 @@ const policyView = async (year) => {
         isSystem: t.isSystem,
         missing: !r,
         row: r || {
-          days: null, countedAs: 'working', grant: 'unlimited', carryCap: 0, halfDaysAllowed: false,
+          days: null, countedAs: 'working', grant: 'unlimited', carryCap: 0, proRate: false, halfDaysAllowed: false,
           docRule: 'never', docOverDays: null, minNoticeDays: null, enabled: false,
         },
       };
@@ -125,7 +125,7 @@ const flatten = (year, p, typeNames) => {
   add('weekWeights', 'Weekday values', showWeek(p.weekWeights));
   add('countingMode', 'Counting', p.countingMode === 'own_hours' ? "Each person's own hours" : 'Clinic week');
   add('allowNegative', 'Allow negative balance', !!p.allowNegative);
-  add('proRate', 'Pro-rate joiners and leavers', !!p.proRate);
+  // Pro-rata is per type since phase 1b — logged on each type's line below.
   add('carryExpiry', 'Carried days expire', p.carryExpiry || 'never');
   add('minNoticeDays', 'Minimum notice (days)', p.minNoticeDays ?? 0);
   add('maxCadreAwayPerDay', 'Most of one cadre away per day', p.maxCadreAwayPerDay ?? 'no warning');
@@ -138,6 +138,7 @@ const flatten = (year, p, typeNames) => {
     add(`type.${key}.countedAs`, `${n} · counted as`, t.countedAs);
     add(`type.${key}.grant`, `${n} · granted`, t.grant);
     add(`type.${key}.carryCap`, `${n} · carry cap`, Number(t.carryCap || 0));
+    add(`type.${key}.proRate`, `${n} · pro-rata`, !!t.proRate);
     add(`type.${key}.halfDaysAllowed`, `${n} · half days`, !!t.halfDaysAllowed);
     add(`type.${key}.docRule`, `${n} · needs a document`, t.docRule === 'over_days' ? `over ${Number(t.docOverDays)} days` : t.docRule);
     add(`type.${key}.minNoticeDays`, `${n} · notice (days)`, t.minNoticeDays ?? 'clinic default');
@@ -192,7 +193,7 @@ const writePolicy = async ({ year, value, actorId, transaction }) => {
     if (!leaveTypeId) continue;
     const existing = await LeavePolicyType.findOne({ where: { policyId: row.id, leaveTypeId }, transaction });
     const data = {
-      days: t.days ?? null, countedAs: t.countedAs, grant: t.grant, carryCap: t.carryCap ?? 0,
+      days: t.days ?? null, countedAs: t.countedAs, grant: t.grant, carryCap: t.carryCap ?? 0, proRate: !!t.proRate,
       halfDaysAllowed: t.halfDaysAllowed, docRule: t.docRule, docOverDays: t.docOverDays ?? null,
       minNoticeDays: t.minNoticeDays ?? null, enabled: t.enabled,
     };
@@ -590,12 +591,12 @@ const entitlements = async (req, res) => {
       grant: policy?.types?.[t.key]?.grant || null,
       enabled: !!policy?.types?.[t.key]?.enabled,
       carryCap: policy?.types?.[t.key]?.carryCap ?? 0,
+      proRate: !!policy?.types?.[t.key]?.proRate,
     }));
     return success(res, {
       year,
       asOf,
       policyStatus: policy ? policy.status : 'none',
-      proRate: !!policy?.proRate,
       weekWeights: policy?.weekWeights || null,
       types,
       people,

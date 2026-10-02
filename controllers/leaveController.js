@@ -15,18 +15,23 @@
 //     (were users.write) — decision D8;
 //   - sick leave's type and reason are shown only to the person and to
 //     leave.manage holders (spec §11 — health data).
-// The application and approval wizards (phases 2–3) replace the screens that
-// call this; applyApprovalSideEffects / removeApprovalSideEffects are kept and
-// reused by them.
+// Phase 3 (Approve, 28 Sep 2026): the staff-file Leave tab now shows the same
+// overview as My leave (hrSelfLeaveController.buildOverview), recording is
+// "record on behalf" — leave.manage, never your own file, approved on the spot
+// — and deciding moved to the approvals inbox (/api/leave/requests/:id,
+// leaveApprovalController). The old PATCH decide route is gone.
+// applyApprovalSideEffects / removeApprovalSideEffects stay here and are reused.
 
 const { Op } = require('sequelize');
 const { success, error } = require('../utils/response');
-const { datesInRange, rangesOverlap } = require('../utils/leaveCalc');
-const { STATUS, OPEN_STATUSES, TAKEN_STATUSES } = require('../utils/leaveWorkflow');
+const { datesInRange } = require('../utils/leaveCalc');
+const { STATUS, TAKEN_STATUSES } = require('../utils/leaveWorkflow');
 const { PERMISSIONS, passesAdminGate } = require('../constants/permissions');
 const { clinicToday } = require('../utils/clinicTime');
 const { parseJsonColumn } = require('../utils/jsonColumn');
 const leaveService = require('../services/leaveService');
+const hrNotify = require('../services/hrNotify');
+const { buildOverview, evaluate, loadMe, fullName, rangeText, daysText, applicantLink } = require('./hrSelfLeaveController');
 const db = require('../models');
 const sequelize = require('../config/database');
 
@@ -96,56 +101,32 @@ const withDetail = () => [
 
 /**
  * GET /api/staff/:employeeId/leaves?year=2026
- * Balance for the year plus the full history.
+ * The person's leave for the year — the same overview My leave shows
+ * (balances, applications with where each stands, coming up).
  *
  * Authorization: the staff member themselves, leave.manage, or users.view
  * (leaveViewOrSelf in routes/staff.js). A users.view holder without
- * leave.manage sees someone else's sick leave as "Private" and no reasons.
+ * leave.manage sees someone else's sick leave as "Private", no reasons, and
+ * no sick balance.
  */
 const list = async (req, res) => {
-  const year = parseInt(req.query.year, 10) || new Date().getFullYear();
+  const today = clinicToday();
+  const year = parseInt(req.query.year, 10) || Number(today.slice(0, 4));
   const userId = req.staffUser.id;
   const redact = req.user.id !== userId && !canManageLeave(req.user);
 
   try {
-    const [leaves, picture] = await Promise.all([
-      StaffLeave.findAll({
-        where: { UserId: userId, startDate: { [Op.between]: [`${year}-01-01`, `${year}-12-31`] } },
-        include: withDetail(),
-        order: [['startDate', 'DESC']],
-      }),
-      leaveService.summaryFor(userId, year, clinicToday()),
-    ]);
-
-    const summary = picture.summary
-      .filter((s) => !(redact && leaveService.PRIVATE_TYPES.has(s.leaveType)))
-      .map((s) => ({
-        leaveType:   s.leaveType,
-        name:        s.name,
-        // Pre-B27 fields, same meaning. `entitled` is 0 (not null) for a
-        // type with no fixed allowance so the old screen keeps rendering.
-        entitled:    s.entitled ?? 0,
-        carriedOver: s.carriedIn,
-        taken:       s.taken,
-        remaining:   s.remaining,
-        // B27 additions.
-        unlimited:   s.unlimited,
-        booked:      s.booked,
-        available:   s.available,
-        source:      s.source,
-        proRated:    s.proRated,
-        carriedLeft: s.carriedLeft,
-        carriedLapsed: s.carriedLapsed,
-        carryExpires: s.carryExpires,
-        visible:     s.visible,
-      }));
-
-    return success(res, {
-      year,
-      policyPublished: !!picture.policy,
-      summary,
-      leaves: leaves.map((l) => formatLeave(l, { redact })),
-    });
+    const data = await buildOverview({ userId, year, today, redact });
+    if (!data) return error(res, 'Staff member not found', 404);
+    // What HR may record on this person's behalf: every type in use this year,
+    // including ones staff don't see (D10) — only for leave.manage.
+    let recordTypes = null;
+    if (canManageLeave(req.user) && req.user.id !== userId) {
+      const [types, policy] = await Promise.all([leaveService.listTypes(), leaveService.loadPolicy(year)]);
+      recordTypes = types.filter((t) => !policy || policy.types[t.key]?.enabled)
+        .map((t) => ({ key: t.key, name: t.name, halfDaysAllowed: policy ? !!policy.types[t.key]?.halfDaysAllowed : false }));
+    }
+    return success(res, { ...data, redacted: redact, recordTypes });
   } catch (err) {
     console.error('StaffLeave.list error:', err);
     return error(res, 'Failed to load leave', 500);
@@ -153,91 +134,94 @@ const list = async (req, res) => {
 };
 
 /**
- * POST /api/staff/:employeeId/leaves
- * Records leave. A leave.manage holder recording for someone else approves it
- * on the spot (recorded on their behalf); anyone else — including a manager
- * recording their OWN leave — creates a pending request.
+ * POST /api/staff/:employeeId/leaves/preview
+ * HR's calculator for recording on someone's behalf — the same judgement the
+ * applicant's wizard uses (hrSelfLeaveController.evaluate), in HR mode: hidden
+ * types allowed, no notice warning, a short balance warns instead of blocking.
+ */
+const previewOnBehalf = async (req, res) => {
+  try {
+    const staffUser = await loadMe(req.staffUser.id);
+    const result = await evaluate({ user: staffUser, body: req.body || {}, today: clinicToday(), asHr: true });
+    return success(res, result);
+  } catch (err) {
+    console.error('StaffLeave.previewOnBehalf error:', err);
+    return error(res, 'Failed to work out those dates', 500);
+  }
+};
+
+/**
+ * POST /api/staff/:employeeId/leaves — RECORD ON BEHALF (phase 3).
+ * HR records leave someone has taken or will take — a phone call from home, a
+ * hidden type — approved on the spot, with its charge, an event 'recorded' and
+ * the approval side effects. The person is told.
  *
- * Authorization: the staff member themselves, or users.view / leave.manage
- * (leaveViewOrSelf). Someone who may only VIEW another person's file can file
- * a request for them but not approve it.
+ * Authorization: leave.manage at the route. Inline: never your own file —
+ * your own leave goes through My leave and someone else decides it.
  */
 const create = async (req, res) => {
-  const { leaveType, startDate, endDate, reason, excludeWeekends } = req.body;
-  const startPart = req.body.startPart || 'full';
-  const endPart = req.body.endPart || 'full';
-  const user = req.staffUser;
+  const staffUser = req.staffUser;
+  if (staffUser.id === req.user.id) {
+    return error(res, 'Apply for your own leave through My leave — someone else decides it.', 403, { code: 'OWN_LEAVE' });
+  }
 
   try {
-    if (!(await leaveService.isActiveType(leaveType))) return error(res, 'Invalid leave type', 400);
-
-    const cost = await leaveService.costOf({
-      userId: user.id, leaveType, start: startDate, end: endDate, startPart, endPart, excludeWeekends,
-    });
-    if (!cost.ok) {
-      const messages = {
-        END_BEFORE_START: 'End date must be on or after the start date',
-        HALF_DAYS_NEED_POLICY: 'Half days can be recorded once this year\'s leave policy is published',
-        HALF_DAYS_NOT_ALLOWED: 'This leave type is taken in whole days',
-        BAD_PART: 'A single day cannot both start after lunch and end at lunch',
-      };
-      return error(res, messages[cost.error] || 'Invalid dates', 400, { code: cost.error });
-    }
-    if (cost.total <= 0) {
-      return error(res, 'Those dates are all days off or public holidays — there is nothing to take', 400, { code: 'ZERO_DAYS' });
+    const today = clinicToday();
+    const person = await loadMe(staffUser.id);
+    const result = await evaluate({ user: person, body: req.body || {}, today, asHr: true });
+    if (!result.ok) {
+      const first = result.errors[0];
+      return error(res, first.message, result.status, { code: first.code, errors: result.errors });
     }
 
-    // Two overlapping live requests would double-count against the balance
-    // and, for a doctor, produce duplicate blocks on the same day.
-    const nearby = await StaffLeave.findAll({
-      where: {
-        UserId: user.id,
-        status: { [Op.in]: [...OPEN_STATUSES, ...TAKEN_STATUSES] },
-        startDate: { [Op.lte]: endDate },
-        endDate:   { [Op.gte]: startDate },
-      },
-    });
-    const clash = nearby.find((l) => rangesOverlap(startDate, endDate, l.startDate, l.endDate));
-    if (clash) {
-      return error(
-        res,
-        `This overlaps existing ${clash.status.toLowerCase()} leave from ${clash.startDate} to ${clash.endDate}`,
-        409
-      );
-    }
-
-    const approveNow = canDecideLeaveFor(req.user, user);
+    const actor = await loadMe(req.user.id);
     const now = new Date();
+    const reason = typeof req.body.reason === 'string' && req.body.reason.trim() ? req.body.reason.trim().slice(0, 2000) : null;
 
     const leave = await sequelize.transaction(async (t) => {
       const row = await StaffLeave.create({
-        UserId:       user.id,
-        leaveType,
-        startDate,
-        endDate,
-        startPart,
-        endPart,
-        days:         cost.total,
-        reason:       reason || null,
-        status:       approveNow ? STATUS.APPROVED : STATUS.PENDING,
-        approvedById: approveNow ? req.user.id : null,
-        approvedAt:   approveNow ? now : null,
+        UserId:       staffUser.id,
+        leaveType:    result.leaveType,
+        startDate:    result.startDate,
+        endDate:      result.endDate,
+        startPart:    result.startPart,
+        endPart:      result.endPart,
+        days:         result.total,
+        reason,
+        status:       STATUS.APPROVED,
+        approvedById: req.user.id,
+        approvedAt:   now,
         submittedAt:  now,
-        policyYear:   cost.policyYear,
-        breakdown:    cost.breakdown,
-        returnDate:   cost.returnDate,
-        onBehalf:     approveNow,
+        policyYear:   result.policyYear,
+        breakdown:    {
+          ...(result.breakdown || {}),
+          usedPolicy: result.usedPolicy,
+          backdated: result.warnings.some((w) => w.code === 'BACKDATED'),
+          documentNeeded: false,
+          clashNames: [],
+        },
+        returnDate:   result.returnDate,
+        onBehalf:     true,
         createdBy:    req.user.id,
       }, { transaction: t });
 
-      await leaveService.setCharges(row.id, [{ leaveType, days: cost.total }], req.user.id, t);
-      await leaveService.recordEvent(row.id, req.user.id, approveNow ? 'recorded' : 'submitted', {
-        data: { status: row.status, days: cost.total, leaveType },
+      await leaveService.setCharges(row.id, [{ leaveType: result.leaveType, days: result.total }], req.user.id, t);
+      await leaveService.recordEvent(row.id, req.user.id, 'recorded', {
+        data: { status: row.status, days: result.total, leaveType: result.leaveType },
       }, t);
       return row;
     });
 
-    if (approveNow) await applyApprovalSideEffects(leave, user, req.user);
+    const policy = await leaveService.loadPolicy(result.policyYear);
+    await applyApprovalSideEffects(leave, person, actor, { blockDoctorSlots: policy ? policy.blockDoctorSlots : true });
+
+    await hrNotify.notify('leave_decided', {
+      recipients: [staffUser.id],
+      title: 'HR recorded leave for you',
+      body: `${rangeText(result.startDate, result.endDate)} · ${daysText(result.total)}. Open the HMS to see it.`,
+      link: applicantLink(leave.id),
+      actorName: fullName(actor),
+    });
 
     await leave.reload({ include: withDetail() });
     return success(res, formatLeave(leave), 201);
@@ -257,8 +241,10 @@ const create = async (req, res) => {
  * weekends and holidays included — a block on a day off does no harm, and a
  * doctor who works a Saturday clinic by arrangement must not be bookable.)
  */
-const applyApprovalSideEffects = async (leave, staffUser, actingUser) => {
-  if (staffUser.role === 'doctor') {
+const applyApprovalSideEffects = async (leave, staffUser, actingUser, { blockDoctorSlots = true } = {}) => {
+  // The policy's "Block a doctor's slots on approval" (phase 1). Before any
+  // policy is published the old behaviour — always block — stands.
+  if (staffUser.role === 'doctor' && blockDoctorSlots) {
     const blockIds = [];
 
     for (const date of datesInRange(leave.startDate, leave.endDate)) {
@@ -290,69 +276,6 @@ const applyApprovalSideEffects = async (leave, staffUser, actingUser) => {
       { employmentStatus: 'On Leave' },
       { where: { UserId: staffUser.id, employmentStatus: 'Active' } }
     );
-  }
-};
-
-/**
- * PATCH /api/staff/:employeeId/leaves/:id
- * Approve, decline (Rejected) or cancel.
- *
- * Authorization: leave.approve or leave.manage at the route. Inline:
- *   - approving / declining needs canDecideLeaveFor — never your own leave;
- *   - only a request still waiting can be approved or declined;
- *   - cancelling APPROVED leave needs leave.manage; cancelling a request still
- *     waiting is allowed to the applicant or anyone who could decide it.
- */
-const decide = async (req, res) => {
-  const { status, decisionNote } = req.body;
-  const staffUser = req.staffUser;
-
-  try {
-    const leave = await StaffLeave.findOne({ where: { id: req.params.id, UserId: staffUser.id } });
-    if (!leave) return error(res, 'Leave record not found', 404);
-
-    const wasTaken = TAKEN_STATUSES.includes(leave.status);
-    const isOpen = OPEN_STATUSES.includes(leave.status);
-    const isOwn = req.user.id === staffUser.id;
-
-    if (status === STATUS.CANCELLED) {
-      if (!isOpen && !wasTaken) return error(res, `This leave is already ${leave.status.toLowerCase()}`, 400);
-      if (wasTaken && !canManageLeave(req.user)) return error(res, 'Only someone who manages leave can cancel approved leave', 403);
-      if (isOpen && !isOwn && !canDecideLeaveFor(req.user, staffUser)) return error(res, 'You cannot cancel this request', 403);
-    } else {
-      if (!canDecideLeaveFor(req.user, staffUser)) {
-        return error(res, isOwn ? 'You cannot approve or decline your own leave' : 'You cannot decide this leave', 403);
-      }
-      if (!isOpen) return error(res, `This leave is already ${leave.status.toLowerCase()}`, 400);
-    }
-
-    await sequelize.transaction(async (t) => {
-      await leave.update({
-        status,
-        decisionNote: decisionNote || null,
-        approvedById: status === STATUS.APPROVED ? req.user.id : leave.approvedById,
-        approvedAt:   status === STATUS.APPROVED ? new Date() : leave.approvedAt,
-        updatedBy:    req.user.id,
-      }, { transaction: t });
-
-      if (status === STATUS.CANCELLED || status === STATUS.REJECTED) {
-        await leaveService.releaseCharges(leave.id, t);
-      }
-      const eventType = { Approved: 'approved', Rejected: 'declined', Cancelled: 'cancelled' }[status];
-      await leaveService.recordEvent(leave.id, req.user.id, eventType, { note: decisionNote || null }, t);
-    });
-
-    if (status === STATUS.APPROVED) {
-      await applyApprovalSideEffects(leave, staffUser, req.user);
-    } else if (wasTaken) {
-      await removeApprovalSideEffects(leave, staffUser);
-    }
-
-    await leave.reload({ include: withDetail() });
-    return success(res, formatLeave(leave));
-  } catch (err) {
-    console.error('StaffLeave.decide error:', err);
-    return error(res, 'Failed to update leave', 500);
   }
 };
 
@@ -432,8 +355,8 @@ const setBalances = async (req, res) => {
 
 module.exports = {
   list,
+  previewOnBehalf,
   create,
-  decide,
   setBalances,
   applyApprovalSideEffects,
   removeApprovalSideEffects,
