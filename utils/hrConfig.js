@@ -45,6 +45,8 @@ const K = {
 const ALERT_EVENTS = [
   'leave_to_approve', 'leave_decided', 'leave_info_requested', 'leave_info_replied',
   'leave_acknowledge', 'leave_cancelled', 'change_request_decided', 'expiry_self', 'expiry_hr',
+  // 2 Oct 2026 (B27 debt): tell hr.profile.approve holders a change request is waiting.
+  'change_request_new',
 ];
 const ALERT_CHANNELS = ['bell', 'email', 'whatsapp'];
 const DEFAULT_ALERTS = Object.fromEntries(ALERT_EVENTS.map((e) => [e, { bell: true, email: true, whatsapp: false }]));

@@ -6,6 +6,8 @@ const { authenticate, authorize } = require('../middleware/auth');
 const selfLeave = require('../controllers/hrSelfLeaveController');
 const selfProfile = require('../controllers/hrProfileController');
 const cpd = require('../controllers/cpdController');
+const staffPhoto = require('../controllers/staffPhotoController');
+const { handlePhotoUpload } = require('../middleware/uploadStaffPhoto');
 
 // =====================================================================
 // HR Suite — my own record (B27 phase 2) — /api/hr/me
@@ -24,6 +26,7 @@ const cpd = require('../controllers/cpdController');
 const SELF = ['doctor', 'staff', 'lab', 'nurse', 'admin', 'hr.self'];
 
 const ID = param('id').isInt({ min: 1 }).withMessage('Unknown request');
+
 const PARTS = [
   body('startPart').optional().isIn(['full', 'pm']).withMessage('Invalid start'),
   body('endPart').optional().isIn(['full', 'am']).withMessage('Invalid end'),
@@ -78,6 +81,7 @@ router.get('/change-requests', authenticate, authorize(...SELF), selfProfile.myR
 router.post('/change-requests', authenticate, authorize(...SELF), [
   body('changes').isArray({ min: 1, max: 12 }).withMessage('Nothing to change'),
   body('reason').optional({ nullable: true }).isString(),   // required — the controller says so (REASON_REQUIRED)
+  body('documentId').optional({ nullable: true, checkFalsy: true }).isInt({ min: 1 }).withMessage('Unknown document'),
   validate,
 ], selfProfile.createRequests);
 router.post('/change-requests/:id/withdraw', authenticate, authorize(...SELF), [ID, validate], selfProfile.withdrawRequest);
@@ -112,5 +116,10 @@ router.delete('/cpd/:id', authenticate, authorize(...SELF), [ID, validate], cpd.
 
 // ---- People to choose as approvers / acknowledgers -----------------------------
 router.get('/approvers', authenticate, authorize(...SELF), selfLeave.approvers);
+
+// ---- Photo (2 Oct 2026; D11 — saved directly, logged) ------------------------
+router.get('/photo', authenticate, authorize(...SELF), staffPhoto.selfGet);
+router.put('/photo', authenticate, authorize(...SELF), handlePhotoUpload, staffPhoto.selfPut);
+router.delete('/photo', authenticate, authorize(...SELF), staffPhoto.selfDelete);
 
 module.exports = router;

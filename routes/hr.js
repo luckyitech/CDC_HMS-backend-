@@ -116,6 +116,7 @@ router.get('/change-requests', authenticate, authorize(...PROFILE_APPROVE), [
   query('status').optional().isIn(['pending', 'decided']), validate,
 ], hrProfile.hrList);
 router.get('/change-requests/count', authenticate, authorize(...PROFILE_APPROVE), hrProfile.hrCount);
+router.get('/change-requests/:id/attachment', authenticate, authorize(...PROFILE_APPROVE), [param('id').isInt({ min: 1 }), validate], hrProfile.hrAttachment);
 router.patch('/change-requests/:id', authenticate, authorize(...PROFILE_APPROVE), [
   param('id').isInt({ min: 1 }),
   body('decision').isIn(['approve', 'reject']).withMessage('Choose approve or reject'),

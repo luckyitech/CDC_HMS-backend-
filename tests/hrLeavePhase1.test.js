@@ -217,7 +217,8 @@ describe('permissions: the HR Suite card and the new routes (revision C)', () =>
     // Phase 3 added the approvals inbox and requests to this file under their
     // own gate (PARTICIPATE); every SETTINGS route stays leave.policy.
     const routes = src.split('\n').filter((l) => /^router\.(get|put|post|patch|delete)\(/.test(l));
-    const approvals = routes.filter((l) => /'\/(inbox|requests)/.test(l));
+    // Phase 5 added the team calendar under the same PARTICIPATE gate.
+    const approvals = routes.filter((l) => /'\/(inbox|requests|calendar)/.test(l));
     const settings = routes.filter((l) => !approvals.includes(l));
     assert.ok(settings.length >= 12);
     for (const line of settings) assert.match(line, /authenticate, authorize\(\.\.\.POLICY\)/, line);

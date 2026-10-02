@@ -22,6 +22,8 @@ const { OPEN_STATUSES } = require('../utils/leaveWorkflow');
 const { parseJsonColumn } = require('../utils/jsonColumn');
 const { formatStaff } = require('./staffController');
 const hrNotify = require('../services/hrNotify');
+const { PERMISSIONS } = require('../constants/permissions');
+const { resolveStoredFile } = require('../utils/staffDocumentStorage');
 const leaveService = require('../services/leaveService');
 const db = require('../models');
 const sequelize = require('../config/database');
@@ -187,9 +189,14 @@ const myRequests = async (req, res) => {
 };
 
 /**
- * POST /api/hr/me/change-requests { changes: [{ field, newValue }], reason }
- * (A supporting copy — a new ID card, a licence — is uploaded to the person's
- * Documents tab; the table's attachmentDocumentId is left for a later link.)
+ * POST /api/hr/me/change-requests { changes: [{ field, newValue }], reason, documentId? }
+ * A supporting copy (a new ID card, a licence) is uploaded to the person's
+ * Documents tab first and offered here as documentId — it must be their own,
+ * live document (B27 debt fix, 2 Oct 2026). HR opens it from Profile requests
+ * through GET /api/hr/change-requests/:id/attachment.
+ * Holders of hr.profile.approve are told a request is waiting
+ * (change_request_new) — the notice names the person and the field, never
+ * the values.
  * One request per field; a field already waiting is refused (PENDING_EXISTS)
  * so HR never decides two answers to one question.
  */
@@ -203,6 +210,14 @@ const createRequests = async (req, res) => {
     const profile = await loadMine(req.user.id);
     if (!profile || profile.deletedAt) return error(res, 'You don\'t have a staff file yet', 404, { code: 'NO_STAFF_FILE' });
     const user = profile.User;
+
+    let attachmentDocumentId = null;
+    const offered = req.body?.documentId;
+    if (offered !== undefined && offered !== null && offered !== '') {
+      const doc = await StaffDocument.findOne({ where: { id: Number(offered), UserId: user.id, isArchived: false } });
+      if (!doc) return error(res, 'That document is not one of yours.', 400, { code: 'BAD_DOCUMENT' });
+      attachmentDocumentId = doc.id;
+    }
 
     const rows = [];
     const seen = new Set();
@@ -225,8 +240,18 @@ const createRequests = async (req, res) => {
     }
 
     await StaffChangeRequest.bulkCreate(rows.map((r) => ({
-      UserId: user.id, field: r.field, oldValue: r.oldValue, newValue: r.newValue, reason, status: 'pending',
+      UserId: user.id, field: r.field, oldValue: r.oldValue, newValue: r.newValue, reason, status: 'pending', attachmentDocumentId,
     })));
+
+    const deciders = (await hrNotify.holdersOf(PERMISSIONS.HR_PROFILE_APPROVE)).filter((id) => id !== user.id);
+    const labels = rows.map((r) => (REQUESTABLE[r.field]?.label || r.field).toLowerCase());
+    await hrNotify.notify('change_request_new', {
+      recipients: deciders,
+      title: `${fullName(user)} asked to change their ${labels.join(', ')}`,
+      body: 'Open Profile requests to decide.',
+      link: '/hr/requests',
+      actorName: fullName(user),
+    });
 
     const all = await StaffChangeRequest.findAll({ where: { UserId: user.id }, include: requestIncludes(), order: [['createdAt', 'DESC']], limit: 100 });
     return success(res, all.map(requestShape), 201);
@@ -348,6 +373,26 @@ const hrDecide = async (req, res) => {
   }
 };
 
+/**
+ * GET /api/hr/change-requests/:id/attachment — the supporting document on a
+ * change request, for hr.profile.approve (the route gate). Streams from
+ * private/ like the leave attachment and the CPD certificate do.
+ */
+const hrAttachment = async (req, res) => {
+  try {
+    const row = await StaffChangeRequest.findByPk(Number(req.params.id), { include: [{ model: StaffDocument, as: 'attachment' }] });
+    if (!row || !row.attachment || row.attachment.isArchived || row.attachment.UserId !== row.UserId) {
+      return error(res, 'No document on this request', 404);
+    }
+    const resolved = resolveStoredFile(row.attachment.filePath);
+    if (!resolved) return error(res, 'File is missing from the server', 404);
+    return res.download(resolved, row.attachment.fileName);
+  } catch (err) {
+    console.error('ChangeRequest.attachment error:', err);
+    return error(res, 'Failed to load the document', 500);
+  }
+};
+
 module.exports = {
   me,
   saveContact,
@@ -357,6 +402,7 @@ module.exports = {
   hrList,
   hrCount,
   hrDecide,
+  hrAttachment,
   // tests
   selfShape,
   ACCESS_KEYS,

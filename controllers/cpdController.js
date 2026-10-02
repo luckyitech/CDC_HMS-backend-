@@ -81,30 +81,53 @@ const targetFor = async (role) => {
 // Self — hr.self
 // ---------------------------------------------------------------------------
 
+/**
+ * One person's CPD for a calendar year + the summary. ONE builder for My
+ * profile (self) and the HR staff file's Credentials tab (read-only).
+ */
+const yearFor = async (person, yearParam) => {
+  const year = parseInt(yearParam, 10) || Number(clinicToday().slice(0, 4));
+  const rows = await CpdActivity.findAll({
+    where: {
+      UserId: person.id,
+      status: { [Op.ne]: 'archived' },
+      date: { [Op.between]: [`${year}-01-01`, `${year}-12-31`] },
+    },
+    include: selfIncludes(),
+    order: [['date', 'DESC'], ['id', 'DESC']],
+  });
+  const target = await targetFor(person.role);
+  return {
+    year,
+    categories: CPD_CATEGORIES,
+    activities: rows.map(shape),
+    summary: summariseCpd(rows.map((r) => ({ status: r.status, points: r.points })), target),
+  };
+};
+
 /** GET /api/hr/me/cpd?year= — my CPD for a calendar year + the summary. */
 const list = async (req, res) => {
   try {
-    const today = clinicToday();
-    const year = parseInt(req.query.year, 10) || Number(today.slice(0, 4));
-    const rows = await CpdActivity.findAll({
-      where: {
-        UserId: req.user.id,
-        status: { [Op.ne]: 'archived' },
-        date: { [Op.between]: [`${year}-01-01`, `${year}-12-31`] },
-      },
-      include: selfIncludes(),
-      order: [['date', 'DESC'], ['id', 'DESC']],
-    });
-    const target = await targetFor(req.user.role);
-    return success(res, {
-      year,
-      categories: CPD_CATEGORIES,
-      activities: rows.map(shape),
-      summary: summariseCpd(rows.map((r) => ({ status: r.status, points: r.points })), target),
-    });
+    return success(res, await yearFor(req.user, req.query.year));
   } catch (err) {
     console.error('Cpd.list error:', err);
     return error(res, 'Failed to load your CPD', 500);
+  }
+};
+
+/**
+ * GET /api/staff/:employeeId/cpd?year= — READ-ONLY, on the staff file's
+ * Credentials tab (B27 debt fix, 2 Oct 2026). Same gate as the rest of the
+ * staff file (users.view or the person themselves — adminOrSelf at the route).
+ * CPD is a professional record, not health data. Verifying stays on
+ * /hr/requests (hr.credentials); the certificate is on the Documents tab.
+ */
+const staffList = async (req, res) => {
+  try {
+    return success(res, await yearFor(req.staffUser, req.query.year));
+  } catch (err) {
+    console.error('Cpd.staffList error:', err);
+    return error(res, 'Failed to load CPD', 500);
   }
 };
 
@@ -263,7 +286,7 @@ const certificate = async (req, res) => {
 };
 
 module.exports = {
-  list, create, update, remove,
+  list, staffList, create, update, remove,
   hrList, hrCount, verify, certificate,
   // tests
   shape,

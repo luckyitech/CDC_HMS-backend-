@@ -44,7 +44,8 @@ describe('the leave and HR-settings capabilities (D8)', () => {
     // Phase 3 removed the staff-file decide route (deciding is /api/leave/requests/:id).
     const decideRoute = staff.match(/router\.patch\('\/:employeeId\/leaves\/:id'[^\n]*/);
     assert.ok(!decideRoute || !/users\.write/.test(decideRoute[0]));
-    assert.doesNotMatch(staff.match(/router\.put\('\/:employeeId\/leave-balances'[^\n]*/)[0], /users\.write/);
+    // The staff-file entitlement route was retired (2 Oct 2026) — overrides live on Leave settings only.
+    assert.doesNotMatch(staff, /router\.put\('\/:employeeId\/leave-balances'/);
     assert.doesNotMatch(readRoute('hr.js'), /authorize\([^)]*config\.write/);
     assert.doesNotMatch(readRoute('hr.js'), /\[[^\]]*'config\.write'/);
   });

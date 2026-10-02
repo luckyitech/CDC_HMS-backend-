@@ -32,7 +32,9 @@ const SECRET_USER_COLUMNS = ['password', 'resetToken', 'resetTokenExpires'];
 const USER_FIELDS = ['firstName', 'lastName', 'email', 'phone'];
 
 const PROFILE_FIELDS = [
-  'dateOfBirth', 'gender', 'idNumber', 'photoUrl',
+  // photoUrl is NOT here (2 Oct 2026): it holds a stored file name and is
+  // written only by the photo routes (services/staffPhoto).
+  'dateOfBirth', 'gender', 'idNumber',
   'address', 'city', 'emergencyContact',
   'position', 'department', 'ward', 'employmentType', 'shift',
   'startDate', 'endDate', 'reportsToId',
@@ -83,7 +85,9 @@ const formatStaff = (profile, user) => {
     dateOfBirth: profile.dateOfBirth,
     gender:      profile.gender,
     idNumber:    profile.idNumber,
-    photoUrl:    profile.photoUrl,
+    // The stored name never leaves the server; screens read the photo through
+    // GET /api/staff/:employeeId/photo (or /api/hr/me/photo).
+    hasPhoto:    !!profile.photoUrl,
 
     address:          profile.address,
     city:             profile.city,

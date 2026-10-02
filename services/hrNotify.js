@@ -21,6 +21,7 @@ const { Op } = require('sequelize');
 const db = require('../models');
 const { getHrConfig, ALERT_EVENTS } = require('../utils/hrConfig');
 const { sendHrNoticeEmail } = require('../utils/emailService');
+const { passesAdminGate, INTERNAL_ROLES } = require('../constants/permissions');
 
 const { Notification, User } = db;
 
@@ -89,4 +90,18 @@ const notify = async (event, { recipients = [], title, body = null, link = null,
   return result;
 };
 
-module.exports = { notify };
+/**
+ * The active internal staff who hold a capability (admin.access bypass and
+ * withdrawals honoured, exactly as the route gate decides). ONE lookup for
+ * every "tell whoever handles X" alert: clinic-wide expiry (hr.credentials),
+ * new profile change requests (hr.profile.approve).
+ */
+const holdersOf = async (capability) => {
+  const staff = await User.findAll({
+    where: { isActive: true, role: { [Op.in]: INTERNAL_ROLES } },
+    attributes: ['id', 'role', 'permissions', 'deniedPermissions', 'staffType'],
+  });
+  return staff.filter((u) => passesAdminGate(u, capability)).map((u) => u.id);
+};
+
+module.exports = { notify, holdersOf };

@@ -7,8 +7,12 @@
 // approval that completes the request LOCKS the split (D7, revision B). Every
 // change is a LeaveEvent the applicant sees.
 //
-// Who may open a request: the applicant, anyone on it, or leave.manage. Anyone
-// else gets 404 — not 403 — so the existence of someone's leave is not leaked.
+// Who may open a request: the applicant, anyone on it, or leave.manage — and,
+// READ-ONLY and redacted, a users.view holder opening it from the staff file
+// (B27 debt fix, 2 Oct 2026: they already see the row on the staff file's Leave
+// tab; they never see a private type, a reason, a note or the document, and
+// cannot act). Anyone else gets 404 — not 403 — so the existence of someone's
+// leave is not leaked.
 // Who sees a private type (sick) and its reason: the applicant, the approvers
 // and leave.manage. Acknowledgers see "Private" (health data, spec §11).
 //
@@ -46,6 +50,7 @@ const { StaffLeave, LeaveParticipant, StaffDocument, StaffProfile, User } = db;
 const num = (v) => (v === null || v === undefined || v === '' ? null : Number(v));
 const round2 = (n) => Math.round(n * 100) / 100;
 const canManage = (user) => passesAdminGate(user, PERMISSIONS.LEAVE_MANAGE);
+const canViewStaff = (user) => passesAdminGate(user, PERMISSIONS.USERS_VIEW);
 const holdsApprove = (user) => passesAdminGate(user, PERMISSIONS.LEAVE_APPROVE);
 
 const LIVE = [...OPEN_STATUSES, ...TAKEN_STATUSES];
@@ -79,7 +84,9 @@ const standing = (leave, user) => {
     isAcknowledger: participant?.kind === KIND.ACKNOWLEDGER,
     manage,
     legacy,
-    mayOpen: isApplicant || !!participant || manage,
+    // users.view: read-only and redacted (see the header).
+    viewOnly: !(isApplicant || participant || manage) && canViewStaff(user),
+    mayOpen: isApplicant || !!participant || manage || canViewStaff(user),
     // Health data: applicant, approvers and leave.manage see a private type.
     redact: !(isApplicant || isApprover || manage),
   };
@@ -213,6 +220,7 @@ const detailFor = async (leave, user) => {
       canSplit,
       isLast,
       canCancel,
+      viewOnly: st.viewOnly,
       canOpenDocument: !st.redact,
     },
   };
@@ -353,6 +361,45 @@ const sameSplit = (a, b) => {
 };
 
 /**
+ * Is this proposed split acceptable from this user? ONE judgement, used by
+ * decide (with an approval) and saveSplit (without one).
+ * → { split } (null = unchanged) or { fail: { message, status, extra } }
+ */
+const checkSplit = async (leave, charges, user, policy) => {
+  const current = (leave.charges || []).filter((c) => c.status === 'active').map((c) => ({ leaveType: c.leaveType, days: num(c.days) }));
+  const wanted = charges.map((c) => ({ leaveType: String(c?.leaveType || ''), days: Number(c?.days) }));
+  if (sameSplit(wanted, current)) return { split: null };
+  if (!holdsApprove(user)) {
+    return { fail: { message: 'Only someone who can approve leave chooses which balance it comes off', status: 403, extra: { code: 'NO_SPLIT_RIGHT' } } };
+  }
+  const enabled = new Set((await chargeableTypes(policy)).map((t) => t.key));
+  const valid = chargeValid(wanted, num(leave.days), enabled);
+  if (!valid.ok) {
+    const message = {
+      SUM_MISMATCH: `The days must add up to ${num(leave.days)}`,
+      TYPE_NOT_ENABLED: 'One of those balances is not in use this year',
+      DUPLICATE_TYPE: 'Each balance once',
+      BAD_DAYS: 'Days must be more than 0, in quarter days',
+    }[valid.error] || 'Check the split';
+    return { fail: { message, status: 400, extra: { code: valid.error } } };
+  }
+  if (policy && !policy.allowNegative) {
+    // Take this request's own current charges back out before testing the new split.
+    const year = Number(String(leave.startDate).slice(0, 4));
+    const picture = await leaveService.summaryFor(leave.UserId, year, clinicToday(), { policy });
+    const summary = picture.summary.map((s) => {
+      const here = current.find((c) => c.leaveType === s.leaveType)?.days || 0;
+      return { ...s, remainingAfterBooked: s.remainingAfterBooked === null ? null : round2(s.remainingAfterBooked + here) };
+    });
+    const bal = checkBalance({ summary, charges: wanted, allowNegative: false });
+    if (!bal.ok) {
+      return { fail: { message: 'That split takes a balance below zero', status: 409, extra: { code: 'INSUFFICIENT_BALANCE', short: bal.short } } };
+    }
+  }
+  return { split: wanted };
+};
+
+/**
  * POST /api/leave/requests/:id/decide
  * { decision: 'approve'|'decline'|'info', note, charges?: [{ leaveType, days }] }
  */
@@ -379,41 +426,12 @@ const decide = async (req, res) => {
     const result = applyEvent({ status: leave.status, participants, event: { type: decision, actorId: req.user.id } });
 
     // The split (revision B): only an approver holding leave.approve, only when approving.
-    const current = (leave.charges || []).filter((c) => c.status === 'active').map((c) => ({ leaveType: c.leaveType, days: num(c.days) }));
-    let split = null;
     const policy = await leaveService.loadPolicy(Number(String(leave.startDate).slice(0, 4)));
+    let split = null;
     if (Array.isArray(req.body?.charges) && decision === 'approve') {
-      const wanted = req.body.charges.map((c) => ({ leaveType: String(c?.leaveType || ''), days: Number(c?.days) }));
-      if (!sameSplit(wanted, current)) {
-        if (!holdsApprove(req.user)) {
-          return error(res, 'Only someone who can approve leave chooses which balance it comes off', 403, { code: 'NO_SPLIT_RIGHT' });
-        }
-        const enabled = new Set((await chargeableTypes(policy)).map((t) => t.key));
-        const valid = chargeValid(wanted, num(leave.days), enabled);
-        if (!valid.ok) {
-          const msg = {
-            SUM_MISMATCH: `The days must add up to ${num(leave.days)}`,
-            TYPE_NOT_ENABLED: 'One of those balances is not in use this year',
-            DUPLICATE_TYPE: 'Each balance once',
-            BAD_DAYS: 'Days must be more than 0, in quarter days',
-          }[valid.error] || 'Check the split';
-          return error(res, msg, 400, { code: valid.error });
-        }
-        if (policy && !policy.allowNegative) {
-          // Take this request's own current charges back out before testing the new split.
-          const year = Number(String(leave.startDate).slice(0, 4));
-          const picture = await leaveService.summaryFor(leave.UserId, year, clinicToday(), { policy });
-          const summary = picture.summary.map((s) => {
-            const here = current.find((c) => c.leaveType === s.leaveType)?.days || 0;
-            return { ...s, remainingAfterBooked: s.remainingAfterBooked === null ? null : round2(s.remainingAfterBooked + here) };
-          });
-          const bal = checkBalance({ summary, charges: wanted, allowNegative: false });
-          if (!bal.ok) {
-            return error(res, 'That split takes a balance below zero', 409, { code: 'INSUFFICIENT_BALANCE', short: bal.short });
-          }
-        }
-        split = wanted;
-      }
+      const checked = await checkSplit(leave, req.body.charges, req.user, policy);
+      if (checked.fail) return error(res, checked.fail.message, checked.fail.status, checked.fail.extra);
+      split = checked.split;
     }
 
     const now = new Date();
@@ -483,6 +501,48 @@ const decide = async (req, res) => {
     if (err instanceof WorkflowError) return error(res, err.message, WORKFLOW_HTTP[err.code] || 400, { code: err.code });
     console.error('LeaveApproval.decide error:', err);
     return error(res, 'Failed to record the decision', 500);
+  }
+};
+
+/**
+ * POST /api/leave/requests/:id/split { charges: [{ leaveType, days }] }
+ * Save which balance(s) the days come off WITHOUT deciding (B27 debt fix,
+ * 2 Oct 2026). Same right as changing it while approving: a listed approver
+ * holding leave.approve who may still decide (canSplit). It does NOT lock —
+ * only the approval that completes the request locks the split — and a later
+ * approver may change it again. Logged as charge_changed, which the applicant
+ * sees on the timeline.
+ */
+const saveSplit = async (req, res) => {
+  if (!Array.isArray(req.body?.charges) || !req.body.charges.length) {
+    return error(res, 'Say which balance(s) the days come off', 400, { code: 'BAD_DAYS' });
+  }
+  try {
+    const leave = await loadRequest(req.params.id);
+    if (!leave) return error(res, 'Leave request not found', 404);
+    const st = standing(leave, req.user);
+    if (!st.mayOpen) return error(res, 'Leave request not found', 404);
+    if (st.isApplicant) return error(res, 'You cannot decide your own leave', 403, { code: 'OWN_LEAVE' });
+    const detail = await detailFor(leave, req.user);
+    if (!detail.me.canSplit) {
+      return error(res, 'Only an approver who can approve leave, before approving, changes the split', 403, { code: 'NO_SPLIT_RIGHT' });
+    }
+    const policy = await leaveService.loadPolicy(Number(String(leave.startDate).slice(0, 4)));
+    const checked = await checkSplit(leave, req.body.charges, req.user, policy);
+    if (checked.fail) return error(res, checked.fail.message, checked.fail.status, checked.fail.extra);
+    if (!checked.split) return error(res, 'That is already the split', 400, { code: 'NO_CHANGE' });
+
+    await sequelize.transaction(async (t) => {
+      const before = await leaveService.setCharges(leave.id, checked.split, req.user.id, t);
+      await leaveService.recordEvent(leave.id, req.user.id, 'charge_changed', { data: { from: before, to: checked.split } }, t);
+      await leave.update({ updatedBy: req.user.id }, { transaction: t });
+    });
+
+    const fresh = await loadRequest(leave.id);
+    return success(res, await detailFor(fresh, req.user));
+  } catch (err) {
+    console.error('LeaveApproval.saveSplit error:', err);
+    return error(res, 'Failed to save the split', 500);
   }
 };
 
@@ -568,6 +628,7 @@ module.exports = {
   inboxCount,
   getRequest,
   decide,
+  saveSplit,
   cancel,
   attachment,
   // tests

@@ -132,7 +132,8 @@ describe('routes/hrSelf.js — no route names a person', () => {
   test('only /leave…, /leave/:id…, /approvers and (phase 4) my profile — never a person', () => {
     assert.ok(routes.length >= 9);
     for (const r of routes) {
-      assert.match(r, /^\/(leave(\/preview|\/:id(\/(reply|withdraw|cancel-request|attachment))?)?|approvers|contact|change-requests(\/:id\/withdraw)?)?$/, r);
+      // phase 5 added /cpd and /cpd/:id; 2 Oct 2026 added /photo — all own-record.
+      assert.match(r, /^\/(leave(\/preview|\/:id(\/(reply|withdraw|cancel-request|attachment))?)?|approvers|contact|change-requests(\/:id\/withdraw)?|cpd(\/:id)?|photo)?$/, r);
     }
   });
   test('every route is behind authorize(...SELF)', () => {

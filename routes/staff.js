@@ -7,9 +7,12 @@ const { PERMISSIONS, passesAdminGate } = require('../constants/permissions');
 const { error } = require('../utils/response');
 const findStaff = require('../middleware/findStaff');
 const uploadStaffDocument = require('../middleware/uploadStaffDocument');
+const { handlePhotoUpload } = require('../middleware/uploadStaffPhoto');
+const staffPhotoController = require('../controllers/staffPhotoController');
 const staffController = require('../controllers/staffController');
 const leaveController = require('../controllers/leaveController');
 const staffDocumentController = require('../controllers/staffDocumentController');
+const cpdController = require('../controllers/cpdController');
 
 const EMPLOYMENT_STATUSES = ['Active', 'On Leave', 'Suspended', 'Resigned', 'Terminated'];
 const EMPLOYMENT_TYPES    = ['Full-time', 'Part-time', 'Contract', 'Consultant', 'Locum', 'Temporary'];
@@ -19,7 +22,6 @@ const EMPLOYMENT_TYPES    = ['Full-time', 'Part-time', 'Contract', 'Consultant',
 // applicant chose decide it). Entitlement: leave.policy. Both used to be
 // users.write.
 const LEAVE_MANAGE = ['admin', 'leave.manage'];
-const LEAVE_POLICY = ['admin', 'leave.policy'];
 
 // Lets a staff member reach their own record, and anyone who may view staff
 // reach any record. Declared here rather than inside the controllers so the
@@ -48,6 +50,14 @@ const leaveViewOrSelf = (req, res, next) => {
 
 // Multer rejects an oversized or wrong-typed file by throwing, which Express
 // surfaces as a generic 500. This turns it into the message the admin needs.
+// A face is wanted wherever a name is shown: the staff directory (hr.view) as
+// well as the staff file itself (users.view or the person) — 2 Oct 2026.
+const photoViewer = (req, res, next) => {
+  if (passesAdminGate(req.user, PERMISSIONS.HR_VIEW)) return next();
+  return adminOrSelf(req, res, next);
+};
+
+
 const handleUpload = (req, res, next) =>
   uploadStaffDocument.single('file')(req, res, (err) => {
     if (!err) return next();
@@ -134,19 +144,22 @@ router.post('/:employeeId/leaves/preview', authenticate, authorize(...LEAVE_MANA
 ], leaveController.previewOnBehalf);
 router.post('/:employeeId/leaves', authenticate, authorize(...LEAVE_MANAGE), findStaff, [...RECORD_FIELDS, validate], leaveController.create);
 
-router.put('/:employeeId/leave-balances', authenticate, authorize(...LEAVE_POLICY), findStaff, [
-  body('year').isInt({ min: 2000, max: 2100 }).toInt().withMessage('Invalid year'),
-  body('balances').isArray({ min: 1 }).withMessage('Balances must be a non-empty list'),
-  body('balances.*.leaveType').isString().trim().notEmpty().withMessage('Invalid leave type'),
-  body('balances.*.entitled').optional({ nullable: true }).isFloat({ min: 0, max: 366 }).withMessage('Entitlement must be between 0 and 366 days'),
-  body('balances.*.carriedOver').optional({ nullable: true }).isFloat({ min: 0, max: 366 }).withMessage('Carried-over days must be between 0 and 366'),
-  body('reason').optional({ nullable: true }).isString(),
-  validate,
-], leaveController.setBalances);
+// PUT /:employeeId/leave-balances was RETIRED (2 Oct 2026, B27 debt): no screen
+// has used it since phase 3. Entitlement overrides are written in ONE place —
+// Leave settings → Staff entitlements (PUT /api/leave/entitlements/:userId/:year,
+// leaveService.saveOverrides).
 
 // ============================================================
 // Documents
 // ============================================================
+
+// Photo (2 Oct 2026).
+router.get('/:employeeId/photo', authenticate, findStaff, photoViewer, staffPhotoController.staffGet);
+router.put('/:employeeId/photo', authenticate, authorize('admin', 'users.write'), findStaff, handlePhotoUpload, staffPhotoController.staffPut);
+router.delete('/:employeeId/photo', authenticate, authorize('admin', 'users.write'), findStaff, staffPhotoController.staffDelete);
+
+// CPD, read-only, for the staff file's Credentials tab (B27 debt fix).
+router.get('/:employeeId/cpd', authenticate, findStaff, adminOrSelf, cpdController.staffList);
 
 router.get('/:employeeId/documents', authenticate, findStaff, adminOrSelf, staffDocumentController.list);
 

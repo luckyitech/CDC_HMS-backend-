@@ -157,8 +157,8 @@ describe('route gates', () => {
     assert.match(hr, /router\.get\('\/change-requests\/count', authenticate, authorize\(\.\.\.PROFILE_APPROVE\)/);
     assert.match(hr, /router\.patch\('\/change-requests\/:id', authenticate, authorize\(\.\.\.PROFILE_APPROVE\)/);
   });
-  test('there is no route that uploads or opens an attachment on a change request', () => {
-    assert.doesNotMatch(hr, /change-requests\/:id\/attachment/);
+  test('a change request\'s attachment opens only for hr.profile.approve (added 2 Oct 2026)', () => {
+    assert.match(hr, /router\.get\('\/change-requests\/:id\/attachment', authenticate, authorize\(\.\.\.PROFILE_APPROVE\)/);
     assert.doesNotMatch(self, /change-requests\/:id\/attachment/);
   });
 });

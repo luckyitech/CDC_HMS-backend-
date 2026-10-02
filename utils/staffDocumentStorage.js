@@ -17,6 +17,14 @@ const path = require('path');
 const ROOT = path.join(__dirname, '..');
 const STAFF_DOCUMENT_DIR = path.join(ROOT, 'private', 'staff-documents');
 const LEGACY_STAFF_DOCUMENT_DIR = path.join(ROOT, 'uploads', 'staff-documents');
+// Staff photos (2 Oct 2026) — private too, read only through the authenticated
+// photo routes (GET /api/staff/:employeeId/photo, GET /api/hr/me/photo).
+const STAFF_PHOTO_DIR = path.join(ROOT, 'private', 'staff-photos');
+
+const ensureStaffPhotoDir = () => {
+  if (!fs.existsSync(STAFF_PHOTO_DIR)) fs.mkdirSync(STAFF_PHOTO_DIR, { recursive: true });
+  return STAFF_PHOTO_DIR;
+};
 
 const ensureStaffDocumentDir = () => {
   if (!fs.existsSync(STAFF_DOCUMENT_DIR)) fs.mkdirSync(STAFF_DOCUMENT_DIR, { recursive: true });
@@ -38,21 +46,28 @@ const storedName = (filePath) => String(filePath || '').split(/[\\/]/).pop();
  * legacy folder is a fallback for a file the move missed (still only served
  * through this authenticated route — the static path is blocked).
  */
-const resolveStoredFile = (filePath) => {
+const resolveIn = (dirs, filePath) => {
   const name = storedName(filePath);
   if (!name || name === '.' || name === '..') return null;
-  for (const dir of [STAFF_DOCUMENT_DIR, LEGACY_STAFF_DOCUMENT_DIR]) {
+  for (const dir of dirs) {
     const candidate = path.join(dir, name);
     if (path.dirname(candidate) !== dir) continue;
     if (fs.existsSync(candidate)) return candidate;
   }
   return null;
 };
+const resolveStoredFile = (filePath) => resolveIn([STAFF_DOCUMENT_DIR, LEGACY_STAFF_DOCUMENT_DIR], filePath);
+
+/** A stored staff photo (StaffProfile.photoUrl holds the stored NAME), or null. */
+const resolveStoredPhoto = (name) => resolveIn([STAFF_PHOTO_DIR], name);
 
 module.exports = {
   STAFF_DOCUMENT_DIR,
   LEGACY_STAFF_DOCUMENT_DIR,
+  STAFF_PHOTO_DIR,
   ensureStaffDocumentDir,
+  ensureStaffPhotoDir,
+  resolveStoredPhoto,
   storedName,
   resolveStoredFile,
 };

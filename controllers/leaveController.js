@@ -35,7 +35,7 @@ const { buildOverview, evaluate, loadMe, fullName, rangeText, daysText, applican
 const db = require('../models');
 const sequelize = require('../config/database');
 
-const { StaffLeave, LeaveBalance, StaffProfile, DoctorBlock, User } = db;
+const { StaffLeave, StaffProfile, DoctorBlock, User } = db;
 
 // The seven original types. Kept as an export for older callers; the live list
 // is LeaveTypes (leaveService.listTypes).
@@ -316,48 +316,10 @@ const removeApprovalSideEffects = async (leave, staffUser) => {
   }
 };
 
-/**
- * PUT /api/staff/:employeeId/leave-balances
- * Sets this person's entitlement for a year — the per-person override on top
- * of the clinic policy (D1). Accepts a list so a whole year is configured in
- * one call.
- *
- * A figure equal to the published policy's is stored as "follow the policy"
- * (null), so saving the whole list from the staff file does not freeze every
- * type at today's policy number. Every save carries a reason (default
- * "Set on the staff file").
- *
- * Authorization: leave.policy (was users.write).
- */
-const setBalances = async (req, res) => {
-  const { year, balances } = req.body;
-  const reason = typeof req.body.reason === 'string' && req.body.reason.trim()
-    ? req.body.reason.trim().slice(0, 2000)
-    : 'Set on the staff file';
-  const userId = req.staffUser.id;
-
-  try {
-    const known = new Set((await leaveService.listTypes({ includeRetired: true })).map((t) => t.key));
-    const bad = balances.find((b) => !known.has(b.leaveType));
-    if (bad) return error(res, `Unknown leave type: ${bad.leaveType}`, 400);
-
-    await leaveService.saveOverrides({ userId, year, balances, reason, actorId: req.user.id, policyMode: 'published' });
-
-    const saved = await LeaveBalance.findAll({ where: { UserId: userId, year } });
-    return success(res, saved.map((b) => ({
-      leaveType: b.leaveType, year: b.year, entitled: num(b.entitled), carriedOver: num(b.carriedOver), reason: b.reason,
-    })));
-  } catch (err) {
-    console.error('LeaveBalance.set error:', err);
-    return error(res, 'Failed to save leave entitlement', 500);
-  }
-};
-
 module.exports = {
   list,
   previewOnBehalf,
   create,
-  setBalances,
   applyApprovalSideEffects,
   removeApprovalSideEffects,
   LEAVE_TYPES,

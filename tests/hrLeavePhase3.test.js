@@ -79,7 +79,9 @@ describe('deciding', () => {
   });
   test('only a leave.approve holder changes the split, and only when approving', () => {
     assert.match(src, /Array\.isArray\(req\.body\?\.charges\) && decision === 'approve'/);
-    assert.match(src, /if \(!holdsApprove\(req\.user\)\)[\s\S]{0,160}NO_SPLIT_RIGHT/);
+    // One judgement (checkSplit, 2 Oct 2026) — shared by decide and save-split-only.
+    assert.match(src, /if \(!holdsApprove\(user\)\)[\s\S]{0,160}NO_SPLIT_RIGHT/);
+    assert.match(src, /const saveSplit = [\s\S]{0,900}if \(!detail\.me\.canSplit\)/);
   });
   test('a doctor\'s slots are blocked only when the year\'s policy says so', () => {
     assert.match(src, /blockDoctorSlots: policy \? policy\.blockDoctorSlots : true/);

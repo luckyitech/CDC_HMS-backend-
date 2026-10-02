@@ -100,6 +100,10 @@ router.post('/requests/:id/decide', authenticate, authorize(...PARTICIPATE), [
   body('charges').optional().isArray({ min: 1, max: 8 }),
   validate,
 ], leaveApproval.decide);
+// Save the split without deciding (B27 debt fix) — canSplit is checked in the controller.
+router.post('/requests/:id/split', authenticate, authorize(...PARTICIPATE), [
+  REQUEST, body('charges').isArray({ min: 1, max: 8 }).withMessage('Say which balance(s) the days come off'), validate,
+], leaveApproval.saveSplit);
 router.post('/requests/:id/cancel', authenticate, authorize(...PARTICIPATE), [
   REQUEST, body('note').optional({ nullable: true }).isString(), validate,
 ], leaveApproval.cancel);

@@ -22,8 +22,9 @@ const db = require('../models');
 const { clinicToday } = require('../utils/clinicTime');
 const { daysUntil, dueThreshold, isoDay } = require('../utils/expiry');
 const { getHrConfig } = require('../utils/hrConfig');
-const { PERMISSIONS, passesAdminGate, INTERNAL_ROLES } = require('../constants/permissions');
+const { PERMISSIONS } = require('../constants/permissions');
 const hrNotify = require('./hrNotify');
+const { isHealthDocument } = require('../utils/hrAccess');
 
 const { User, StaffProfile, StaffDocument, ExpiryReminder } = db;
 
@@ -35,13 +36,7 @@ const inDays = (daysLeft) => (daysLeft <= 0 ? 'today' : `in ${daysLeft} day${day
 let lastRunDate = null;
 
 /** The user ids that should receive clinic-wide expiry alerts (hr.credentials). */
-const credentialHolders = async () => {
-  const staff = await User.findAll({
-    where: { isActive: true, role: { [Op.in]: INTERNAL_ROLES } },
-    attributes: ['id', 'role', 'permissions', 'deniedPermissions', 'staffType'],
-  });
-  return staff.filter((u) => passesAdminGate(u, PERMISSIONS.HR_CREDENTIALS)).map((u) => u.id);
-};
+const credentialHolders = () => hrNotify.holdersOf(PERMISSIONS.HR_CREDENTIALS);
 
 /**
  * One item due for a reminder: record it (once) and notify. Returns 1 if it
@@ -124,7 +119,8 @@ const runExpiryReminders = async (now = new Date()) => {
       kind: 'document', refId: d.id, threshold, expiryDate, daysLeft, ownerId: d.UserId,
       selfTitle: `Your ${label} expires ${inDays(daysLeft)}`,
       selfLink: '/hr/me?tab=documents',
-      hrTitle: `${fullName(d.User)}'s ${label} expires ${inDays(daysLeft)}`,
+      // A health document (sick note) is never named to HR recipients.
+      hrTitle: `${fullName(d.User)}'s ${isHealthDocument(d) ? 'document' : label} expires ${inDays(daysLeft)}`,
       hrLink: '/hr/requests',
       hrRecipients,
     });
