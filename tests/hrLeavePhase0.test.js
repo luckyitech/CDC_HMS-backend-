@@ -5,6 +5,7 @@ const path = require('node:path');
 
 const { PERMISSIONS, ADMIN_ACCESS_COVERS, PERMISSION_GROUPS, passesAdminGate, hasPermission } = require('../constants/permissions');
 const { authorize } = require('../middleware/auth');
+require('./_noScopeRows');
 const { leaveViewOrSelf } = require('../routes/staff');
 const { canDecideLeaveFor, canManageLeave, formatLeave } = require('../controllers/leaveController');
 const { storedName, resolveStoredFile, STAFF_DOCUMENT_DIR, LEGACY_STAFF_DOCUMENT_DIR } = require('../utils/staffDocumentStorage');

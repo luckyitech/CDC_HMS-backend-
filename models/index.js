@@ -23,6 +23,9 @@ const StaffChangeRequest  = require('./StaffChangeRequest');
 const CpdActivity         = require('./CpdActivity');
 const ExpiryReminder      = require('./ExpiryReminder');
 const StaffRequiredApprover = require('./StaffRequiredApprover');
+const Department          = require('./Department');
+const Position            = require('./Position');
+const PermissionScope     = require('./PermissionScope');
 const StaffDocument       = require('./StaffDocument');
 const Patient             = require('./Patient');
 const PatientVital        = require('./PatientVital');
@@ -174,6 +177,17 @@ StaffChangeRequest.belongsTo(StaffDocument, { as: 'attachment', foreignKey: 'att
 User.hasMany(StaffRequiredApprover, { as: 'requiredApprovers' });
 StaffRequiredApprover.belongsTo(User);
 StaffRequiredApprover.belongsTo(User, { as: 'approver', foreignKey: 'approverId' });
+
+// --- Departments, positions and HR control scopes (HR Tier 3 Phase 1) ---
+// Aliased: StaffProfile already has `department` / `position` text columns (the
+// display copy), so the associations cannot take those names.
+Department.hasMany(StaffProfile, { as: 'staffProfiles', foreignKey: 'departmentId' });
+StaffProfile.belongsTo(Department, { as: 'departmentEntry', foreignKey: 'departmentId' });
+Position.hasMany(StaffProfile, { as: 'staffProfiles', foreignKey: 'positionId' });
+StaffProfile.belongsTo(Position, { as: 'positionEntry', foreignKey: 'positionId' });
+User.hasMany(PermissionScope, { as: 'permissionScopes' });
+PermissionScope.belongsTo(User);
+PermissionScope.belongsTo(Department, { foreignKey: 'departmentId' });
 
 User.hasMany(CpdActivity);
 CpdActivity.belongsTo(User);
@@ -629,6 +643,9 @@ const db = {
   CpdActivity,
   ExpiryReminder,
   StaffRequiredApprover,
+  Department,
+  Position,
+  PermissionScope,
   StaffDocument,
   Patient,
   PatientVital,

@@ -20,7 +20,11 @@ const {
   displayedPermissions, ADMIN_ACCESS_COVERS,
   reconcilePermissionLists, defaultPermissionsFor, PRESET_EXCLUDED,
   BUNDLES, IMPLIED_BY, HR_DELEGABLE, HR_NOT_DELEGABLE, passesAdminGate,
+  SCOPABLE, canEditPermissions,
 } = require('../constants/permissions');
+const hrScope = require('../services/hrScope');
+const staffLists = require('../services/staffLists');
+const { cleanSpec, sameSpec, scopeOfSpec, withinScope } = require('../utils/hrScope');
 
 /**
  * What a "Grant HR permissions" holder (who is NOT a permissions
@@ -84,7 +88,9 @@ const PROFILE_FIELDS = [
   // written only by the photo routes (services/staffPhoto).
   'dateOfBirth', 'gender', 'idNumber',
   'address', 'city', 'emergencyContact',
-  'position', 'department', 'ward', 'employmentType', 'shift',
+  // position / department are NOT here: they go through the lists
+  // (services/staffLists.resolveListFields, HR Tier 3 Phase 1).
+  'ward', 'employmentType', 'shift',
   'startDate', 'endDate', 'reportsToId',
   'licenseNumber', 'licenseBody', 'licenseExpiry', 'specialty',
   'qualification', 'institution', 'yearsExperience',
@@ -143,6 +149,9 @@ const formatStaff = (profile, user) => {
 
     position:         profile.position,
     department:       profile.department,
+    // HR Tier 3 Phase 1: the list entries (the two above are their display copy).
+    positionId:       profile.positionId ?? null,
+    departmentId:     profile.departmentId ?? null,
     ward:             profile.ward,
     employmentType:   profile.employmentType,
     shift:            profile.shift,
@@ -241,7 +250,14 @@ const list = async (req, res) => {
 
   try {
     const profileWhere = {};
-    if (department) profileWhere.department = department;
+    if (department) {
+      if (/^\d+$/.test(String(department))) profileWhere.departmentId = Number(department);
+      else profileWhere.department = department;
+    }
+    // HR Tier 3 Phase 1: a department-limited "Open staff files" holder lists
+    // only their people (and nobody without a department — P-8).
+    const inScope = await hrScope.userIdsInScope(req.user, PERMISSIONS.STAFF_VIEW);
+    if (inScope !== null) profileWhere.UserId = { [Op.in]: inScope };
     if (ward)       profileWhere.ward = ward;
     if (status)     profileWhere.employmentStatus = status;
     if (includeArchived !== 'true') profileWhere.deletedAt = null;
@@ -277,9 +293,29 @@ const list = async (req, res) => {
  *
  * Authorization: Admin, or the staff member themselves
  */
+/**
+ * The access-internals a permissions editor needs on top of formatStaff: the
+ * person's stored department scopes, and — for a department-limited HR
+ * grantor — how far the caller's own scope reaches on each control (L-8), so
+ * the scope picker offers nothing wider. Only for permissions editors.
+ */
+const scopeExtras = async (caller, staffUser) => {
+  if (!canEditPermissions(caller)) return {};
+  const extras = { permissionScopes: await hrScope.scopesFor(staffUser.id) };
+  if (!canGrantPermissions(caller)) {
+    const mine = {};
+    for (const cap of SCOPABLE) {
+      const sc = await hrScope.scopeOf(caller, cap);
+      mine[cap] = { all: sc.all, departmentIds: [...sc.departmentIds] };
+    }
+    extras.grantorScopes = mine;
+  }
+  return extras;
+};
+
 const getOne = async (req, res) => {
   try {
-    return success(res, formatStaff(req.staffProfile, req.staffUser));
+    return success(res, { ...formatStaff(req.staffProfile, req.staffUser), ...(await scopeExtras(req.user, req.staffUser)) });
   } catch (err) {
     console.error('Get staff error:', err.message);
     return error(res, 'Failed to load staff member', 500);
@@ -324,6 +360,30 @@ const update = async (req, res) => {
         : updates[field];
     });
 
+    // Department and position come from the lists (HR Tier 3 Phase 1, T3-2a).
+    let listFields;
+    try {
+      listFields = await staffLists.resolveListFields(
+        { departmentId: updates.departmentId, department: updates.department, positionId: updates.positionId, position: updates.position },
+        { current: profile },
+      );
+    } catch (e) {
+      if (e instanceof staffLists.ListError) return error(res, e.message, e.status, { code: e.code });
+      throw e;
+    }
+    // L-7: a department-limited editor may only move someone INTO a department
+    // inside their own scope — never out of their reach by accident.
+    if (listFields.departmentId !== undefined
+        && Number(listFields.departmentId || 0) !== Number(profile.departmentId || 0)) {
+      const scope = await hrScope.scopeOf(req.user, PERMISSIONS.STAFF_EDIT);
+      if (!scope.all && !(listFields.departmentId && scope.departmentIds.has(Number(listFields.departmentId)))) {
+        return error(res, 'You can only move someone into a department you look after', 403, { code: 'OUT_OF_SCOPE' });
+      }
+    }
+    Object.entries(listFields).forEach(([k, v]) => {
+      if ((profile[k] ?? null) !== (v ?? null)) profileUpdates[k] = v;
+    });
+
     if (!Object.keys(userUpdates).length && !Object.keys(profileUpdates).length) {
       return error(res, 'No changes supplied', 400);
     }
@@ -331,7 +391,7 @@ const update = async (req, res) => {
     const userBefore = {};
     USER_FIELDS.forEach((f) => { userBefore[f] = user[f]; });
     const profileBefore = {};
-    PROFILE_FIELDS.forEach((f) => { profileBefore[f] = profile[f]; });
+    [...PROFILE_FIELDS, 'department', 'departmentId', 'position', 'positionId'].forEach((f) => { profileBefore[f] = profile[f]; });
 
     transaction = await sequelize.transaction();
 
@@ -595,7 +655,33 @@ const updatePermissions = async (req, res) => {
     // (the route let them in through permissionsEditor): HR controls only.
     // Compared on the NORMALISED stored lists so a legacy name (hr.write) on
     // the row does not read as a change the caller made.
+    // ---- Department scopes (HR Tier 3 Phase 1) ----
+    // `scopes` is optional: { capability: { kind: 'all'|'own'|'departments', departmentIds } }.
+    // Omitted controls keep their stored scope; a control no longer ticked
+    // directly loses its scope rows (a scope belongs to a grant).
+    const storedScopes = await hrScope.scopesFor(user.id);
+    const scopeChanges = {};
+    const sentScopes = req.body.scopes && typeof req.body.scopes === 'object' ? req.body.scopes : {};
+    for (const [cap, raw] of Object.entries(sentScopes)) {
+      if (!SCOPABLE.includes(cap)) return error(res, `${cap} cannot be limited to departments`, 400, { code: 'NOT_SCOPABLE' });
+      const spec = cleanSpec(raw);
+      if (!spec) return error(res, 'Choose all staff, their own department, or at least one department', 400, { code: 'BAD_SCOPE' });
+      if (spec.kind === 'departments') {
+        const found = await db.Department.count({ where: { id: { [Op.in]: spec.departmentIds } } });
+        if (found !== spec.departmentIds.length) return error(res, 'Unknown department', 400, { code: 'BAD_SCOPE' });
+      }
+      if (!after.permissions.includes(cap)) continue;   // only a direct grant carries a scope
+      if (!sameSpec(spec, storedScopes[cap])) scopeChanges[cap] = spec;
+    }
+    for (const cap of SCOPABLE) {
+      if (!after.permissions.includes(cap) && storedScopes[cap].kind !== 'all') scopeChanges[cap] = { kind: 'all' };
+    }
+
     if (!canGrantPermissions(req.user)) {
+      // L-8: a department-limited HR grantor works only on their people…
+      if (!(await hrScope.canActOn(req.user, PERMISSIONS.HR_GRANT, user.id))) {
+        return error(res, 'Staff member not found', 404);
+      }
       const was = reconcilePermissionLists(toList(user.permissions), toList(user.deniedPermissions));
       const refusal = hrGrantRefusal({
         caller: req.user,
@@ -604,9 +690,36 @@ const updatePermissions = async (req, res) => {
         after,
       });
       if (refusal) return error(res, refusal.message, refusal.code, refusal.extra);
+      // …and gives nothing wider than they hold. Checked for every control that
+      // is newly granted or whose scope changes (a scope change is a change).
+      const targetDept = await hrScope.departmentOf(user.id);
+      const touched = new Set([
+        ...after.permissions.filter((p) => !was.granted.includes(p) && SCOPABLE.includes(p)),
+        ...Object.keys(scopeChanges).filter((p) => after.permissions.includes(p)),
+      ]);
+      const tooWide = [];
+      for (const cap of touched) {
+        if (!HR_DELEGABLE.includes(cap) || HR_NOT_DELEGABLE.includes(cap)) {
+          return error(res, 'You can only change HR Suite permissions', 403, { code: 'NOT_DELEGABLE', capabilities: [cap] });
+        }
+        const given = scopeOfSpec(scopeChanges[cap] || storedScopes[cap], targetDept);
+        if (!withinScope(given, await hrScope.scopeOf(req.user, cap))) tooWide.push(cap);
+      }
+      if (tooWide.length) {
+        return error(res, 'You can only give a control as widely as you hold it yourself', 403, { code: 'NOT_WITHIN_SCOPE', capabilities: tooWide });
+      }
     }
 
-    await user.update(after);
+    // One transaction only when scopes change too; a grants-only save stays the
+    // single update it always was.
+    if (Object.keys(scopeChanges).length) {
+      await sequelize.transaction(async (transaction) => {
+        await user.update(after, { transaction });
+        await hrScope.saveScopes(user.id, scopeChanges, req.user.id, { transaction });
+      });
+    } else {
+      await user.update(after);
+    }
 
     // Granting and withdrawing are both auditable admin actions, so both sides
     // go into the same UserEditLog row the Activity tab already reads — who,
@@ -615,7 +728,15 @@ const updatePermissions = async (req, res) => {
       targetUserId: user.id,
       editedBy:     req.user.id,
       editedByName: req.user.name || `user #${req.user.id}`,
-      changes:      buildChanges(before, after),
+      changes:      {
+        ...buildChanges(before, after),
+        ...(Object.keys(scopeChanges).length ? {
+          scopes: {
+            from: Object.fromEntries(Object.keys(scopeChanges).map((c) => [c, storedScopes[c]])),
+            to: scopeChanges,
+          },
+        } : {}),
+      },
       editedAt:     new Date(),
     });
 
@@ -626,7 +747,7 @@ const updatePermissions = async (req, res) => {
     }
 
     await user.reload();
-    return success(res, formatStaff(req.staffProfile, user));
+    return success(res, { ...formatStaff(req.staffProfile, user), ...(await scopeExtras(req.user, user)) });
   } catch (err) {
     console.error('Update staff permissions error:', err.message);
     return error(res, 'Failed to update permissions', 500);
@@ -659,6 +780,11 @@ const permissionCatalog = async (_req, res) =>
     impliedBy: IMPLIED_BY,
     hrDelegable: HR_DELEGABLE,
     hrNotDelegable: HR_NOT_DELEGABLE,
+    // HR Tier 3 Phase 1: the controls that can be limited to departments, and
+    // the departments to choose from (active ones; archived only to name an
+    // existing scope).
+    scopable: SCOPABLE,
+    departments: (await db.Department.findAll({ attributes: ['id', 'name', 'status'], order: [['name', 'ASC']], raw: true })),
     // What a person of each role and staff type holds with nothing ticked —
     // the onboarding wizard needs this for someone who does not exist yet,
     // where formatStaff().defaultPermissions cannot be asked. Same helper.
@@ -693,7 +819,9 @@ const expiringLicences = async (req, res) => {
       order: [['licenseExpiry', 'ASC']],
     });
 
-    return success(res, profiles.map((p) => formatStaff(p, p.User)));
+    // HR Tier 3 Phase 1: only the people in the caller's scope.
+    const visible = await hrScope.filterInScope(req.user, [PERMISSIONS.STAFF_VIEW, PERMISSIONS.HR_EXPIRY_ALERTS], profiles);
+    return success(res, visible.map((p) => formatStaff(p, p.User)));
   } catch (err) {
     console.error('Expiring licences error:', err.message);
     return error(res, 'Failed to load expiring licences', 500);

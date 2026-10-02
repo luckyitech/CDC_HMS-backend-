@@ -40,6 +40,8 @@ const { sendCsv } = require('../utils/csv');
 const { recordSettingChanges } = require('../services/settingChangeLog');
 const leaveService = require('../services/leaveService');
 const hrNotify = require('../services/hrNotify');
+const hrScope = require('../services/hrScope');
+const { inScope } = require('../utils/hrScope');
 const {
   formatApplication, detailIncludes, typeNameMap, loadMe, fullName, rangeText, daysText, approverLink, applicantLink,
 } = require('./hrSelfLeaveController');
@@ -59,6 +61,24 @@ const canSeeSick = (user) => passesAdminGate(user, PERMISSIONS.LEAVE_SICK);
 const canViewStaff = (user) => passesAdminGate(user, PERMISSIONS.STAFF_VIEW);
 const holdsApprove = (user) => passesAdminGate(user, PERMISSIONS.LEAVE_APPROVE);
 
+// HR Tier 3 Phase 1: the four "about other people" capabilities above, limited
+// to the viewer's department scope for THIS applicant. Worked out once per
+// request (viewerScopes) and applied per leave (capsFrom) so a list costs no
+// extra queries per row. Out of scope = as if not held: the request is "not
+// found" unless the viewer is its applicant or on it.
+const SCOPED = {
+  manage: PERMISSIONS.LEAVE_MANAGE, viewAll: PERMISSIONS.LEAVE_VIEW,
+  sick: PERMISSIONS.LEAVE_SICK, staffView: PERMISSIONS.STAFF_VIEW,
+};
+const viewerScopes = async (user) => Object.fromEntries(await Promise.all(
+  Object.entries(SCOPED).map(async ([k, cap]) => [k, await hrScope.scopeOf(user, cap)]),
+));
+const applicantDepartment = (leave) => leave.User?.StaffProfile?.departmentId ?? null;
+const capsFrom = (scopes, leave) => Object.fromEntries(
+  Object.keys(SCOPED).map((k) => [k, inScope(scopes[k], applicantDepartment(leave))]),
+);
+const capsFor = async (user, leave) => capsFrom(await viewerScopes(user), leave);
+
 const LIVE = [...OPEN_STATUSES, ...TAKEN_STATUSES];
 
 const WORKFLOW_HTTP = { NOT_APPROVER: 403, FORBIDDEN: 403 };
@@ -70,17 +90,23 @@ const WORKFLOW_HTTP = { NOT_APPROVER: 403, FORBIDDEN: 403 };
 const applicantInclude = () => ({
   model: User,
   attributes: ['id', 'firstName', 'lastName', 'role', 'isActive'],
-  include: [{ model: StaffProfile, attributes: ['employeeId', 'position', 'department', 'deletedAt'], required: false }],
+  include: [{ model: StaffProfile, attributes: ['employeeId', 'position', 'department', 'departmentId', 'deletedAt'], required: false }],
 });
 
 const loadRequest = (id) => StaffLeave.findByPk(Number(id), { include: [...detailIncludes(), applicantInclude()] });
 
-/** How this viewer stands to this request. */
-const standing = (leave, user) => {
+/**
+ * How this viewer stands to this request. `caps` (from capsFor/capsFrom) are
+ * the department-scoped answers; without them the unscoped ones are used
+ * (tests, and nothing else).
+ */
+const standing = (leave, user, caps = null) => {
   const participant = (leave.participants || []).find((p) => p.UserId === user.id) || null;
   const isApplicant = leave.UserId === user.id;
-  const manage = canManage(user);
-  const viewAll = canViewAll(user);
+  const manage = caps ? caps.manage : canManage(user);
+  const viewAll = caps ? caps.viewAll : canViewAll(user);
+  const staffView = caps ? caps.staffView : canViewStaff(user);
+  const sick = caps ? caps.sick : canSeeSick(user);
   const isApprover = participant?.kind === KIND.APPROVER;
   const approvers = (leave.participants || []).filter((p) => p.kind === KIND.APPROVER);
   const legacy = approvers.length === 0;          // recorded before B27 — nobody listed
@@ -95,10 +121,10 @@ const standing = (leave, user) => {
     manage,
     legacy,
     // staff.view or leave.view: read-only (see the header).
-    viewOnly: !(isApplicant || participant || manage) && (viewAll || canViewStaff(user)),
-    mayOpen: isApplicant || !!participant || manage || viewAll || canViewStaff(user),
+    viewOnly: !(isApplicant || participant || manage) && (viewAll || staffView),
+    mayOpen: isApplicant || !!participant || manage || viewAll || staffView,
     // Health data: the applicant, approvers and leave.sick see a private type.
-    redact: !(isApplicant || isApprover || canSeeSick(user)),
+    redact: !(isApplicant || isApprover || sick),
   };
 };
 
@@ -178,7 +204,7 @@ const awayStrip = async (leave) => {
 };
 
 const detailFor = async (leave, user) => {
-  const st = standing(leave, user);
+  const st = standing(leave, user, await capsFor(user, leave));
   const typeNames = await typeNameMap();
   const today = clinicToday();
   const policy = await leaveService.loadPolicy(Number(String(leave.startDate).slice(0, 4)));
@@ -246,7 +272,7 @@ const detailFor = async (leave, user) => {
 const getRequest = async (req, res) => {
   try {
     const leave = await loadRequest(req.params.id);
-    if (!leave || !standing(leave, req.user).mayOpen) return error(res, 'Leave request not found', 404);
+    if (!leave || !standing(leave, req.user, await capsFor(req.user, leave)).mayOpen) return error(res, 'Leave request not found', 404);
     return success(res, await detailFor(leave, req.user));
   } catch (err) {
     console.error('LeaveApproval.get error:', err);
@@ -354,10 +380,12 @@ const inbox = async (req, res) => {
       limit: 300,
     });
     const typeNames = await typeNameMap();
-    const rows = leaves.map((l) => {
-      const st = standing(l, req.user);
-      return inboxRow(l, { typeNames, redact: st.redact, me });
-    });
+    const scopes = await viewerScopes(req.user);
+    const rows = leaves
+      .map((l) => ({ l, st: standing(l, req.user, capsFrom(scopes, l)) }))
+      // The All tab lists only the people in the viewer's scope (or requests they are on).
+      .filter(({ st }) => tab !== 'all' || st.mayOpen)
+      .map(({ l, st }) => inboxRow(l, { typeNames, redact: st.redact, me }));
     const waiting = new Set(await idsWhere(waitingWhere(me, { withAsked: false }))).size;
     return success(res, {
       tab, rows, counts: { waiting }, manage, viewAll,
@@ -446,7 +474,7 @@ const decide = async (req, res) => {
   try {
     const leave = await loadRequest(req.params.id);
     if (!leave) return error(res, 'Leave request not found', 404);
-    const st = standing(leave, req.user);
+    const st = standing(leave, req.user, await capsFor(req.user, leave));
     if (!st.mayOpen) return error(res, 'Leave request not found', 404);
     if (st.isApplicant) return error(res, 'You cannot decide your own leave', 403, { code: 'OWN_LEAVE' });
 
@@ -552,7 +580,7 @@ const saveSplit = async (req, res) => {
   try {
     const leave = await loadRequest(req.params.id);
     if (!leave) return error(res, 'Leave request not found', 404);
-    const st = standing(leave, req.user);
+    const st = standing(leave, req.user, await capsFor(req.user, leave));
     if (!st.mayOpen) return error(res, 'Leave request not found', 404);
     if (st.isApplicant) return error(res, 'You cannot decide your own leave', 403, { code: 'OWN_LEAVE' });
     const detail = await detailFor(leave, req.user);
@@ -592,7 +620,7 @@ const answerCover = async (req, res) => {
   try {
     const leave = await loadRequest(req.params.id);
     if (!leave) return error(res, 'Leave request not found', 404);
-    const st = standing(leave, req.user);
+    const st = standing(leave, req.user, await capsFor(req.user, leave));
     if (!st.mayOpen) return error(res, 'Leave request not found', 404);
     const detail = await detailFor(leave, req.user);
     if (!detail.me.canAnswerCover) {
@@ -631,7 +659,7 @@ const cancel = async (req, res) => {
   try {
     const leave = await loadRequest(req.params.id);
     if (!leave) return error(res, 'Leave request not found', 404);
-    const st = standing(leave, req.user);
+    const st = standing(leave, req.user, await capsFor(req.user, leave));
     if (!st.mayOpen) return error(res, 'Leave request not found', 404);
     if (st.isApplicant) return error(res, 'Ask to cancel your own leave from My leave', 403, { code: 'OWN_LEAVE' });
 
@@ -684,7 +712,7 @@ const attachment = async (req, res) => {
   try {
     const leave = await loadRequest(req.params.id);
     if (!leave) return error(res, 'Leave request not found', 404);
-    const st = standing(leave, req.user);
+    const st = standing(leave, req.user, await capsFor(req.user, leave));
     if (!st.mayOpen || st.redact) return error(res, 'Leave request not found', 404);
     if (!leave.attachmentDocumentId) return error(res, 'No document on this request', 404);
     const doc = await StaffDocument.findOne({ where: { id: leave.attachmentDocumentId, UserId: leave.UserId } });
@@ -722,14 +750,17 @@ const shortName = (u) => (u ? `${(u.firstName || '').charAt(0)} ${u.lastName || 
 const register = async (req, res) => {
   const year = parseInt(req.query.year, 10) || Number(clinicToday().slice(0, 4));
   try {
-    const leaves = await StaffLeave.findAll({
+    const allLeaves = await StaffLeave.findAll({
       where: { startDate: { [Op.between]: [`${year}-01-01`, `${year}-12-31`] } },
       include: [...detailIncludes(), applicantInclude()],
       order: [['startDate', 'ASC'], ['id', 'ASC']],
     });
     const typeNames = await typeNameMap();
-    const sick = canSeeSick(req.user);
-    const typeLabel = (key) => (!sick && leaveService.PRIVATE_TYPES.has(key) ? 'Private' : (typeNames[key] || key));
+    // HR Tier 3 Phase 1: the register covers the people in the caller's
+    // register scope; sick leave is named only where their sick scope reaches.
+    const registerScope = await hrScope.scopeOf(req.user, PERMISSIONS.LEAVE_REGISTER);
+    const sickScope = await hrScope.scopeOf(req.user, PERMISSIONS.LEAVE_SICK);
+    const leaves = allLeaves.filter((l) => inScope(registerScope, applicantDepartment(l)));
     const headers = ['Employee ID', 'Name', 'Role', 'Type', 'From', 'To', 'Days', 'Charged to', 'Status',
       'Approvers', 'Approved by', 'Cover', 'Recorded by HR', 'Applied on', 'Backdated'];
     const rows = leaves.map((l) => {
@@ -738,6 +769,8 @@ const register = async (req, res) => {
       const approvers = parts.filter((p) => p.kind === KIND.APPROVER);
       const cover = parts.find((p) => p.kind === KIND.COVER);
       const profile = l.User?.StaffProfile;
+      const sick = inScope(sickScope, applicantDepartment(l));
+      const typeLabel = (key) => (!sick && leaveService.PRIVATE_TYPES.has(key) ? 'Private' : (typeNames[key] || key));
       return [
         profile?.employeeId || '',
         fullName(l.User) || 'Former colleague',

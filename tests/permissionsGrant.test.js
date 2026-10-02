@@ -4,6 +4,10 @@ const assert = require('node:assert/strict');
 const {
   PERMISSIONS, ADMIN_ACCESS_COVERS, PERMISSION_GROUPS, canGrantPermissions, hasPermission,
 } = require('../constants/permissions');
+// updatePermissions now reads stored scopes (HR Tier 3 Phase 1); without this
+// stand-in, a run on a machine WITH a database opens a pool that keeps the
+// test process alive.
+require('./_noScopeRows');
 const { requireTrueAdmin } = require('../middleware/auth');
 
 // =====================================================================

@@ -24,6 +24,7 @@ const { daysUntil, dueThreshold, isoDay } = require('../utils/expiry');
 const { getHrConfig } = require('../utils/hrConfig');
 const { PERMISSIONS } = require('../constants/permissions');
 const hrNotify = require('./hrNotify');
+const hrScope = require('./hrScope');
 const { isHealthDocument } = require('../utils/hrAccess');
 
 const { User, StaffProfile, StaffDocument, ExpiryReminder } = db;
@@ -37,6 +38,17 @@ let lastRunDate = null;
 
 /** The user ids that should receive clinic-wide expiry alerts (hr.expiry.alerts). */
 const credentialHolders = () => hrNotify.holdersOf(PERMISSIONS.HR_EXPIRY_ALERTS);
+
+// HR Tier 3 Phase 1 (L-6): an alert about one person goes only to holders whose
+// department scope covers that person. Memoised per run (one person may have a
+// licence and several documents expiring).
+const recipientsFinder = () => {
+  const memo = new Map();
+  return async (userId) => {
+    if (!memo.has(userId)) memo.set(userId, await hrScope.holdersFor(PERMISSIONS.HR_EXPIRY_ALERTS, userId));
+    return memo.get(userId);
+  };
+};
 
 /**
  * One item due for a reminder: record it (once) and notify. Returns 1 if it
@@ -77,7 +89,7 @@ const runExpiryReminders = async (now = new Date()) => {
 
   const cfg = await getHrConfig();
   const thresholds = cfg.expiryThresholds && cfg.expiryThresholds.length ? cfg.expiryThresholds : [60, 30, 7, 0];
-  const hrRecipients = await credentialHolders();
+  const recipientsFor = recipientsFinder();
 
   let sent = 0;
 
@@ -99,7 +111,7 @@ const runExpiryReminders = async (now = new Date()) => {
       selfLink: '/hr/me?tab=credentials',
       hrTitle: `${fullName(p.User)}'s practising licence expires ${inDays(daysLeft)}`,
       hrLink: '/hr/requests',
-      hrRecipients,
+      hrRecipients: await recipientsFor(p.UserId),
     });
   }
 
@@ -122,7 +134,7 @@ const runExpiryReminders = async (now = new Date()) => {
       // A health document (sick note) is never named to HR recipients.
       hrTitle: `${fullName(d.User)}'s ${isHealthDocument(d) ? 'document' : label} expires ${inDays(daysLeft)}`,
       hrLink: '/hr/requests',
-      hrRecipients,
+      hrRecipients: await recipientsFor(d.UserId),
     });
   }
 

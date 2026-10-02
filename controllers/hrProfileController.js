@@ -22,6 +22,7 @@ const { OPEN_STATUSES } = require('../utils/leaveWorkflow');
 const { parseJsonColumn } = require('../utils/jsonColumn');
 const { formatStaff } = require('./staffController');
 const hrNotify = require('../services/hrNotify');
+const hrScope = require('../services/hrScope');
 const { PERMISSIONS } = require('../constants/permissions');
 const { resolveStoredFile } = require('../utils/staffDocumentStorage');
 const leaveService = require('../services/leaveService');
@@ -243,7 +244,8 @@ const createRequests = async (req, res) => {
       UserId: user.id, field: r.field, oldValue: r.oldValue, newValue: r.newValue, reason, status: 'pending', attachmentDocumentId,
     })));
 
-    const deciders = (await hrNotify.holdersOf(PERMISSIONS.HR_PROFILE_APPROVE)).filter((id) => id !== user.id);
+    // HR Tier 3 Phase 1 (L-6): only deciders whose scope covers this person.
+    const deciders = (await hrScope.holdersFor(PERMISSIONS.HR_PROFILE_APPROVE, user.id)).filter((id) => id !== user.id);
     const labels = rows.map((r) => (REQUESTABLE[r.field]?.label || r.field).toLowerCase());
     await hrNotify.notify('change_request_new', {
       recipients: deciders,
@@ -285,7 +287,10 @@ const hrList = async (req, res) => {
   const decided = req.query.status === 'decided';
   try {
     const rows = await StaffChangeRequest.findAll({
-      where: { status: decided ? { [Op.in]: ['approved', 'rejected'] } : 'pending' },
+      where: {
+        status: decided ? { [Op.in]: ['approved', 'rejected'] } : 'pending',
+        ...(await hrScope.scopeWhere(req.user, PERMISSIONS.HR_PROFILE_APPROVE)),
+      },
       include: requestIncludes(true),
       order: [[decided ? 'decidedAt' : 'createdAt', decided ? 'DESC' : 'ASC']],
       limit: 200,
@@ -300,7 +305,11 @@ const hrList = async (req, res) => {
 /** GET /api/hr/change-requests/count — pending (the sidebar badge), not counting my own. */
 const hrCount = async (req, res) => {
   try {
-    const n = await StaffChangeRequest.count({ where: { status: 'pending', UserId: { [Op.ne]: req.user.id } } });
+    const scoped = await hrScope.userIdsInScope(req.user, PERMISSIONS.HR_PROFILE_APPROVE);
+    const n = await StaffChangeRequest.count({ where: {
+      status: 'pending',
+      UserId: scoped === null ? { [Op.ne]: req.user.id } : { [Op.in]: scoped.filter((id) => id !== req.user.id) },
+    } });
     return success(res, { pending: n });
   } catch (err) {
     console.error('ChangeRequest.count error:', err);
@@ -321,7 +330,7 @@ const hrDecide = async (req, res) => {
 
   try {
     const row = await StaffChangeRequest.findByPk(Number(req.params.id));
-    if (!row) return error(res, 'Request not found', 404);
+    if (!row || !(await hrScope.canActOn(req.user, PERMISSIONS.HR_PROFILE_APPROVE, row.UserId))) return error(res, 'Request not found', 404);
     if (row.UserId === req.user.id) return error(res, 'Someone else must decide a change to your own record', 403, { code: 'OWN_REQUEST' });
     if (row.status !== 'pending') return error(res, 'This request has already been decided', 400, { code: 'NOT_PENDING' });
     const def = REQUESTABLE[row.field];
@@ -381,7 +390,8 @@ const hrDecide = async (req, res) => {
 const hrAttachment = async (req, res) => {
   try {
     const row = await StaffChangeRequest.findByPk(Number(req.params.id), { include: [{ model: StaffDocument, as: 'attachment' }] });
-    if (!row || !row.attachment || row.attachment.isArchived || row.attachment.UserId !== row.UserId) {
+    if (!row || !row.attachment || row.attachment.isArchived || row.attachment.UserId !== row.UserId
+        || !(await hrScope.canActOn(req.user, PERMISSIONS.HR_PROFILE_APPROVE, row.UserId))) {
       return error(res, 'No document on this request', 404);
     }
     const resolved = resolveStoredFile(row.attachment.filePath);

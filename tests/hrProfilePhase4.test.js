@@ -169,7 +169,7 @@ describe('controller rules', () => {
     assert.match(src, /row\.UserId === req\.user\.id\) return error\(res, [^)]*403, \{ code: 'OWN_REQUEST' \}/);
   });
   test('the badge does not count my own requests', () => {
-    assert.match(src, /status: 'pending', UserId: \{ \[Op\.ne\]: req\.user\.id \}/);
+    assert.match(src, /status: 'pending',\s+UserId: scoped === null \? \{ \[Op\.ne\]: req\.user\.id \} : \{ \[Op\.in\]: scoped\.filter\(\(id\) => id !== req\.user\.id\) \}/);
   });
   test('a rejection needs a note; a request needs a reason', () => {
     assert.match(src, /decision === 'reject' && !note\) return error\(res, [^)]*400, \{ code: 'NOTE_REQUIRED' \}/);

@@ -21,6 +21,8 @@ const { validateCpd, summariseCpd, cadreForRole, CPD_CATEGORIES } = require('../
 const { getHrConfig } = require('../utils/hrConfig');
 const { resolveStoredFile } = require('../utils/staffDocumentStorage');
 const hrNotify = require('../services/hrNotify');
+const hrScope = require('../services/hrScope');
+const { PERMISSIONS } = require('../constants/permissions');
 const db = require('../models');
 
 const { CpdActivity, StaffDocument, User, StaffProfile } = db;
@@ -190,7 +192,11 @@ const remove = async (req, res) => {
 const hrList = async (req, res) => {
   const decided = req.query.status === 'decided';
   try {
-    const where = { status: decided ? { [Op.in]: ['verified', 'rejected'] } : 'pending' };
+    const where = {
+      status: decided ? { [Op.in]: ['verified', 'rejected'] } : 'pending',
+      // HR Tier 3 Phase 1: a department-limited verifier sees only their people.
+      ...(await hrScope.scopeWhere(req.user, PERMISSIONS.CPD_VERIFY)),
+    };
     if (req.query.year) {
       const y = parseInt(req.query.year, 10);
       where.date = { [Op.between]: [`${y}-01-01`, `${y}-12-31`] };
@@ -211,7 +217,7 @@ const hrList = async (req, res) => {
 /** GET /api/hr/cpd/count — pending (the sidebar/tab badge). */
 const hrCount = async (req, res) => {
   try {
-    const n = await CpdActivity.count({ where: { status: 'pending' } });
+    const n = await CpdActivity.count({ where: { status: 'pending', ...(await hrScope.scopeWhere(req.user, PERMISSIONS.CPD_VERIFY)) } });
     return success(res, { pending: n });
   } catch (err) {
     console.error('Cpd.hrCount error:', err);
@@ -240,7 +246,7 @@ const verify = async (req, res) => {
 
   try {
     const row = await CpdActivity.findByPk(Number(req.params.id));
-    if (!row) return error(res, 'Activity not found', 404);
+    if (!row || !(await hrScope.canActOn(req.user, PERMISSIONS.CPD_VERIFY, row.UserId))) return error(res, 'Activity not found', 404);
     if (row.status !== 'pending') return error(res, 'This activity has already been decided', 400, { code: 'NOT_PENDING' });
 
     await row.update({
@@ -275,7 +281,8 @@ const verify = async (req, res) => {
 const certificate = async (req, res) => {
   try {
     const row = await CpdActivity.findByPk(Number(req.params.id), { include: [{ model: StaffDocument, as: 'document' }] });
-    if (!row || !row.document || row.document.isArchived) return error(res, 'No certificate on this activity', 404);
+    if (!row || !row.document || row.document.isArchived
+        || !(await hrScope.canActOn(req.user, PERMISSIONS.CPD_VERIFY, row.UserId))) return error(res, 'No certificate on this activity', 404);
     const resolved = resolveStoredFile(row.document.filePath);
     if (!resolved) return error(res, 'File is missing from the server', 404);
     return res.download(resolved, row.document.fileName);

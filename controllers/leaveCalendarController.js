@@ -22,7 +22,9 @@ const { success, error } = require('../utils/response');
 const { clinicToday } = require('../utils/clinicTime');
 const { datesInRange, DEFAULT_WEEK_WEIGHTS } = require('../utils/leaveCalc');
 const { OPEN_STATUSES, TAKEN_STATUSES } = require('../utils/leaveWorkflow');
-const { PERMISSIONS, passesAdminGate, INTERNAL_ROLES } = require('../constants/permissions');
+const { PERMISSIONS, INTERNAL_ROLES } = require('../constants/permissions');
+const hrScope = require('../services/hrScope');
+const { inScope } = require('../utils/hrScope');
 const { getHrConfig } = require('../utils/hrConfig');
 const leaveService = require('../services/leaveService');
 const db = require('../models');
@@ -52,8 +54,11 @@ const calendar = async (req, res) => {
     if (datesInRange(from, to).length > MAX_DAYS) to = addDays(from, MAX_DAYS - 1);
 
     const cadre = INTERNAL_ROLES.includes(req.query.cadre) ? req.query.cadre : null;
-    const viewAll = passesAdminGate(req.user, PERMISSIONS.LEAVE_VIEW);
-    const sick = passesAdminGate(req.user, PERMISSIONS.LEAVE_SICK);
+    // HR Tier 3 Phase 1: the real type is shown only where the viewer's
+    // leave.view / leave.sick scope reaches that person's department; everyone
+    // still sees names and dates (the calendar is for every internal role).
+    const viewScope = await hrScope.scopeOf(req.user, PERMISSIONS.LEAVE_VIEW);
+    const sickScope = await hrScope.scopeOf(req.user, PERMISSIONS.LEAVE_SICK);
 
     const [types, cfg, holidayMap, policy] = await Promise.all([
       leaveService.listTypes({ includeRetired: true }),
@@ -78,12 +83,14 @@ const calendar = async (req, res) => {
         model: User,
         attributes: ['id', 'firstName', 'lastName', 'role'],
         where: userWhere,
-        include: [{ model: StaffProfile, attributes: ['position'], required: false }],
+        include: [{ model: StaffProfile, attributes: ['position', 'departmentId'], required: false }],
       }],
       order: [['startDate', 'ASC']],
     });
 
-    const labelFor = (key) => {
+    const labelFor = (key, departmentId) => {
+      const viewAll = inScope(viewScope, departmentId);
+      const sick = inScope(sickScope, departmentId);
       if (leaveService.PRIVATE_TYPES.has(key)) {
         return sick ? { label: typeNames[key] || key, leaveType: key } : { label: 'Away', leaveType: null };
       }
@@ -102,7 +109,7 @@ const calendar = async (req, res) => {
           position: l.User?.StaffProfile?.position || null, segments: [],
         });
       }
-      const { label, leaveType } = labelFor(l.leaveType);
+      const { label, leaveType } = labelFor(l.leaveType, l.User?.StaffProfile?.departmentId ?? null);
       byUser.get(uid).segments.push({
         from: String(l.startDate).slice(0, 10) < from ? from : String(l.startDate).slice(0, 10),
         to: String(l.endDate).slice(0, 10) > to ? to : String(l.endDate).slice(0, 10),
@@ -149,7 +156,7 @@ const calendar = async (req, res) => {
     return success(res, {
       from, to, today, cadre,
       // `manage` kept for the screen: true when this viewer sees real types.
-      manage: viewAll,
+      manage: viewScope.all || viewScope.departmentIds.size > 0,
       weekWeights,
       holidays,
       weekendDays,

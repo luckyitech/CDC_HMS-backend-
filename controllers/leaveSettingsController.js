@@ -25,6 +25,8 @@ const { clinicToday } = require('../utils/clinicTime');
 const { parseJsonColumn } = require('../utils/jsonColumn');
 const { recordSettingChanges } = require('../services/settingChangeLog');
 const leaveService = require('../services/leaveService');
+const hrScope = require('../services/hrScope');
+const { PERMISSIONS } = require('../constants/permissions');
 const { getHrConfig, setHrConfig, FIELDS } = require('../utils/hrConfig');
 const { writeUserEditLog, internalUsers, personOf } = require('../services/hrAttendanceService');
 const rules = require('../utils/leavePolicyRules');
@@ -608,7 +610,8 @@ const entitlements = async (req, res) => {
     const year = parseInt(req.query.year, 10) || Number(today.slice(0, 4));
     const policy = await leaveService.loadPolicy(year, { publishedOnly: false });
     const asOf = year === Number(today.slice(0, 4)) ? today : `${year}-12-31`;
-    const staff = await gridStaff();
+    // HR Tier 3 Phase 1: only the people in the caller's entitlements scope.
+    const staff = await hrScope.filterInScope(req.user, PERMISSIONS.LEAVE_ENTITLEMENTS, await gridStaff(), (p) => p.user.id);
     const people = [];
     // A few at a time: each person is a handful of small queries.
     for (let i = 0; i < staff.length; i += 5) {
@@ -653,6 +656,7 @@ const saveEntitlement = async (req, res) => {
       include: [{ model: StaffProfile, attributes: ['employeeId', 'position', 'department', 'deletedAt', 'startDate', 'endDate'], required: false }],
     });
     if (!user || user.role === 'patient') return error(res, 'Staff member not found', 404);
+    if (!(await hrScope.canActOn(req.user, PERMISSIONS.LEAVE_ENTITLEMENTS, user.id))) return error(res, 'Staff member not found', 404);
 
     const balances = Array.isArray(req.body.balances) ? req.body.balances : [];
     const known = new Set((await leaveService.listTypes({ includeRetired: true })).map((t) => t.key));

@@ -12,6 +12,8 @@ const { getHrConfig } = require('../utils/hrConfig');
 const { HHMM, resolveExpected } = require('../utils/workHours');
 const { clinicToday, clinicDatePlusDays } = require('../utils/clinicTime');
 const svc = require('../services/hrAttendanceService');
+const hrScope = require('../services/hrScope');
+const { PERMISSIONS } = require('../constants/permissions');
 
 const { sequelize, StaffWorkHours, User } = db;
 
@@ -37,7 +39,8 @@ const resolvedWeek = (rows, cfg) => {
 const listAll = async (req, res) => {
   try {
     const cfg = await getHrConfig();
-    const users = await svc.internalUsers();
+    // HR Tier 3 Phase 1: only the people in the caller's attendance scope.
+    const users = await hrScope.filterInScope(req.user, [PERMISSIONS.HR_VIEW, PERMISSIONS.HR_WORKHOURS], await svc.internalUsers(), (u) => u.id);
     const rows = await StaffWorkHours.findAll({ where: { status: 'active' }, order: [['UserId', 'ASC'], ['weekday', 'ASC'], ['date', 'ASC']] });
     const by = new Map();
     for (const r of rows) { const l = by.get(r.UserId) || []; l.push(serialize(r)); by.set(r.UserId, l); }
@@ -77,6 +80,7 @@ const update = async (req, res) => {
     const userId = parseInt(req.params.userId, 10);
     const target = await User.findByPk(userId, { attributes: ['id', 'role'] });
     if (!target || target.role === 'patient') return error(res, 'Staff member not found', 404);
+    if (!(await hrScope.canActOn(req.user, PERMISSIONS.HR_WORKHOURS, target.id))) return error(res, 'Staff member not found', 404);
     const { weekdays, overrides } = req.body;
     const check = (e, what) => {
       if (!validTime(e.startTime) || !validTime(e.endTime)) return `${what}: times must be HH:MM`;

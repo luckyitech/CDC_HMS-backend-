@@ -11,6 +11,8 @@ const { sendStaffWelcomeEmail } = require('../utils/emailService');
 const { generateEmployeeId } = require('../utils/generateId');
 const { buildChanges } = require('../utils/auditChanges');
 const { STAFF_ROLES, DEFAULT_POSITION } = require('../constants/staffRoles');
+const staffLists = require('../services/staffLists');
+const { cleanPresetScopes } = require('./permissionPresetController');
 
 // StaffProfile is now the single profile table for every cadre — doctor, nurse,
 // lab tech and front-desk staff. DoctorProfile and LabTechProfile are no longer
@@ -228,15 +230,46 @@ const resolveAccessAtCreation = ({ body, role, caller, preset }) => {
       conflicting,
       presetName: preset ? preset.name : null,
       applied: !!preset,
+      // HR Tier 3 Phase 1: the preset's "own department" limits, for the
+      // controls the new person actually ends up with.
+      scopes: preset ? cleanPresetScopes(preset.scopes, granted) : {},
     },
   };
 };
 
-const createStaffAccount = async (req, res, { role, profileFields = {}, roleDetails = {}, label }) => {
+/**
+ * Department and position at creation, through the lists (HR Tier 3 Phase 1).
+ * An id picked in the wizard wins; typed text must match the list once it has
+ * entries; a ROLE DEFAULT ("Laboratory", DEFAULT_POSITION) that matches
+ * nothing is kept as text for the tidy screen rather than refused.
+ */
+const listFieldsAtCreation = async (body, role, profileFields) => {
+  const dept = await staffLists.resolveListFields(
+    body.departmentId ? { departmentId: body.departmentId } : { department: profileFields.department },
+    { lenient: !body.department },
+  );
+  const pos = await staffLists.resolveListFields(
+    body.positionId ? { positionId: body.positionId } : { position: profileFields.position || DEFAULT_POSITION[role] },
+    { lenient: !profileFields.position },
+  );
+  return { ...dept, ...pos };
+};
+
+const createStaffAccount = async (req, res, { role, profileFields: rawProfileFields = {}, roleDetails = {}, label }) => {
   const { firstName, lastName, email, phone, password: providedPassword, presetId } = req.body;
 
   let transaction;
   try {
+    let listFields;
+    try {
+      listFields = await listFieldsAtCreation(req.body, role, rawProfileFields);
+    } catch (e) {
+      if (e instanceof staffLists.ListError) return error(res, e.message, e.status, { code: e.code });
+      throw e;
+    }
+    const { department: _d, position: _p, ...otherFields } = rawProfileFields;
+    const profileFields = { ...otherFields, ...listFields };
+
     const existingUser = await User.findOne({ where: { email } });
     if (existingUser) return error(res, 'Email already in use', 400);
 
@@ -273,7 +306,7 @@ const createStaffAccount = async (req, res, { role, profileFields = {}, roleDeta
     const profile = await StaffProfile.create({
       UserId:           user.id,
       employeeId,
-      position:         profileFields.position || DEFAULT_POSITION[role],
+      position:         profileFields.position ?? DEFAULT_POSITION[role],
       employmentStatus: 'Active',
       roleDetails,
       createdBy:        req.user.id,
@@ -295,9 +328,13 @@ const createStaffAccount = async (req, res, { role, profileFields = {}, roleDeta
             { permissions: access.permissions, deniedPermissions: access.deniedPermissions, staffType: access.staffType },
           ),
           createdFromPreset: access.presetName,
+          ...(Object.keys(access.scopes || {}).length ? { scopes: { from: null, to: access.scopes } } : {}),
         },
         editedAt: new Date(),
       }, { transaction });
+    }
+    if (Object.keys(access.scopes || {}).length) {
+      await require('../services/hrScope').saveScopes(user.id, access.scopes, req.user.id, { transaction });
     }
     if (access.applied) {
       await PermissionPreset.increment('appliedCount', { by: 1, where: { id: preset.id }, transaction });
@@ -651,8 +688,26 @@ const updateUser = async (req, res) => {
         const profileUpdates = {};
         const roleDetailUpdates = {};
 
+        // Department / position go through the lists (HR Tier 3 Phase 1).
+        if (!isPatient) {
+          let listFields;
+          try {
+            listFields = await staffLists.resolveListFields(
+              { departmentId: updates.departmentId, department: updates.department, positionId: updates.positionId, position: updates.position },
+              { current: profile },
+            );
+          } catch (e) {
+            if (e instanceof staffLists.ListError) return error(res, e.message, e.status, { code: e.code });
+            throw e;
+          }
+          Object.entries(listFields).forEach(([k, v]) => {
+            if ((profile[k] ?? null) !== (v ?? null)) profileUpdates[k] = v;
+          });
+        }
+
         profileFields.forEach((field) => {
           if (updates[field] === undefined) return;
+          if (!isPatient && (field === 'department' || field === 'position')) return;
 
           // Empty string on a date column would cause MySQL "Incorrect datetime value" — coerce to null
           const value = DATE_FIELDS.has(field) && updates[field] === '' ? null : updates[field];

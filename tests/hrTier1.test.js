@@ -94,7 +94,7 @@ describe('routes added or retired on 2 Oct 2026', () => {
   });
   test('a new change request alerts HR through its own event', () => {
     assert.ok(ALERT_EVENTS.includes('change_request_new'));
-    assert.match(read('controllers', 'hrProfileController.js'), /holdersOf\(PERMISSIONS\.HR_PROFILE_APPROVE\)\)\.filter\(\(id\) => id !== user\.id\)/);
+    assert.match(read('controllers', 'hrProfileController.js'), /holdersFor\(PERMISSIONS\.HR_PROFILE_APPROVE, user\.id\)\)\.filter\(\(id\) => id !== user\.id\)/);
   });
   test('the new-request notice never carries the values', () => {
     const src = read('controllers', 'hrProfileController.js');

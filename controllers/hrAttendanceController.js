@@ -27,6 +27,8 @@ const { buildTapMessages, titleFor } = require('../utils/tapMessages');
 const { buildChanges } = require('../utils/auditChanges');
 const { parseJsonColumn } = require('../utils/jsonColumn');
 const { canViewHr } = require('../utils/hrAccess');
+const hrScope = require('../services/hrScope');
+const { PERMISSIONS } = require('../constants/permissions');
 const leaveService = require('../services/leaveService');
 const svc = require('../services/hrAttendanceService');
 
@@ -256,14 +258,17 @@ const today = async (req, res) => {
     const cfg = await getHrConfig();
     const now = new Date();
     const clinicDate = clinicToday(now);
-    const users = (await svc.internalUsers()).filter((u) => !u.StaffProfile || !u.StaffProfile.deletedAt);
+    // HR Tier 3 Phase 1: a department-limited "See attendance" holder sees
+    // only their people on the board (and the missed check-out list).
+    const users = await hrScope.filterInScope(req.user, PERMISSIONS.HR_VIEW,
+      (await svc.internalUsers()).filter((u) => !u.StaffProfile || !u.StaffProfile.deletedAt), (u) => u.id);
     const ids = users.map((u) => u.id);
 
     const [hoursRows, leaves, todayRows, missed] = await Promise.all([
       StaffWorkHours.findAll({ where: { UserId: { [Op.in]: ids }, status: 'active' } }),
       StaffLeave.findAll({ where: { UserId: { [Op.in]: ids }, status: 'Approved', startDate: { [Op.lte]: clinicDate }, endDate: { [Op.gte]: clinicDate } }, attributes: ['UserId'] }),
       StaffAttendance.findAll({ where: { clinicDate, UserId: { [Op.in]: ids } }, include: svc.SESSION_INCLUDE, order: [['checkInAt', 'ASC']] }),
-      StaffAttendance.findAll({ where: { status: 'missed_checkout' }, include: svc.SESSION_INCLUDE, order: [['clinicDate', 'DESC']], limit: 50 }),
+      StaffAttendance.findAll({ where: { status: 'missed_checkout', UserId: { [Op.in]: ids } }, include: svc.SESSION_INCLUDE, order: [['clinicDate', 'DESC']], limit: 50 }),
     ]);
     const hoursBy = new Map();
     for (const r of hoursRows) { const l = hoursBy.get(r.UserId) || []; l.push(r.get({ plain: true })); hoursBy.set(r.UserId, l); }
@@ -348,6 +353,12 @@ const list = async (req, res) => {
     const { from, to } = rangeOf(req);
     const where = { clinicDate: { [Op.between]: [from, to] } };
     if (req.query.userId) where.UserId = parseInt(req.query.userId, 10);
+    const inScope = await hrScope.userIdsInScope(req.user, PERMISSIONS.HR_VIEW);
+    if (inScope !== null) {
+      where.UserId = where.UserId !== undefined
+        ? (inScope.includes(where.UserId) ? where.UserId : -1)
+        : { [Op.in]: inScope };
+    }
     if (req.query.status && STATUS_FILTERS[req.query.status]) Object.assign(where, STATUS_FILTERS[req.query.status]);
     else if (!req.query.status) where.status = { [Op.ne]: 'voided' };
     const include = svc.SESSION_INCLUDE.map((i) => ({ ...i }));
@@ -378,7 +389,9 @@ const manual = async (req, res) => {
     if (checkOutAt && checkOutAt <= checkInAt) return error(res, 'Check-out must be after check-in', 400);
     if (checkInAt > new Date()) return error(res, 'A check-in cannot be in the future', 400);
     const target = await User.findByPk(userId, { attributes: ['id', 'firstName', 'lastName', 'role', 'isActive'] });
-    if (!target) return error(res, 'Staff member not found', 404);
+    if (!target || !(await hrScope.canActOn(req.user, PERMISSIONS.HR_ATTENDANCE_AMEND, target.id))) {
+      return error(res, 'Staff member not found', 404);
+    }
 
     const cfg = await getHrConfig();
     const clinicDate = clinicToday(checkInAt);
@@ -417,7 +430,9 @@ const amend = async (req, res) => {
   let transaction;
   try {
     const row = await StaffAttendance.findByPk(req.params.id);
-    if (!row) return error(res, 'Session not found', 404);
+    if (!row || !(await hrScope.canActOn(req.user, PERMISSIONS.HR_ATTENDANCE_AMEND, row.UserId))) {
+      return error(res, 'Session not found', 404);
+    }
     if (row.status === 'refused') return error(res, 'A refused tap cannot be amended — record a manual entry instead', 400);
     const { reason } = req.body;
     const before = { checkInAt: row.checkInAt, checkOutAt: row.checkOutAt, status: row.status };
@@ -479,6 +494,9 @@ const getOne = async (req, res) => {
     const row = await StaffAttendance.findByPk(req.params.id, { include: svc.SESSION_INCLUDE });
     if (!row) return error(res, 'Session not found', 404);
     if (row.UserId !== req.user.id && !canViewHr(req.user)) return error(res, 'You do not have permission to do that.', 403);
+    if (row.UserId !== req.user.id && !(await hrScope.canActOn(req.user, PERMISSIONS.HR_VIEW, row.UserId))) {
+      return error(res, 'Session not found', 404);
+    }
     return success(res, svc.serializeSession(row));
   } catch (err) {
     console.error('StaffAttendance.getOne error:', err);

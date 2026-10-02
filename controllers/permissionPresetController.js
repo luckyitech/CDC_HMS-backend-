@@ -2,8 +2,25 @@ const { Op } = require('sequelize');
 const { success, error } = require('../utils/response');
 const db = require('../models');
 const {
-  PRESET_EXCLUDED, PRESET_ROLES, STAFF_TYPES, reconcilePermissionLists, toList,
+  PRESET_EXCLUDED, PRESET_ROLES, STAFF_TYPES, reconcilePermissionLists, toList, SCOPABLE,
 } = require('../constants/permissions');
+const { parseJsonColumn } = require('../utils/jsonColumn');
+
+/**
+ * A preset's department scopes (HR Tier 3 Phase 1): only "their own
+ * department" can ride in a template — that is what lets one "Nurse in charge"
+ * preset fit every ward lead. Named departments are a per-person choice made
+ * on the Permissions tab. Kept only for controls the preset grants.
+ * → { capability: { kind: 'own' } }
+ */
+const cleanPresetScopes = (raw, granted) => {
+  const obj = parseJsonColumn(raw) || {};
+  const out = {};
+  for (const [cap, spec] of Object.entries(obj)) {
+    if (SCOPABLE.includes(cap) && granted.includes(cap) && spec && spec.kind === 'own') out[cap] = { kind: 'own' };
+  }
+  return out;
+};
 
 const { PermissionPreset, User } = db;
 
@@ -34,6 +51,7 @@ const formatPreset = (p) => ({
   department:        p.department,
   permissions:       toList(p.permissions),
   deniedPermissions: toList(p.deniedPermissions),
+  scopes:            cleanPresetScopes(p.scopes, toList(p.permissions)),
   status:            p.status,
   appliedCount:      p.appliedCount,
   createdBy:         p.createdBy ? `${p.createdBy.firstName} ${p.createdBy.lastName}` : null,
@@ -75,6 +93,7 @@ const validatePresetPayload = (body) => {
       department:  body.department ? String(body.department).trim() : null,
       permissions:       granted,
       deniedPermissions: denied,
+      scopes:            cleanPresetScopes(body.scopes, granted),
     },
   };
 };
@@ -165,4 +184,5 @@ module.exports = {
   // exported for tests
   validatePresetPayload,
   formatPreset,
+  cleanPresetScopes,
 };

@@ -76,6 +76,17 @@ const StaffProfile = defineModel('StaffProfile', {
   department: {
     type: DataTypes.STRING,
   },
+  // HR Tier 3 Phase 1: the list entries. `position` / `department` above are now
+  // the DISPLAY COPY of these, written only by services/staffLists (so the many
+  // screens that read the text keep working). Scoping and reports read the ids.
+  departmentId: {
+    type: DataTypes.INTEGER,
+    allowNull: true,
+  },
+  positionId: {
+    type: DataTypes.INTEGER,
+    allowNull: true,
+  },
   ward: {
     type: DataTypes.STRING,
   },

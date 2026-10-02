@@ -66,6 +66,15 @@ const PermissionPreset = defineModel('PermissionPreset', {
   },
   // Soft delete: an archived preset disappears from the wizard's dropdown but
   // keeps its history, and its name may be reused by a new active one.
+  // HR Tier 3 Phase 1: { capability: { kind: 'own' } } — the controls this
+  // template limits to the new hire's own department (permissionPresetController
+  // .cleanPresetScopes). Copied into PermissionScopes when applied; a template,
+  // never a link (editing the preset changes nobody).
+  scopes: {
+    type: DataTypes.JSON,
+    allowNull: true,
+    defaultValue: null,
+  },
   status: {
     type: DataTypes.ENUM('active', 'archived'),
     allowNull: false,

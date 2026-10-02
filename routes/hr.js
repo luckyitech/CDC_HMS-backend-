@@ -12,6 +12,7 @@ const hrTags = require('../controllers/hrTagsController');
 const hrSettings = require('../controllers/hrSettingsController');
 const hrProfile = require('../controllers/hrProfileController');
 const cpd = require('../controllers/cpdController');
+const hrLists = require('../controllers/hrListsController');
 
 // =====================================================================
 // HR Suite (B21) — /api/hr
@@ -43,6 +44,11 @@ const PROFILE_APPROVE = ['admin', 'hr.profile.approve'];
 // CPD verification (B27 phase 5, D12). hr.credentials was split into
 // cpd.verify and hr.expiry.alerts (HR Tier 3 Phase 0); a stored grant expands.
 const CPD_VERIFY = ['admin', 'cpd.verify'];
+// HR Tier 3 Phase 1: the Departments / Positions lists. Reading them is for
+// every member of staff (pickers on the staff file, the wizard, the scope
+// picker — department names are not secret); changing them is hr.lists.
+const LISTS_READ = ['doctor', 'staff', 'lab', 'nurse', 'admin', 'hr.lists'];
+const LISTS      = ['admin', 'hr.lists'];
 
 // A tap is one request per person per event; 60 a minute per IP is generous
 // for a whole clinic behind one NAT, and caps a scripted flood.
@@ -143,5 +149,17 @@ router.patch('/cpd/:id/verify', authenticate, authorize(...CPD_VERIFY), [
   validate,
 ], cpd.verify);
 router.get('/cpd/:id/certificate', authenticate, authorize(...CPD_VERIFY), [param('id').isInt({ min: 1 }), validate], cpd.certificate);
+
+// ---- Departments and positions (HR Tier 3 Phase 1) ----
+const LIST = param('list').isIn(['departments', 'positions']).withMessage('Unknown list');
+router.get('/lists', authenticate, authorize(...LISTS_READ), hrLists.list);
+router.get('/lists/tidy', authenticate, authorize(...LISTS), hrLists.tidy);
+router.post('/lists/tidy', authenticate, authorize(...LISTS), [
+  body('departments').optional().isArray(), body('positions').optional().isArray(), validate,
+], hrLists.applyTidy);
+router.post('/lists/:list', authenticate, authorize(...LISTS), [
+  LIST, body('name').isString().trim().isLength({ min: 2, max: 120 }).withMessage('Give it a name'), validate,
+], hrLists.create);
+router.patch('/lists/:list/:id', authenticate, authorize(...LISTS), [LIST, param('id').isInt({ min: 1 }), validate], hrLists.update);
 
 module.exports = router;

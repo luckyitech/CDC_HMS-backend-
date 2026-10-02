@@ -27,6 +27,7 @@ const { success, error } = require('../utils/response');
 const { datesInRange } = require('../utils/leaveCalc');
 const { STATUS, TAKEN_STATUSES } = require('../utils/leaveWorkflow');
 const { PERMISSIONS, passesAdminGate } = require('../constants/permissions');
+const hrScope = require('../services/hrScope');
 const { clinicToday } = require('../utils/clinicTime');
 const { parseJsonColumn } = require('../utils/jsonColumn');
 const leaveService = require('../services/leaveService');
@@ -114,15 +115,17 @@ const list = async (req, res) => {
   const today = clinicToday();
   const year = parseInt(req.query.year, 10) || Number(today.slice(0, 4));
   const userId = req.staffUser.id;
-  const redact = req.user.id !== userId && !canSeeSickLeave(req.user);
 
   try {
+    // HR Tier 3 Phase 1: sick details and recording follow the viewer's
+    // department scope for this person.
+    const redact = req.user.id !== userId && !(await hrScope.canActOn(req.user, PERMISSIONS.LEAVE_SICK, userId));
     const data = await buildOverview({ userId, year, today, redact });
     if (!data) return error(res, 'Staff member not found', 404);
     // What HR may record on this person's behalf: every type in use this year,
     // including ones staff don't see (D10) — only for leave.manage.
     let recordTypes = null;
-    if (canManageLeave(req.user) && req.user.id !== userId) {
+    if (req.user.id !== userId && await hrScope.canActOn(req.user, PERMISSIONS.LEAVE_MANAGE, userId)) {
       const [types, policy] = await Promise.all([leaveService.listTypes(), leaveService.loadPolicy(year)]);
       recordTypes = types.filter((t) => !policy || policy.types[t.key]?.enabled)
         .map((t) => ({ key: t.key, name: t.name, halfDaysAllowed: policy ? !!policy.types[t.key]?.halfDaysAllowed : false }));

@@ -13,6 +13,7 @@ const {
   passesAdminGate, sanitizePermissions, sanitizeDeniedPermissions, reconcilePermissionLists,
   canGrantHrPermissions, canEditPermissions, displayedPermissions,
 } = require('../constants/permissions');
+require('./_noScopeRows');
 const { authorize } = require('../middleware/auth');
 const { leaveViewOrSelf, documentUploader } = require('../routes/staff');
 const { hrGrantRefusal } = require('../controllers/staffController');

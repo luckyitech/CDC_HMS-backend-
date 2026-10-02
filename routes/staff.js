@@ -6,6 +6,8 @@ const { authenticate, authorize } = require('../middleware/auth');
 const { PERMISSIONS, passesAdminGate, canEditPermissions, canViewConfidential } = require('../constants/permissions');
 const { error } = require('../utils/response');
 const findStaff = require('../middleware/findStaff');
+const { inStaffScope } = require('../middleware/staffScope');
+const { canActOn } = require('../services/hrScope');
 const uploadStaffDocument = require('../middleware/uploadStaffDocument');
 const { handlePhotoUpload } = require('../middleware/uploadStaffPhoto');
 const staffPhotoController = require('../controllers/staffPhotoController');
@@ -51,9 +53,13 @@ const catalogReader = (req, res, next) => {
 // It used to test `role === 'admin'`, which refused a doctor holding
 // admin.access (403 on every file but their own) while every WRITE on the same
 // file already went through authorize('admin', 'users.write') and let them in.
-const adminOrSelf = (req, res, next) => {
-  if (passesAdminGate(req.user, PERMISSIONS.STAFF_VIEW)) return next();
+const adminOrSelf = async (req, res, next) => {
   if (req.staffUser && req.staffUser.id === req.user.id) return next();
+  if (passesAdminGate(req.user, PERMISSIONS.STAFF_VIEW)) {
+    // HR Tier 3 Phase 1: a department-limited holder sees only their people.
+    if (await canActOn(req.user, PERMISSIONS.STAFF_VIEW, req.staffUser.id)) return next();
+    return error(res, 'Staff member not found', 404);
+  }
   return error(res, 'Access denied', 403);
 };
 
@@ -61,17 +67,20 @@ const adminOrSelf = (req, res, next) => {
 // (leave.view — carried by leave.manage) even without opening staff files.
 // What a viewer without sick-leave details sees of someone else's sick leave
 // is trimmed in the controller (health data, leave.sick).
-const leaveViewOrSelf = (req, res, next) => {
-  if (passesAdminGate(req.user, PERMISSIONS.LEAVE_VIEW)) return next();
+const leaveViewOrSelf = async (req, res, next) => {
+  if (passesAdminGate(req.user, PERMISSIONS.LEAVE_VIEW)
+      && await canActOn(req.user, PERMISSIONS.LEAVE_VIEW, req.staffUser.id)) return next();
   return adminOrSelf(req, res, next);
 };
 
 // Uploading a document: the person to their own file, or someone who manages
 // colleagues' documents, or a confidential-drawer holder (filing a contract).
-const documentUploader = (req, res, next) => {
+const documentUploader = async (req, res, next) => {
   if (req.staffUser && req.staffUser.id === req.user.id) return next();
-  if (passesAdminGate(req.user, PERMISSIONS.STAFF_DOCUMENTS)) return next();
-  if (canViewConfidential(req.user)) return next();
+  if (passesAdminGate(req.user, PERMISSIONS.STAFF_DOCUMENTS)
+      && await canActOn(req.user, PERMISSIONS.STAFF_DOCUMENTS, req.staffUser.id)) return next();
+  if (canViewConfidential(req.user)
+      && await canActOn(req.user, PERMISSIONS.HR_CONFIDENTIAL, req.staffUser.id)) return next();
   return error(res, 'Access denied', 403);
 };
 
@@ -87,8 +96,9 @@ const permissionsEditor = (req, res, next) => {
 // surfaces as a generic 500. This turns it into the message the admin needs.
 // A face is wanted wherever a name is shown: the staff directory (hr.view) as
 // well as the staff file itself (staff.view or the person) — 2 Oct 2026.
-const photoViewer = (req, res, next) => {
-  if (passesAdminGate(req.user, PERMISSIONS.HR_VIEW)) return next();
+const photoViewer = async (req, res, next) => {
+  if (passesAdminGate(req.user, PERMISSIONS.HR_VIEW)
+      && await canActOn(req.user, PERMISSIONS.HR_VIEW, req.staffUser.id)) return next();
   return adminOrSelf(req, res, next);
 };
 
@@ -119,7 +129,7 @@ router.get('/', authenticate, authorize(...STAFF_VIEW), staffController.list);
 
 router.get('/:employeeId', authenticate, findStaff, adminOrSelf, staffController.getOne);
 
-router.put('/:employeeId', authenticate, authorize(...STAFF_EDIT), findStaff, [
+router.put('/:employeeId', authenticate, authorize(...STAFF_EDIT), findStaff, inStaffScope('staff.edit'), [
   body('firstName').optional().notEmpty().withMessage('First name cannot be empty'),
   body('lastName').optional().notEmpty().withMessage('Last name cannot be empty'),
   body('email').optional({ nullable: true }).isEmail().withMessage('Valid email is required'),
@@ -131,7 +141,7 @@ router.put('/:employeeId', authenticate, authorize(...STAFF_EDIT), findStaff, [
   validate,
 ], staffController.update);
 
-router.patch('/:employeeId/status', authenticate, authorize(...STAFF_STATUS), findStaff, [
+router.patch('/:employeeId/status', authenticate, authorize(...STAFF_STATUS), findStaff, inStaffScope('staff.status'), [
   body('employmentStatus').isIn(EMPLOYMENT_STATUSES).withMessage('Invalid employment status'),
   validate,
 ], staffController.updateStatus);
@@ -149,10 +159,10 @@ router.patch('/:employeeId/permissions', authenticate, permissionsEditor, findSt
   validate,
 ], staffController.updatePermissions);
 
-router.delete('/:employeeId', authenticate, authorize(...STAFF_STATUS), findStaff, staffController.archive);
-router.patch('/:employeeId/restore', authenticate, authorize(...STAFF_STATUS), findStaff, staffController.restore);
+router.delete('/:employeeId', authenticate, authorize(...STAFF_STATUS), findStaff, inStaffScope('staff.status'), staffController.archive);
+router.patch('/:employeeId/restore', authenticate, authorize(...STAFF_STATUS), findStaff, inStaffScope('staff.status'), staffController.restore);
 
-router.get('/:employeeId/activity', authenticate, authorize(...STAFF_VIEW), findStaff, [
+router.get('/:employeeId/activity', authenticate, authorize(...STAFF_VIEW), findStaff, inStaffScope('staff.view'), [
   param('employeeId').notEmpty(),
   validate,
 ], staffController.activity);
@@ -164,7 +174,7 @@ router.get('/:employeeId/activity', authenticate, authorize(...STAFF_VIEW), find
 router.get('/:employeeId/leaves', authenticate, findStaff, leaveViewOrSelf, leaveController.list);
 // Required approvers (HR Tier 2): read with the Leave tab; set by leave.required (Tier 3; leave.manage carries it), never on your own file.
 router.get('/:employeeId/required-approvers', authenticate, findStaff, leaveViewOrSelf, requiredApproverController.list);
-router.put('/:employeeId/required-approvers', authenticate, authorize('admin', 'leave.required'), findStaff, [
+router.put('/:employeeId/required-approvers', authenticate, authorize('admin', 'leave.required'), findStaff, inStaffScope('leave.required'), [
   body('approverIds').isArray({ max: 5 }).withMessage('Choose up to five people'), validate,
 ], requiredApproverController.set);
 
@@ -180,10 +190,10 @@ const RECORD_FIELDS = [
   body('reason').optional({ nullable: true }).isString(),
   body('excludeWeekends').optional().isBoolean(),
 ];
-router.post('/:employeeId/leaves/preview', authenticate, authorize(...LEAVE_MANAGE), findStaff, [
+router.post('/:employeeId/leaves/preview', authenticate, authorize(...LEAVE_MANAGE), findStaff, inStaffScope('leave.manage'), [
   body('startPart').optional().isIn(['full', 'pm']), body('endPart').optional().isIn(['full', 'am']), validate,
 ], leaveController.previewOnBehalf);
-router.post('/:employeeId/leaves', authenticate, authorize(...LEAVE_MANAGE), findStaff, [...RECORD_FIELDS, validate], leaveController.create);
+router.post('/:employeeId/leaves', authenticate, authorize(...LEAVE_MANAGE), findStaff, inStaffScope('leave.manage'), [...RECORD_FIELDS, validate], leaveController.create);
 
 // PUT /:employeeId/leave-balances was RETIRED (2 Oct 2026, B27 debt): no screen
 // has used it since phase 3. Entitlement overrides are written in ONE place —
@@ -196,8 +206,8 @@ router.post('/:employeeId/leaves', authenticate, authorize(...LEAVE_MANAGE), fin
 
 // Photo (2 Oct 2026).
 router.get('/:employeeId/photo', authenticate, findStaff, photoViewer, staffPhotoController.staffGet);
-router.put('/:employeeId/photo', authenticate, authorize(...STAFF_EDIT), findStaff, handlePhotoUpload, staffPhotoController.staffPut);
-router.delete('/:employeeId/photo', authenticate, authorize(...STAFF_EDIT), findStaff, staffPhotoController.staffDelete);
+router.put('/:employeeId/photo', authenticate, authorize(...STAFF_EDIT), findStaff, inStaffScope('staff.edit'), handlePhotoUpload, staffPhotoController.staffPut);
+router.delete('/:employeeId/photo', authenticate, authorize(...STAFF_EDIT), findStaff, inStaffScope('staff.edit'), staffPhotoController.staffDelete);
 
 // CPD, read-only, for the staff file's Credentials tab (B27 debt fix).
 router.get('/:employeeId/cpd', authenticate, findStaff, adminOrSelf, cpdController.staffList);
@@ -212,14 +222,14 @@ router.post('/:employeeId/documents', authenticate, findStaff, documentUploader,
 router.get('/:employeeId/documents/:id/file', authenticate, findStaff, adminOrSelf,
   staffDocumentController.serveFile);
 
-router.patch('/:employeeId/documents/:id', authenticate, authorize(...STAFF_DOCS), findStaff,
+router.patch('/:employeeId/documents/:id', authenticate, authorize(...STAFF_DOCS), findStaff, inStaffScope('staff.documents'),
   staffDocumentController.update);
 
 // Archives rather than deletes — the file and the row both survive.
-router.delete('/:employeeId/documents/:id', authenticate, authorize(...STAFF_DOCS), findStaff,
+router.delete('/:employeeId/documents/:id', authenticate, authorize(...STAFF_DOCS), findStaff, inStaffScope('staff.documents'),
   staffDocumentController.archive);
 
-router.patch('/:employeeId/documents/:id/restore', authenticate, authorize(...STAFF_DOCS), findStaff,
+router.patch('/:employeeId/documents/:id/restore', authenticate, authorize(...STAFF_DOCS), findStaff, inStaffScope('staff.documents'),
   staffDocumentController.restore);
 
 module.exports = router;

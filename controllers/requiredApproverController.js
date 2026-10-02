@@ -14,6 +14,7 @@
 const { Op } = require('sequelize');
 const { success, error } = require('../utils/response');
 const { PERMISSIONS, passesAdminGate, INTERNAL_ROLES } = require('../constants/permissions');
+const hrScope = require('../services/hrScope');
 const { writeUserEditLog } = require('../services/hrAttendanceService');
 const sequelize = require('../config/database');
 const db = require('../models');
@@ -48,7 +49,8 @@ const activeRequiredIds = async (userId) => (await listFor(userId)).filter((r) =
 
 const list = async (req, res) => {
   try {
-    return success(res, { approvers: await listFor(req.staffUser.id), canEdit: passesAdminGate(req.user, PERMISSIONS.LEAVE_REQUIRED) && req.staffUser.id !== req.user.id });
+    return success(res, { approvers: await listFor(req.staffUser.id), canEdit: req.staffUser.id !== req.user.id
+      && await hrScope.canActOn(req.user, PERMISSIONS.LEAVE_REQUIRED, req.staffUser.id) });
   } catch (err) {
     console.error('RequiredApprover.list error:', err);
     return error(res, 'Failed to load required approvers', 500);

@@ -277,6 +277,11 @@ const PERMISSIONS = {
   STAFF_STATUS:    'staff.status',     // suspend / resign / terminate, archive, restore
   STAFF_DOCUMENTS: 'staff.documents',  // upload, reclassify, archive someone else's documents
 
+  // HR Tier 3 Phase 1 (2 Oct 2026): the clinic's Departments and Positions
+  // lists, and the one-off tidy screen that maps today's free text onto them.
+  // Clinic-wide (never department-scoped); covered by admin.access.
+  HR_LISTS: 'hr.lists',
+
   // The right to change OTHER people's HR Suite capabilities, and only those
   // (HR_DELEGABLE). Like permissions.grant it is checked by a bespoke gate
   // (canGrantHrPermissions), never authorize(), so admin.access can never
@@ -556,6 +561,7 @@ const ADMIN_ACCESS_COVERS = [
   PERMISSIONS.STAFF_ONBOARD,
   PERMISSIONS.STAFF_STATUS,
   PERMISSIONS.STAFF_DOCUMENTS,
+  PERMISSIONS.HR_LISTS,
   PERMISSIONS.INPATIENT_ACCESS,
   PERMISSIONS.INPATIENT_WRITE,
   PERMISSIONS.LAB_VIEW,
@@ -827,6 +833,11 @@ const PERMISSION_GROUPS = [
         warning: 'This person will be able to read every confidential document on every '
           + 'staff file, and to mark documents confidential or share them with the staff '
           + 'member. Full administrator access does not include this.' },
+      { key: 'hr-lists', name: 'Departments and positions', appliesIn: 'HR Suite → Settings → Lists',
+        description: 'The clinic\'s lists of departments and positions that staff files pick '
+          + 'from, and the one-off screen that tidies what was typed before the lists existed.',
+        access: PERMISSIONS.HR_LISTS, accessLabel: 'Can manage departments and positions',
+        roleDefault: 'Administrators' },
       { key: 'hr-profile-approve', name: 'Profile change requests', appliesIn: 'HR Suite → Profile requests',
         description: 'Decide what colleagues ask to change on their own record — name, National '
           + 'ID, date of birth, licence and qualification details.',
@@ -1403,6 +1414,39 @@ const canGrantHrPermissions = (user) =>
 /** Either kind of grantor — who may open the Permissions tab for editing at all. */
 const canEditPermissions = (user) => canGrantPermissions(user) || canGrantHrPermissions(user);
 
+// ---------------------------------------------------------------------
+// Department scopes on HR controls (HR Tier 3 Phase 1, P-1/P-7/P-8)
+// ---------------------------------------------------------------------
+
+// The HR controls that act on PEOPLE, and so can be limited to departments on
+// the Permissions tab (All staff · their own department · named departments).
+// Everything else in the HR groups changes a clinic-wide rule (policy, holidays,
+// settings, lists, tags, onboarding) or is chosen per request (leave.approve)
+// or is one's own (hr.self, hr.checkin) — none of those can be narrowed.
+// A control with no scope rows is "All staff". Resolved by utils/hrScope;
+// stored by services/hrScope (PermissionScopes). permissionVocabulary.test
+// checks every entry here is a real HR control.
+const SCOPABLE = [
+  PERMISSIONS.STAFF_VIEW,
+  PERMISSIONS.STAFF_EDIT,
+  PERMISSIONS.STAFF_STATUS,
+  PERMISSIONS.STAFF_DOCUMENTS,
+  PERMISSIONS.HR_CONFIDENTIAL,
+  PERMISSIONS.HR_PROFILE_APPROVE,
+  PERMISSIONS.HR_VIEW,
+  PERMISSIONS.HR_ATTENDANCE_AMEND,
+  PERMISSIONS.HR_WORKHOURS,
+  PERMISSIONS.LEAVE_VIEW,
+  PERMISSIONS.LEAVE_SICK,
+  PERMISSIONS.LEAVE_MANAGE,
+  PERMISSIONS.LEAVE_REQUIRED,
+  PERMISSIONS.LEAVE_REGISTER,
+  PERMISSIONS.LEAVE_ENTITLEMENTS,
+  PERMISSIONS.CPD_VERIFY,
+  PERMISSIONS.HR_EXPIRY_ALERTS,
+  PERMISSIONS.HR_GRANT,
+];
+
 // Roles a preset can be defined for — the same set that may hold permissions.
 const PRESET_ROLES = PERMISSIBLE_ROLES;
 
@@ -1439,6 +1483,7 @@ module.exports = {
   defaultPermissionsFor,
   PRESET_EXCLUDED,
   PRESET_ROLES,
+  SCOPABLE,
   BUNDLES,
   IMPLIED_BY,
   withCarried,

@@ -6,7 +6,8 @@
 const fs = require('fs');
 const crypto = require('crypto');
 const { success, error } = require('../utils/response');
-const { canViewConfidential } = require('../constants/permissions');
+const { canViewConfidential, passesAdminGate, PERMISSIONS } = require('../constants/permissions');
+const hrScope = require('../services/hrScope');
 const { resolveStoredFile } = require('../utils/staffDocumentStorage');
 const { Op } = require('sequelize');
 const { HEALTH_DOCUMENT_CATEGORIES, isHealthDocument, canSeeHealthDocumentsOf } = require('../utils/hrAccess');
@@ -38,8 +39,27 @@ const isConfidential = (document) => document.visibility !== 'Staff' || document
 // A health document (a sick note) the caller may not see is answered exactly
 // like a document that does not exist — 404, never 403, so its existence is
 // not disclosed either (utils/hrAccess.canSeeHealthDocumentsOf).
-const hiddenHealthDoc = (req, document) =>
-  isHealthDocument(document) && !canSeeHealthDocumentsOf(req.user, req.staffUser);
+//
+// HR Tier 3 Phase 1: both questions follow the caller's department scope for
+// THIS person — the confidential drawer (hr.confidential) and health documents
+// (leave.sick). Worked out once per request.
+const withDocAccess = async (req) => {
+  if (req.docAccess) return req.docAccess;
+  const target = req.staffUser;
+  const confidential = canViewConfidential(req.user)
+    && await hrScope.canActOn(req.user, PERMISSIONS.HR_CONFIDENTIAL, target.id);
+  const health = canSeeHealthDocumentsOf(req.user, req.staffUser) && (
+    target.id === req.user.id
+    || confidential
+    || (passesAdminGate(req.user, PERMISSIONS.LEAVE_SICK)
+        && await hrScope.canActOn(req.user, PERMISSIONS.LEAVE_SICK, target.id))
+  );
+  req.docAccess = { confidential, health };
+  return req.docAccess;
+};
+
+const hiddenHealthDoc = async (req, document) =>
+  isHealthDocument(document) && !(await withDocAccess(req)).health;
 
 const formatSize = (bytes) => {
   if (!bytes && bytes !== 0) return null;
@@ -103,7 +123,7 @@ const discard = (file) => {
  * Authorization: users.view, or the staff member themselves (adminOrSelf)
  */
 const list = async (req, res) => {
-  const confidential = canViewConfidential(req.user);
+  const confidential = (await withDocAccess(req)).confidential;
 
   try {
     // Archived documents are hidden by default and only a confidential-drawer
@@ -112,7 +132,7 @@ const list = async (req, res) => {
 
     const where = { UserId: req.staffUser.id, isArchived: wantsArchived };
     if (!confidential) where.visibility = 'Staff';
-    if (!canSeeHealthDocumentsOf(req.user, req.staffUser)) {
+    if (!(await withDocAccess(req)).health) {
       where.category = { [Op.notIn]: HEALTH_DOCUMENT_CATEGORIES };
     }
 
@@ -140,7 +160,7 @@ const upload = async (req, res) => {
   if (!req.file) return error(res, 'No file uploaded', 400);
 
   const { category, notes, expiryDate } = req.body;
-  const confidential = canViewConfidential(req.user);
+  const confidential = (await withDocAccess(req)).confidential;
 
   try {
     if (category && !CATEGORIES.includes(category)) {
@@ -210,9 +230,9 @@ const update = async (req, res) => {
     const document = await StaffDocument.findOne({
       where: { id: req.params.id, UserId: req.staffUser.id },
     });
-    if (!document || hiddenHealthDoc(req, document)) return error(res, 'Document not found', 404);
+    if (!document || await hiddenHealthDoc(req, document)) return error(res, 'Document not found', 404);
 
-    if ((isConfidential(document) || visibility !== undefined) && !canViewConfidential(req.user)) {
+    if ((isConfidential(document) || visibility !== undefined) && !(await withDocAccess(req)).confidential) {
       return error(res, 'Only a holder of confidential staff documents can do that', 403);
     }
 
@@ -264,8 +284,8 @@ const archive = async (req, res) => {
     const document = await StaffDocument.findOne({
       where: { id: req.params.id, UserId: req.staffUser.id },
     });
-    if (!document || hiddenHealthDoc(req, document)) return error(res, 'Document not found', 404);
-    if (isConfidential(document) && !canViewConfidential(req.user)) {
+    if (!document || await hiddenHealthDoc(req, document)) return error(res, 'Document not found', 404);
+    if (isConfidential(document) && !(await withDocAccess(req)).confidential) {
       return error(res, 'Only a holder of confidential staff documents can do that', 403);
     }
     if (document.isArchived) return error(res, 'This document is already archived', 400);
@@ -298,8 +318,8 @@ const restore = async (req, res) => {
     const document = await StaffDocument.findOne({
       where: { id: req.params.id, UserId: req.staffUser.id },
     });
-    if (!document || hiddenHealthDoc(req, document)) return error(res, 'Document not found', 404);
-    if (!canViewConfidential(req.user)) {
+    if (!document || await hiddenHealthDoc(req, document)) return error(res, 'Document not found', 404);
+    if (!(await withDocAccess(req)).confidential) {
       return error(res, 'Only a holder of confidential staff documents can do that', 403);
     }
     if (!document.isArchived) return error(res, 'This document is not archived', 400);
@@ -329,13 +349,13 @@ const restore = async (req, res) => {
  * a confidential document additionally needs hr.confidential
  */
 const serveFile = async (req, res) => {
-  const confidential = canViewConfidential(req.user);
+  const confidential = (await withDocAccess(req)).confidential;
 
   try {
     const document = await StaffDocument.findOne({
       where: { id: req.params.id, UserId: req.staffUser.id },
     });
-    if (!document || hiddenHealthDoc(req, document)) return error(res, 'Document not found', 404);
+    if (!document || await hiddenHealthDoc(req, document)) return error(res, 'Document not found', 404);
     if (!confidential && isConfidential(document)) return error(res, 'Access denied', 403);
 
     // Only the stored file NAME is trusted, joined onto the private folder

@@ -56,7 +56,8 @@ router.post('/doctors', authenticate, authorize('admin', 'staff.onboard'), [
   body('phone').notEmpty().withMessage('Phone number is required'),
   body('licenseNumber').notEmpty().withMessage('License number is required'),
   body('specialty').notEmpty().withMessage('Specialty is required'),
-  body('department').notEmpty().withMessage('Department is required'),
+  // HR Tier 3 Phase 1: a department picked from the list (departmentId), or text.
+  body('department').if(body('departmentId').not().exists({ values: 'falsy' })).notEmpty().withMessage('Department is required'),
   body('qualification').notEmpty().withMessage('Qualification is required'),
   body('medicalSchool').optional({ nullable: true }).isString(),
   body('yearsExperience').isInt({ min: 0 }).withMessage('Years of experience must be a positive number'),
@@ -75,8 +76,9 @@ router.post('/staff', authenticate, authorize('admin', 'staff.onboard'), [
   body('lastName').notEmpty().withMessage('Last name is required'),
   body('email').isEmail().withMessage('Valid email is required'),
   body('phone').notEmpty().withMessage('Phone number is required'),
-  body('position').notEmpty().withMessage('Position is required'),
-  body('department').notEmpty().withMessage('Department is required'),
+  body('position').if(body('positionId').not().exists({ values: 'falsy' })).notEmpty().withMessage('Position is required'),
+  // HR Tier 3 Phase 1: a department picked from the list (departmentId), or text.
+  body('department').if(body('departmentId').not().exists({ values: 'falsy' })).notEmpty().withMessage('Department is required'),
   // Shift is optional now. It used to be required, which forced the create form
   // to hardcode 'Morning' on every submission — so the column recorded nothing
   // real. A hospital not running shifts can leave it blank.
