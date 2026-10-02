@@ -5,7 +5,7 @@
 // while it is still pending. Every self action is on req.user.id — no route
 // names a person.
 //
-// HR (/api/hr/cpd, routes/hr.js, hr.credentials): the queue of pending entries,
+// HR (/api/hr/cpd, routes/hr.js, cpd.verify): the queue of pending entries,
 // and verify (optionally adjusting the points) or reject with a note. Verifying
 // stamps and LOCKS the row; the person is notified. Nobody's points count until
 // HR has verified them (mockup 5A/5B).
@@ -120,7 +120,7 @@ const list = async (req, res) => {
  * Credentials tab (B27 debt fix, 2 Oct 2026). Same gate as the rest of the
  * staff file (users.view or the person themselves — adminOrSelf at the route).
  * CPD is a professional record, not health data. Verifying stays on
- * /hr/requests (hr.credentials); the certificate is on the Documents tab.
+ * /hr/requests (cpd.verify); the certificate is on the Documents tab.
  */
 const staffList = async (req, res) => {
   try {
@@ -183,7 +183,7 @@ const remove = async (req, res) => {
 };
 
 // ---------------------------------------------------------------------------
-// HR — hr.credentials
+// HR — cpd.verify (was hr.credentials)
 // ---------------------------------------------------------------------------
 
 /** GET /api/hr/cpd?status=pending|decided&year= — the verify queue. */
@@ -269,7 +269,7 @@ const verify = async (req, res) => {
 };
 
 /**
- * GET /api/hr/cpd/:id/certificate — the certificate, for hr.credentials, so HR
+ * GET /api/hr/cpd/:id/certificate — the certificate, for cpd.verify, so HR
  * can check it before verifying. Streams from private/ like the leave attachment.
  */
 const certificate = async (req, res) => {

@@ -14,7 +14,7 @@ const ctrl = require('../controllers/permissionPresetController');
 
 const ID = [param('id').isInt({ min: 1 }).withMessage('Invalid preset id'), validate];
 
-router.get('/',            authenticate, authorize('admin', 'users.view'), ctrl.list);
+router.get('/',            authenticate, authorize('admin', 'users.view', 'staff.onboard'), ctrl.list);
 router.post('/',           authenticate, requireTrueAdmin, ctrl.create);
 router.put('/:id',         authenticate, requireTrueAdmin, ID, ctrl.update);
 router.patch('/:id/archive', authenticate, requireTrueAdmin, ID, ctrl.archive);

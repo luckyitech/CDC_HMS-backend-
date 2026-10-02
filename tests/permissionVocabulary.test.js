@@ -42,6 +42,27 @@ const CHECKED_ELSEWHERE = {
     'controllers/staffDocumentController.js via canViewConfidential() — the '
     + 'confidential drawer of a staff file; deliberately not an authorize() '
     + 'argument so admin.access can never satisfy it (tests/adminLiteralGates.test.js)',
+  [PERMISSIONS.HR_GRANT]:
+    'routes/staff.js permissionsEditor / catalogReader via canGrantHrPermissions() — '
+    + 'delegated HR granting; deliberately not an authorize() argument so admin.access '
+    + 'can never satisfy it (tests/hrTier3Phase0.test.js)',
+};
+
+// Capabilities checked INLINE with passesAdminGate() — so admin.access holders
+// pass them exactly as a route listing 'admin' would — rather than in a route
+// gate. They count as gating something AND as covered by admin.access.
+//
+// leave.view / leave.sick (HR Tier 3 Phase 0) cannot sit in the leave approval
+// routes' gate: every internal role passes those by role, and naming the
+// capability there would make a WITHDRAWAL of it lock that person out of their
+// own approvals inbox (authorize() refuses on any withdrawn capability listed).
+const INLINE_ADMIN_GATED = {
+  [PERMISSIONS.LEAVE_VIEW]:
+    'routes/staff.js leaveViewOrSelf; leaveApprovalController standing() and the '
+    + 'All tab; leaveCalendarController (real leave types)',
+  [PERMISSIONS.LEAVE_SICK]:
+    'leaveController.list / leaveApprovalController standing().redact and the '
+    + 'register; leaveCalendarController; utils/hrAccess.canSeeHealthDocumentsOf',
 };
 
 // Portal capabilities gate the frontend shell. A portal is a set of screens,
@@ -134,7 +155,8 @@ describe('the permission vocabulary is complete and honest', () => {
     const dead = ALL_PERMISSIONS
       .filter((p) => !isPortal(p))
       .filter((p) => !GATED.has(p))
-      .filter((p) => !CHECKED_ELSEWHERE[p]);
+      .filter((p) => !CHECKED_ELSEWHERE[p])
+      .filter((p) => !INLINE_ADMIN_GATED[p]);
     assert.deepEqual(dead, [],
       'granting this changes nothing — the toggle is a lie. Gate a route with it, '
       + 'or add it to CHECKED_ELSEWHERE with the reason.');
@@ -217,6 +239,7 @@ describe('ADMIN_ACCESS_COVERS matches what the routes actually do', () => {
         derived.add(cap);
       }
     }
+    for (const cap of Object.keys(INLINE_ADMIN_GATED)) derived.add(cap);
 
     assert.deepEqual(
       [...derived].sort(),

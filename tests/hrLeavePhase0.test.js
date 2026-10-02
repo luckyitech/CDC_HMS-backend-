@@ -26,7 +26,8 @@ const readRoute = (file) => fs.readFileSync(path.join(__dirname, '..', 'routes',
 
 describe('the leave and HR-settings capabilities (D8)', () => {
   test('each is covered by admin.access, and has its own card in the HR Suite group', () => {
-    const hr = PERMISSION_GROUPS.find((g) => g.key === 'hr');
+    // HR Tier 3: the HR Suite is several groups, each marked `hr`.
+    const hr = { areas: PERMISSION_GROUPS.filter((g) => g.hr).flatMap((g) => g.areas) };
     for (const cap of [PERMISSIONS.LEAVE_APPROVE, PERMISSIONS.LEAVE_MANAGE, PERMISSIONS.LEAVE_POLICY, PERMISSIONS.HR_SETTINGS]) {
       assert.ok(ADMIN_ACCESS_COVERS.includes(cap), cap);
       assert.ok(hr.areas.some((a) => a.access === cap), `${cap} needs a card`);

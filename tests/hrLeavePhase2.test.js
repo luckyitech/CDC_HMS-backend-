@@ -117,12 +117,12 @@ describe('hr.self', () => {
   test('withdrawing hr.self stops one person', () => {
     assert.equal(gateResult(u('nurse', { deniedPermissions: ['hr.self'] }), SELF), 'denied');
   });
-  test('defined, covered by admin.access, and on the HR Suite card as "My record"', () => {
+  test('defined, covered by admin.access, and on the HR Suite self-service card', () => {
     assert.equal(PERMISSIONS.HR_SELF, 'hr.self');
     assert.ok(ADMIN_ACCESS_COVERS.includes('hr.self'));
-    const hr = PERMISSION_GROUPS.find((g) => g.key === 'hr');
+    const hr = PERMISSION_GROUPS.find((g) => g.key === 'hr-self');
     const area = hr.areas.find((a) => a.access === 'hr.self');
-    assert.equal(area.name, 'My record');
+    assert.equal(area.name, 'My profile and My leave');
   });
 });
 

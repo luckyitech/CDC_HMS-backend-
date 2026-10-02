@@ -47,8 +47,10 @@ const ALL_DAY = 'ALL_DAY';
 
 const num = (v) => (v === null || v === undefined ? null : Number(v));
 
-/** May this person see and manage everyone's leave? leave.manage, admin.access included. */
+/** May this person record and cancel leave for others? leave.manage, admin.access included. */
 const canManageLeave = (user) => passesAdminGate(user, PERMISSIONS.LEAVE_MANAGE);
+/** Sick-leave details (health data) — leave.sick since HR Tier 3; leave.manage carries it. */
+const canSeeSickLeave = (user) => passesAdminGate(user, PERMISSIONS.LEAVE_SICK);
 
 /**
  * May this person decide (approve/decline) THIS staff member's leave?
@@ -104,16 +106,15 @@ const withDetail = () => [
  * The person's leave for the year — the same overview My leave shows
  * (balances, applications with where each stands, coming up).
  *
- * Authorization: the staff member themselves, leave.manage, or users.view
- * (leaveViewOrSelf in routes/staff.js). A users.view holder without
- * leave.manage sees someone else's sick leave as "Private", no reasons, and
- * no sick balance.
+ * Authorization: the staff member themselves, leave.view, or staff.view
+ * (leaveViewOrSelf in routes/staff.js). A viewer without leave.sick sees
+ * someone else's sick leave as "Private", no reasons, and no sick balance.
  */
 const list = async (req, res) => {
   const today = clinicToday();
   const year = parseInt(req.query.year, 10) || Number(today.slice(0, 4));
   const userId = req.staffUser.id;
-  const redact = req.user.id !== userId && !canManageLeave(req.user);
+  const redact = req.user.id !== userId && !canSeeSickLeave(req.user);
 
   try {
     const data = await buildOverview({ userId, year, today, redact });
@@ -325,5 +326,6 @@ module.exports = {
   LEAVE_TYPES,
   canDecideLeaveFor,
   canManageLeave,
+  canSeeSickLeave,
   formatLeave,
 };

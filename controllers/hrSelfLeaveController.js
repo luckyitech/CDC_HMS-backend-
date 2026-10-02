@@ -360,8 +360,8 @@ const loadMe = (id) => User.findByPk(id, {
  * Leave tab (GET /api/staff/:employeeId/leaves, phase 3), so both show the
  * same numbers.
  *
- * `redact` — a viewer who may see the file but not private leave (users.view
- * without leave.manage): private types become "Private", no reasons, and the
+ * `redact` — a viewer who may see the file but not private leave (staff.view or
+ * leave.view without leave.sick): private types become "Private", no reasons, and the
  * private balances are left out (health data, spec §11).
  */
 const buildOverview = async ({ userId, year, today = clinicToday(), redact = false }) => {

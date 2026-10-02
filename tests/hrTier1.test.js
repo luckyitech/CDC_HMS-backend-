@@ -78,9 +78,9 @@ describe('routes added or retired on 2 Oct 2026', () => {
   test('save the split without deciding is a PARTICIPATE route', () => {
     assert.match(read('routes', 'leave.js'), /router\.post\('\/requests\/:id\/split', authenticate, authorize\(\.\.\.PARTICIPATE\)/);
   });
-  test('photo: writes need users.write on the staff file; self routes are SELF and name nobody', () => {
-    assert.match(staff, /router\.put\('\/:employeeId\/photo', authenticate, authorize\('admin', 'users\.write'\)/);
-    assert.match(staff, /router\.delete\('\/:employeeId\/photo', authenticate, authorize\('admin', 'users\.write'\)/);
+  test('photo: writes need staff.edit on the staff file (users.write carries it); self routes are SELF and name nobody', () => {
+    assert.match(staff, /router\.put\('\/:employeeId\/photo', authenticate, authorize\(\.\.\.STAFF_EDIT\)/);
+    assert.match(staff, /router\.delete\('\/:employeeId\/photo', authenticate, authorize\(\.\.\.STAFF_EDIT\)/);
     assert.match(staff, /router\.get\('\/:employeeId\/photo', authenticate, findStaff, photoViewer/);
     for (const m of ['get', 'put', 'delete']) assert.match(self, new RegExp(`router\\.${m}\\('/photo', authenticate, authorize\\(\\.\\.\\.SELF\\)`));
   });

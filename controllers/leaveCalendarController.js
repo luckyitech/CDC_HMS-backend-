@@ -5,12 +5,14 @@
 // holidays "H", weekend days (weight 0) hatched. Names and dates are always
 // visible so staff can arrange cover — but the LEAVE TYPE is health-sensitive:
 //
-//   - leave.manage holders see the real type of every leave.
+//   - leave.view holders see the real type of every leave except a private
+//     one; leave.sick holders see private types too (HR Tier 3 split —
+//     leave.manage carries both, so its holders see exactly what they did).
 //   - everyone else sees the type only for the types HR ticked on the "team
 //     calendar" setting; any other type shows as "Away" (dates only).
 //   - Sick (and any PRIVATE_TYPES) is LOCKED private: it is never on the toggle
-//     and always shows as "Away" to non-managers — showing it to the whole
-//     clinic would disclose health data (spec §11).
+//     and always shows as "Away" to anyone without leave.sick — showing it to
+//     the whole clinic would disclose health data (spec §11).
 //
 // Reuses leaveService.holidayMap / PRIVATE_TYPES / listTypes / loadPolicy — no
 // new leave logic here.
@@ -50,7 +52,8 @@ const calendar = async (req, res) => {
     if (datesInRange(from, to).length > MAX_DAYS) to = addDays(from, MAX_DAYS - 1);
 
     const cadre = INTERNAL_ROLES.includes(req.query.cadre) ? req.query.cadre : null;
-    const manage = passesAdminGate(req.user, PERMISSIONS.LEAVE_MANAGE);
+    const viewAll = passesAdminGate(req.user, PERMISSIONS.LEAVE_VIEW);
+    const sick = passesAdminGate(req.user, PERMISSIONS.LEAVE_SICK);
 
     const [types, cfg, holidayMap, policy] = await Promise.all([
       leaveService.listTypes({ includeRetired: true }),
@@ -81,7 +84,10 @@ const calendar = async (req, res) => {
     });
 
     const labelFor = (key) => {
-      if (manage) return { label: typeNames[key] || key, leaveType: key };
+      if (leaveService.PRIVATE_TYPES.has(key)) {
+        return sick ? { label: typeNames[key] || key, leaveType: key } : { label: 'Away', leaveType: null };
+      }
+      if (viewAll) return { label: typeNames[key] || key, leaveType: key };
       if (visible.has(key)) return { label: typeNames[key] || key, leaveType: key };
       return { label: 'Away', leaveType: null };   // hidden or private → dates only
     };
@@ -142,7 +148,8 @@ const calendar = async (req, res) => {
 
     return success(res, {
       from, to, today, cadre,
-      manage,
+      // `manage` kept for the screen: true when this viewer sees real types.
+      manage: viewAll,
       weekWeights,
       holidays,
       weekendDays,

@@ -205,27 +205,37 @@ describe('attendance: a public holiday is no expected hours', () => {
 
 describe('permissions: the HR Suite card and the new routes (revision C)', () => {
   test('confidential staff documents now sit on the HR Suite card — still outside admin.access', () => {
-    const hr = PERMISSION_GROUPS.find((g) => g.key === 'hr');
+    // HR Tier 3: the HR Suite is several groups, each marked `hr`.
+    const hr = { areas: PERMISSION_GROUPS.filter((g) => g.hr).flatMap((g) => g.areas) };
     assert.ok(hr.areas.some((a) => a.access === PERMISSIONS.HR_CONFIDENTIAL));
-    const elsewhere = PERMISSION_GROUPS.filter((g) => g.key !== 'hr').flatMap((g) => g.areas).some((a) => a.access === PERMISSIONS.HR_CONFIDENTIAL);
+    const elsewhere = PERMISSION_GROUPS.filter((g) => !g.hr).flatMap((g) => g.areas).some((a) => a.access === PERMISSIONS.HR_CONFIDENTIAL);
     assert.equal(elsewhere, false, 'one card per capability');
     assert.equal(ADMIN_ACCESS_COVERS.includes(PERMISSIONS.HR_CONFIDENTIAL), false);
   });
-  test('every /api/leave settings route is gated on leave.policy and nothing wider', () => {
+  test('every /api/leave settings route is gated on its own leave capability and nothing wider', () => {
     const src = readRoute('leave.js');
     assert.match(src, /const POLICY = \['admin', 'leave\.policy'\];/);
-    // Phase 3 added the approvals inbox and requests to this file under their
-    // own gate (PARTICIPATE); every SETTINGS route stays leave.policy.
+    // HR Tier 3 Phase 0: holidays, entitlements and the register are their own
+    // capabilities (leave.policy / leave.manage carry them); reading the policy
+    // and types is open to all three Leave-settings capabilities.
+    assert.match(src, /const HOLIDAYS     = \['admin', 'leave\.holidays'\];/);
+    assert.match(src, /const ENTITLEMENTS = \['admin', 'leave\.entitlements'\];/);
+    assert.match(src, /const POLICY_READ  = \['admin', 'leave\.policy', 'leave\.entitlements', 'leave\.holidays'\];/);
+    assert.match(src, /const REGISTER = \['admin', 'leave\.register'\];/);
     const routes = src.split('\n').filter((l) => /^router\.(get|put|post|patch|delete)\(/.test(l));
-    // Phase 5 added the team calendar under the same PARTICIPATE gate.
     const approvals = routes.filter((l) => /'\/(inbox|requests|calendar)/.test(l));
-    // HR Tier 2: the leave register download is leave.manage.
-    const manage = routes.filter((l) => /'\/register'/.test(l));
-    for (const line of manage) assert.match(line, /authenticate, authorize\(\.\.\.MANAGE\)/, line);
-    const settings = routes.filter((l) => !approvals.includes(l) && !manage.includes(l));
-    assert.ok(settings.length >= 12);
-    for (const line of settings) assert.match(line, /authenticate, authorize\(\.\.\.POLICY\)/, line);
     for (const line of approvals) assert.match(line, /authenticate, authorize\(\.\.\.PARTICIPATE\)/, line);
+    const gateOf = (l) => (l.match(/authorize\(\.\.\.(\w+)\)/) || [])[1];
+    const expect = (re, gate) => routes.filter((l) => re.test(l)).forEach((l) => assert.equal(gateOf(l), gate, l));
+    expect(/'\/holidays/, 'HOLIDAYS');
+    expect(/'\/entitlements/, 'ENTITLEMENTS');
+    expect(/'\/register'/, 'REGISTER');
+    expect(/router\.get\('\/(policies|policy\/:year'|types'|changes')/, 'POLICY_READ');
+    // Every write to the policy and the types stays leave.policy.
+    expect(/router\.(put|post|patch)\('\/(policy|types)/, 'POLICY');
+    const settings = routes.filter((l) => !approvals.includes(l));
+    assert.ok(settings.length >= 13);
+    for (const line of settings) assert.ok(['POLICY', 'POLICY_READ', 'HOLIDAYS', 'ENTITLEMENTS', 'REGISTER'].includes(gateOf(line)), line);
   });
   test('whoever may change HR settings may also read them (the Alerts tab)', () => {
     const src = readRoute('hr.js');

@@ -24,19 +24,32 @@ const leaveCalendar = require('../controllers/leaveCalendarController');
 // Applying for your own leave is /api/hr/me (routes/hrSelf.js).
 //
 // Phase 5: the team calendar — every internal role sees it (PARTICIPATE); the
-// controller redacts the leave type for anyone without leave.manage (Sick is
-// always "Away", other types only if HR ticked them).
+// controller redacts the leave type for anyone without leave.view (Sick is
+// "Away" unless they hold leave.sick; other types only if HR ticked them).
+//
+// leave.view and leave.sick are deliberately NOT in PARTICIPATE: every
+// internal role passes it by role, so naming them there would make a
+// withdrawal of either lock that person out of their own approvals inbox.
+// They are checked inline (tests/permissionVocabulary INLINE_ADMIN_GATED).
 // =====================================================================
 const POLICY = ['admin', 'leave.policy'];
-// The leave register download (HR Tier 2): whoever manages leave.
-const MANAGE = ['admin', 'leave.manage'];
+// HR Tier 3 Phase 0 — each part of Leave settings its own capability.
+// leave.policy carries both (constants/permissions BUNDLES).
+const HOLIDAYS     = ['admin', 'leave.holidays'];
+const ENTITLEMENTS = ['admin', 'leave.entitlements'];
+// Reading the policy and the types: whoever sets them, and whoever sets
+// entitlements or holidays (both screens show the year's types). Read-only.
+const POLICY_READ  = ['admin', 'leave.policy', 'leave.entitlements', 'leave.holidays'];
+// The leave register download (HR Tier 2; its own capability since Tier 3 —
+// leave.manage carries it). Sick leave is named only for leave.sick holders.
+const REGISTER = ['admin', 'leave.register'];
 const PARTICIPATE = ['doctor', 'staff', 'lab', 'nurse', 'admin', 'leave.approve', 'leave.manage'];
 
 const YEAR = param('year').isInt({ min: 2020, max: 2100 }).withMessage('Choose a year');
 
 // ---- Policy ----------------------------------------------------------------
-router.get('/policies', authenticate, authorize(...POLICY), leaveSettings.listPolicies);
-router.get('/policy/:year', authenticate, authorize(...POLICY), [YEAR, validate], leaveSettings.getPolicy);
+router.get('/policies', authenticate, authorize(...POLICY_READ), leaveSettings.listPolicies);
+router.get('/policy/:year', authenticate, authorize(...POLICY_READ), [YEAR, validate], leaveSettings.getPolicy);
 router.put('/policy/:year', authenticate, authorize(...POLICY), [
   YEAR,
   body('weekWeights').isObject().withMessage('Each weekday needs a value'),
@@ -50,30 +63,30 @@ router.post('/policy/:year/copy-from/:prev', authenticate, authorize(...POLICY),
 ], leaveSettings.copyPolicy);
 
 // ---- Leave types -------------------------------------------------------------
-router.get('/types', authenticate, authorize(...POLICY), leaveSettings.listTypes);
+router.get('/types', authenticate, authorize(...POLICY_READ), leaveSettings.listTypes);
 router.post('/types', authenticate, authorize(...POLICY), [
   body('name').isString().trim().isLength({ min: 2, max: 80 }).withMessage('Give the leave type a name'), validate,
 ], leaveSettings.createType);
 router.patch('/types/:id', authenticate, authorize(...POLICY), [param('id').isInt(), validate], leaveSettings.updateType);
 
 // ---- Public holidays ---------------------------------------------------------
-router.get('/holidays', authenticate, authorize(...POLICY), [
+router.get('/holidays', authenticate, authorize(...HOLIDAYS), [
   query('year').optional().isInt({ min: 2020, max: 2100 }), validate,
 ], leaveSettings.listHolidays);
-router.post('/holidays', authenticate, authorize(...POLICY), [
+router.post('/holidays', authenticate, authorize(...HOLIDAYS), [
   body('date').isISO8601().withMessage('Choose the date of the holiday'),
   body('name').isString().trim().isLength({ min: 2, max: 120 }).withMessage('Give the holiday a name'),
   validate,
 ], leaveSettings.createHoliday);
-router.patch('/holidays/:id', authenticate, authorize(...POLICY), [param('id').isInt(), validate], leaveSettings.updateHoliday);
+router.patch('/holidays/:id', authenticate, authorize(...HOLIDAYS), [param('id').isInt(), validate], leaveSettings.updateHoliday);
 // HR Tier 2 — a holiday on a Sunday is also observed on the next day (switch).
-router.put('/holidays/observe-sunday', authenticate, authorize(...POLICY), [body('on').isBoolean().withMessage('Say on or off'), validate], leaveSettings.setObserveSunday);
+router.put('/holidays/observe-sunday', authenticate, authorize(...HOLIDAYS), [body('on').isBoolean().withMessage('Say on or off'), validate], leaveSettings.setObserveSunday);
 
 // ---- Entitlements ------------------------------------------------------------
-router.get('/entitlements', authenticate, authorize(...POLICY), [
+router.get('/entitlements', authenticate, authorize(...ENTITLEMENTS), [
   query('year').optional().isInt({ min: 2020, max: 2100 }), validate,
 ], leaveSettings.entitlements);
-router.put('/entitlements/:userId/:year', authenticate, authorize(...POLICY), [
+router.put('/entitlements/:userId/:year', authenticate, authorize(...ENTITLEMENTS), [
   param('userId').isInt({ min: 1 }), YEAR,
   body('balances').optional().isArray(),
   body('reason').isString().trim().isLength({ min: 3 }).withMessage('Say why this person differs from the policy'),
@@ -118,12 +131,12 @@ router.post('/requests/:id/cancel', authenticate, authorize(...PARTICIPATE), [
 ], leaveApproval.cancel);
 router.get('/requests/:id/attachment', authenticate, authorize(...PARTICIPATE), [REQUEST, validate], leaveApproval.attachment);
 
-// ---- Leave register export (HR Tier 2) — leave.manage; names sick leave, logged ----
-router.get('/register', authenticate, authorize(...MANAGE), [
+// ---- Leave register export (HR Tier 2) — leave.register; logged ----
+router.get('/register', authenticate, authorize(...REGISTER), [
   query('year').optional().isInt({ min: 2020, max: 2100 }), validate,
 ], leaveApproval.register);
 
 // ---- Audit ---------------------------------------------------------------------
-router.get('/changes', authenticate, authorize(...POLICY), leaveSettings.recentChanges);
+router.get('/changes', authenticate, authorize(...POLICY_READ), leaveSettings.recentChanges);
 
 module.exports = router;

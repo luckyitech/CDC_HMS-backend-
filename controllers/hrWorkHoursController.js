@@ -2,7 +2,7 @@
 //
 // GET  /api/hr/work-hours            everyone's active rows + the clinic default (hr.view)
 // GET  /api/hr/work-hours/me         the caller's resolved week (hr.checkin)
-// PUT  /api/hr/work-hours/:userId    replace a person's weekday pattern and/or add dated overrides (hr.write)
+// PUT  /api/hr/work-hours/:userId    replace a person's weekday pattern and/or add dated overrides (hr.workhours)
 //
 // Rows are retired, never deleted. "One active weekday row per person per
 // weekday" is enforced here (the unique index cannot, over NULL columns).

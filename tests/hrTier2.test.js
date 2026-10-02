@@ -91,20 +91,20 @@ describe('csv', () => {
 describe('routes and notices', () => {
   const leave = read('routes', 'leave.js');
   const staff = read('routes', 'staff.js');
-  test('the leave register is leave.manage', () => {
-    assert.match(leave, /const MANAGE = \['admin', 'leave\.manage'\];/);
-    assert.match(leave, /router\.get\('\/register', authenticate, authorize\(\.\.\.MANAGE\)/);
+  test('the leave register is leave.register (HR Tier 3; leave.manage carries it)', () => {
+    assert.match(leave, /const REGISTER = \['admin', 'leave\.register'\];/);
+    assert.match(leave, /router\.get\('\/register', authenticate, authorize\(\.\.\.REGISTER\)/);
   });
   test('the cover answer is a PARTICIPATE route; the controller checks the cover', () => {
     assert.match(leave, /router\.post\('\/requests\/:id\/cover', authenticate, authorize\(\.\.\.PARTICIPATE\)/);
     assert.match(read('controllers', 'leaveApprovalController.js'), /if \(!detail\.me\.canAnswerCover\)/);
   });
-  test('the Sunday switch is leave.policy', () => {
-    assert.match(leave, /router\.put\('\/holidays\/observe-sunday', authenticate, authorize\(\.\.\.POLICY\)/);
+  test('the Sunday switch is leave.holidays (HR Tier 3; leave.policy carries it)', () => {
+    assert.match(leave, /router\.put\('\/holidays\/observe-sunday', authenticate, authorize\(\.\.\.HOLIDAYS\)/);
   });
-  test('required approvers: read with the Leave tab, set by leave.manage, never on your own file', () => {
+  test('required approvers: read with the Leave tab, set by leave.required, never on your own file', () => {
     assert.match(staff, /router\.get\('\/:employeeId\/required-approvers', authenticate, findStaff, leaveViewOrSelf/);
-    assert.match(staff, /router\.put\('\/:employeeId\/required-approvers', authenticate, authorize\(\.\.\.LEAVE_MANAGE\)/);
+    assert.match(staff, /router\.put\('\/:employeeId\/required-approvers', authenticate, authorize\('admin', 'leave\.required'\)/);
     assert.match(read('controllers', 'requiredApproverController.js'), /person\.id === req\.user\.id\) return error\(res, [^\n]*OWN_FILE/);
   });
   test('submit forces the required approvers in, whatever the client sends', () => {

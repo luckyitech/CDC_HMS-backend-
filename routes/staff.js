@@ -2,8 +2,8 @@ const express = require('express');
 const router = express.Router();
 const { body, param } = require('express-validator');
 const validate = require('../middleware/validate');
-const { authenticate, authorize, requireTrueAdmin } = require('../middleware/auth');
-const { PERMISSIONS, passesAdminGate } = require('../constants/permissions');
+const { authenticate, authorize } = require('../middleware/auth');
+const { PERMISSIONS, passesAdminGate, canEditPermissions, canViewConfidential } = require('../constants/permissions');
 const { error } = require('../utils/response');
 const findStaff = require('../middleware/findStaff');
 const uploadStaffDocument = require('../middleware/uploadStaffDocument');
@@ -24,35 +24,69 @@ const EMPLOYMENT_TYPES    = ['Full-time', 'Part-time', 'Contract', 'Consultant',
 // users.write.
 const LEAVE_MANAGE = ['admin', 'leave.manage'];
 
+// The staff file, one capability per job (HR Tier 3 Phase 0, 2 Oct 2026).
+// users.view / users.write carry all of these (constants/permissions BUNDLES),
+// so nobody who held them loses anything.
+const STAFF_VIEW   = ['admin', 'staff.view'];
+const STAFF_EDIT   = ['admin', 'staff.edit'];
+const STAFF_STATUS = ['admin', 'staff.status'];
+const STAFF_DOCS   = ['admin', 'staff.documents'];
+const EXPIRY_LIST  = ['admin', 'staff.view', 'hr.expiry.alerts'];
+// The permission catalog: whoever opens a staff file sees its Permissions tab
+// (read-only), and both kinds of grantor need it to edit. Not an authorize()
+// list because hr.grant must never be satisfiable by admin.access.
+const catalogReader = (req, res, next) => {
+  if (passesAdminGate(req.user, PERMISSIONS.STAFF_VIEW) || canEditPermissions(req.user)) return next();
+  return error(res, 'Access denied', 403);
+};
+
 // Lets a staff member reach their own record, and anyone who may view staff
 // reach any record. Declared here rather than inside the controllers so the
 // route file still says who may call each endpoint.
 //
-// "May view staff" is exactly what authorize('admin', 'users.view') admits —
+// "May view staff" is exactly what authorize('admin', 'staff.view') admits —
 // the gate on the list this file is opened from — so whoever can see the
 // directory can open a file, and nobody can open a file they could not list.
+// (users.view carries staff.view, so it still opens files — HR Tier 3.)
 // It used to test `role === 'admin'`, which refused a doctor holding
 // admin.access (403 on every file but their own) while every WRITE on the same
 // file already went through authorize('admin', 'users.write') and let them in.
 const adminOrSelf = (req, res, next) => {
-  if (passesAdminGate(req.user, PERMISSIONS.USERS_VIEW)) return next();
+  if (passesAdminGate(req.user, PERMISSIONS.STAFF_VIEW)) return next();
   if (req.staffUser && req.staffUser.id === req.user.id) return next();
   return error(res, 'Access denied', 403);
 };
 
-// The leave list and recording leave: adminOrSelf, plus a leave.manage holder
-// (B27) — managing everyone's leave means opening anyone's leave tab, even
-// without users.view. What a users.view-only viewer sees of someone else's
-// sick leave is trimmed in the controller (health data).
+// The leave list: adminOrSelf, plus anyone who may see everyone's leave
+// (leave.view — carried by leave.manage) even without opening staff files.
+// What a viewer without sick-leave details sees of someone else's sick leave
+// is trimmed in the controller (health data, leave.sick).
 const leaveViewOrSelf = (req, res, next) => {
-  if (passesAdminGate(req.user, PERMISSIONS.LEAVE_MANAGE)) return next();
+  if (passesAdminGate(req.user, PERMISSIONS.LEAVE_VIEW)) return next();
   return adminOrSelf(req, res, next);
+};
+
+// Uploading a document: the person to their own file, or someone who manages
+// colleagues' documents, or a confidential-drawer holder (filing a contract).
+const documentUploader = (req, res, next) => {
+  if (req.staffUser && req.staffUser.id === req.user.id) return next();
+  if (passesAdminGate(req.user, PERMISSIONS.STAFF_DOCUMENTS)) return next();
+  if (canViewConfidential(req.user)) return next();
+  return error(res, 'Access denied', 403);
+};
+
+// Changing someone's permissions: a permissions administrator, or a holder of
+// "Grant HR permissions" — whose changes the controller limits to HR controls
+// (staffController.updatePermissions).
+const permissionsEditor = (req, res, next) => {
+  if (canEditPermissions(req.user)) return next();
+  return error(res, 'Only a permissions administrator can change what other people can do', 403);
 };
 
 // Multer rejects an oversized or wrong-typed file by throwing, which Express
 // surfaces as a generic 500. This turns it into the message the admin needs.
 // A face is wanted wherever a name is shown: the staff directory (hr.view) as
-// well as the staff file itself (users.view or the person) — 2 Oct 2026.
+// well as the staff file itself (staff.view or the person) — 2 Oct 2026.
 const photoViewer = (req, res, next) => {
   if (passesAdminGate(req.user, PERMISSIONS.HR_VIEW)) return next();
   return adminOrSelf(req, res, next);
@@ -75,9 +109,9 @@ const handleUpload = (req, res, next) =>
 // as an employee ID and findStaff returns 404.
 // ============================================================
 
-router.get('/expiring-licences', authenticate, authorize('admin', 'users.view'), staffController.expiringLicences);
-router.get('/permissions/catalog', authenticate, authorize('admin', 'users.view'), staffController.permissionCatalog);
-router.get('/', authenticate, authorize('admin', 'users.view'), staffController.list);
+router.get('/expiring-licences', authenticate, authorize(...EXPIRY_LIST), staffController.expiringLicences);
+router.get('/permissions/catalog', authenticate, catalogReader, staffController.permissionCatalog);
+router.get('/', authenticate, authorize(...STAFF_VIEW), staffController.list);
 
 // ============================================================
 // Profile
@@ -85,7 +119,7 @@ router.get('/', authenticate, authorize('admin', 'users.view'), staffController.
 
 router.get('/:employeeId', authenticate, findStaff, adminOrSelf, staffController.getOne);
 
-router.put('/:employeeId', authenticate, authorize('admin', 'users.write'), findStaff, [
+router.put('/:employeeId', authenticate, authorize(...STAFF_EDIT), findStaff, [
   body('firstName').optional().notEmpty().withMessage('First name cannot be empty'),
   body('lastName').optional().notEmpty().withMessage('Last name cannot be empty'),
   body('email').optional({ nullable: true }).isEmail().withMessage('Valid email is required'),
@@ -97,15 +131,16 @@ router.put('/:employeeId', authenticate, authorize('admin', 'users.write'), find
   validate,
 ], staffController.update);
 
-router.patch('/:employeeId/status', authenticate, authorize('admin', 'users.write'), findStaff, [
+router.patch('/:employeeId/status', authenticate, authorize(...STAFF_STATUS), findStaff, [
   body('employmentStatus').isIn(EMPLOYMENT_STATUSES).withMessage('Invalid employment status'),
   validate,
 ], staffController.updateStatus);
 
-// Granting is reserved to a real admin ACCOUNT, not merely someone holding
-// admin.access — otherwise the capability propagates on its own and can never
-// be reliably revoked. See middleware/auth.js.
-router.patch('/:employeeId/permissions', authenticate, requireTrueAdmin, findStaff, [
+// Granting is reserved to a PERMISSIONS ADMINISTRATOR (permissions.grant or the
+// true admin account), not merely someone holding admin.access — otherwise the
+// capability propagates on its own and can never be reliably revoked. Since HR
+// Tier 3 a "Grant HR permissions" holder may also call it, for HR controls only.
+router.patch('/:employeeId/permissions', authenticate, permissionsEditor, findStaff, [
   body('permissions').isArray().withMessage('Permissions must be a list'),
   // Optional so a caller that only grants leaves existing withdrawals alone;
   // see staffController.updatePermissions.
@@ -114,10 +149,10 @@ router.patch('/:employeeId/permissions', authenticate, requireTrueAdmin, findSta
   validate,
 ], staffController.updatePermissions);
 
-router.delete('/:employeeId', authenticate, authorize('admin', 'users.write'), findStaff, staffController.archive);
-router.patch('/:employeeId/restore', authenticate, authorize('admin', 'users.write'), findStaff, staffController.restore);
+router.delete('/:employeeId', authenticate, authorize(...STAFF_STATUS), findStaff, staffController.archive);
+router.patch('/:employeeId/restore', authenticate, authorize(...STAFF_STATUS), findStaff, staffController.restore);
 
-router.get('/:employeeId/activity', authenticate, authorize('admin', 'users.view'), findStaff, [
+router.get('/:employeeId/activity', authenticate, authorize(...STAFF_VIEW), findStaff, [
   param('employeeId').notEmpty(),
   validate,
 ], staffController.activity);
@@ -127,9 +162,9 @@ router.get('/:employeeId/activity', authenticate, authorize('admin', 'users.view
 // ============================================================
 
 router.get('/:employeeId/leaves', authenticate, findStaff, leaveViewOrSelf, leaveController.list);
-// Required approvers (HR Tier 2): read with the Leave tab; set by leave.manage, never on your own file.
+// Required approvers (HR Tier 2): read with the Leave tab; set by leave.required (Tier 3; leave.manage carries it), never on your own file.
 router.get('/:employeeId/required-approvers', authenticate, findStaff, leaveViewOrSelf, requiredApproverController.list);
-router.put('/:employeeId/required-approvers', authenticate, authorize(...LEAVE_MANAGE), findStaff, [
+router.put('/:employeeId/required-approvers', authenticate, authorize('admin', 'leave.required'), findStaff, [
   body('approverIds').isArray({ max: 5 }).withMessage('Choose up to five people'), validate,
 ], requiredApproverController.set);
 
@@ -161,15 +196,15 @@ router.post('/:employeeId/leaves', authenticate, authorize(...LEAVE_MANAGE), fin
 
 // Photo (2 Oct 2026).
 router.get('/:employeeId/photo', authenticate, findStaff, photoViewer, staffPhotoController.staffGet);
-router.put('/:employeeId/photo', authenticate, authorize('admin', 'users.write'), findStaff, handlePhotoUpload, staffPhotoController.staffPut);
-router.delete('/:employeeId/photo', authenticate, authorize('admin', 'users.write'), findStaff, staffPhotoController.staffDelete);
+router.put('/:employeeId/photo', authenticate, authorize(...STAFF_EDIT), findStaff, handlePhotoUpload, staffPhotoController.staffPut);
+router.delete('/:employeeId/photo', authenticate, authorize(...STAFF_EDIT), findStaff, staffPhotoController.staffDelete);
 
 // CPD, read-only, for the staff file's Credentials tab (B27 debt fix).
 router.get('/:employeeId/cpd', authenticate, findStaff, adminOrSelf, cpdController.staffList);
 
 router.get('/:employeeId/documents', authenticate, findStaff, adminOrSelf, staffDocumentController.list);
 
-router.post('/:employeeId/documents', authenticate, findStaff, adminOrSelf,
+router.post('/:employeeId/documents', authenticate, findStaff, documentUploader,
   handleUpload, staffDocumentController.upload);
 
 // Files stream through this authenticated route rather than the upload
@@ -177,14 +212,14 @@ router.post('/:employeeId/documents', authenticate, findStaff, adminOrSelf,
 router.get('/:employeeId/documents/:id/file', authenticate, findStaff, adminOrSelf,
   staffDocumentController.serveFile);
 
-router.patch('/:employeeId/documents/:id', authenticate, authorize('admin', 'users.write'), findStaff,
+router.patch('/:employeeId/documents/:id', authenticate, authorize(...STAFF_DOCS), findStaff,
   staffDocumentController.update);
 
 // Archives rather than deletes — the file and the row both survive.
-router.delete('/:employeeId/documents/:id', authenticate, authorize('admin', 'users.write'), findStaff,
+router.delete('/:employeeId/documents/:id', authenticate, authorize(...STAFF_DOCS), findStaff,
   staffDocumentController.archive);
 
-router.patch('/:employeeId/documents/:id/restore', authenticate, authorize('admin', 'users.write'), findStaff,
+router.patch('/:employeeId/documents/:id/restore', authenticate, authorize(...STAFF_DOCS), findStaff,
   staffDocumentController.restore);
 
 module.exports = router;
@@ -192,3 +227,4 @@ module.exports = router;
 // fake req/res and no database.
 module.exports.adminOrSelf = adminOrSelf;
 module.exports.leaveViewOrSelf = leaveViewOrSelf;
+module.exports.documentUploader = documentUploader;

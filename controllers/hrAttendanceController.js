@@ -4,7 +4,7 @@
 // tap()     the only thing that can check a person in or out by NFC
 // mine / mySummary   the person's own record (hr.checkin)
 // today / list       everyone's (hr.view)
-// manual / amend     HR corrections with a mandatory reason (hr.write),
+// manual / amend     HR corrections with a mandatory reason (hr.attendance.amend),
 //                    written to the person's UserEditLog
 //
 // Nothing on a web page checks anyone in: `tap` needs a fresh, signed tag

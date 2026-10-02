@@ -12,10 +12,10 @@ const { validatePresetPayload } = require('../controllers/permissionPresetContro
 // onboarding wizard relies on. No database.
 // =====================================================================
 
-describe('PRESET_EXCLUDED — the three per-person-only capabilities', () => {
-  test('is exactly admin.access, permissions.grant and hr.confidential', () => {
+describe('PRESET_EXCLUDED — the per-person-only capabilities', () => {
+  test('is exactly admin.access, permissions.grant, hr.confidential and (HR Tier 3) hr.grant', () => {
     assert.deepEqual([...PRESET_EXCLUDED].sort(), [
-      PERMISSIONS.ADMIN_ACCESS, PERMISSIONS.HR_CONFIDENTIAL, PERMISSIONS.PERMISSIONS_GRANT,
+      PERMISSIONS.ADMIN_ACCESS, PERMISSIONS.HR_CONFIDENTIAL, PERMISSIONS.PERMISSIONS_GRANT, PERMISSIONS.HR_GRANT,
     ].sort());
   });
 

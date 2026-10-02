@@ -49,7 +49,7 @@ router.get('/doctors', authenticate, userController.listDoctors);
 // ------------------------------------
 // POST /api/users/doctors — create doctor
 // ------------------------------------
-router.post('/doctors', authenticate, authorize('admin', 'users.write'), [
+router.post('/doctors', authenticate, authorize('admin', 'staff.onboard'), [
   body('firstName').notEmpty().withMessage('First name is required'),
   body('lastName').notEmpty().withMessage('Last name is required'),
   body('email').isEmail().withMessage('Valid email is required'),
@@ -70,7 +70,7 @@ router.post('/doctors', authenticate, authorize('admin', 'users.write'), [
 // ------------------------------------
 // POST /api/users/staff — create staff
 // ------------------------------------
-router.post('/staff', authenticate, authorize('admin', 'users.write'), [
+router.post('/staff', authenticate, authorize('admin', 'staff.onboard'), [
   body('firstName').notEmpty().withMessage('First name is required'),
   body('lastName').notEmpty().withMessage('Last name is required'),
   body('email').isEmail().withMessage('Valid email is required'),
@@ -90,7 +90,7 @@ router.post('/staff', authenticate, authorize('admin', 'users.write'), [
 // ------------------------------------
 // POST /api/users/nurses — create nurse (HMIS V3)
 // ------------------------------------
-router.post('/nurses', authenticate, authorize('admin', 'users.write'), [
+router.post('/nurses', authenticate, authorize('admin', 'staff.onboard'), [
   body('firstName').notEmpty().withMessage('First name is required'),
   body('lastName').notEmpty().withMessage('Last name is required'),
   body('email').isEmail().withMessage('Valid email is required'),
@@ -112,7 +112,7 @@ router.post('/nurses', authenticate, authorize('admin', 'users.write'), [
 // ------------------------------------
 // POST /api/users/lab-techs — create lab tech
 // ------------------------------------
-router.post('/lab-techs', authenticate, authorize('admin', 'users.write'), [
+router.post('/lab-techs', authenticate, authorize('admin', 'staff.onboard'), [
   body('firstName').notEmpty().withMessage('First name is required'),
   body('lastName').notEmpty().withMessage('Last name is required'),
   body('email').isEmail().withMessage('Valid email is required'),

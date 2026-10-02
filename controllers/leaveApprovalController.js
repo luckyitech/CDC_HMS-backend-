@@ -8,13 +8,13 @@
 // change is a LeaveEvent the applicant sees.
 //
 // Who may open a request: the applicant, anyone on it, or leave.manage — and,
-// READ-ONLY and redacted, a users.view holder opening it from the staff file
-// (B27 debt fix, 2 Oct 2026: they already see the row on the staff file's Leave
-// tab; they never see a private type, a reason, a note or the document, and
-// cannot act). Anyone else gets 404 — not 403 — so the existence of someone's
-// leave is not leaked.
-// Who sees a private type (sick) and its reason: the applicant, the approvers
-// and leave.manage. Acknowledgers see "Private" (health data, spec §11).
+// READ-ONLY, a leave.view or staff.view holder (B27 debt fix + HR Tier 3: they
+// already see the row on the staff file's Leave tab or the All tab, and cannot
+// act). Anyone else gets 404 — not 403 — so the existence of someone's leave
+// is not leaked.
+// Who sees a private type (sick), its reason and its document: the applicant,
+// the approvers and leave.sick (HR Tier 3; leave.manage carries it).
+// Acknowledgers see "Private" (health data, spec §11).
 //
 // Nobody decides their own leave, whatever they hold. leave.manage does not
 // override the approvers the applicant chose — except on a request recorded
@@ -52,7 +52,11 @@ const { StaffLeave, LeaveParticipant, StaffDocument, StaffProfile, User } = db;
 const num = (v) => (v === null || v === undefined || v === '' ? null : Number(v));
 const round2 = (n) => Math.round(n * 100) / 100;
 const canManage = (user) => passesAdminGate(user, PERMISSIONS.LEAVE_MANAGE);
-const canViewStaff = (user) => passesAdminGate(user, PERMISSIONS.USERS_VIEW);
+// HR Tier 3 Phase 0: seeing everyone's leave and seeing sick-leave details are
+// their own capabilities (leave.manage carries both).
+const canViewAll = (user) => passesAdminGate(user, PERMISSIONS.LEAVE_VIEW);
+const canSeeSick = (user) => passesAdminGate(user, PERMISSIONS.LEAVE_SICK);
+const canViewStaff = (user) => passesAdminGate(user, PERMISSIONS.STAFF_VIEW);
 const holdsApprove = (user) => passesAdminGate(user, PERMISSIONS.LEAVE_APPROVE);
 
 const LIVE = [...OPEN_STATUSES, ...TAKEN_STATUSES];
@@ -76,6 +80,7 @@ const standing = (leave, user) => {
   const participant = (leave.participants || []).find((p) => p.UserId === user.id) || null;
   const isApplicant = leave.UserId === user.id;
   const manage = canManage(user);
+  const viewAll = canViewAll(user);
   const isApprover = participant?.kind === KIND.APPROVER;
   const approvers = (leave.participants || []).filter((p) => p.kind === KIND.APPROVER);
   const legacy = approvers.length === 0;          // recorded before B27 — nobody listed
@@ -89,11 +94,11 @@ const standing = (leave, user) => {
     isCover: participant?.kind === KIND.COVER,
     manage,
     legacy,
-    // users.view: read-only and redacted (see the header).
-    viewOnly: !(isApplicant || participant || manage) && canViewStaff(user),
-    mayOpen: isApplicant || !!participant || manage || canViewStaff(user),
-    // Health data: applicant, approvers and leave.manage see a private type.
-    redact: !(isApplicant || isApprover || manage),
+    // staff.view or leave.view: read-only (see the header).
+    viewOnly: !(isApplicant || participant || manage) && (viewAll || canViewStaff(user)),
+    mayOpen: isApplicant || !!participant || manage || viewAll || canViewStaff(user),
+    // Health data: the applicant, approvers and leave.sick see a private type.
+    redact: !(isApplicant || isApprover || canSeeSick(user)),
   };
 };
 
@@ -315,14 +320,15 @@ const idsWhere = async (where) => (await StaffLeave.findAll({
  * GET /api/leave/inbox?tab=waiting|decided|all&year=
  *   waiting — I'm an approver and it waits on me (or on its asker, when I asked)
  *   decided — I approved or declined it
- *   all     — everyone's live requests (leave.manage)
+ *   all     — everyone's live requests (leave.view; leave.manage carries it)
  */
 const inbox = async (req, res) => {
   const tab = ['waiting', 'decided', 'all'].includes(req.query.tab) ? req.query.tab : 'waiting';
   const me = req.user.id;
   try {
     const manage = canManage(req.user);
-    if (tab === 'all' && !manage) return error(res, 'Only someone who manages leave sees everyone\'s', 403);
+    const viewAll = canViewAll(req.user);
+    if (tab === 'all' && !viewAll) return error(res, 'Only someone who may see everyone\'s leave sees this', 403);
 
     let ids;
     if (tab === 'waiting') ids = await idsWhere(waitingWhere(me));
@@ -353,7 +359,11 @@ const inbox = async (req, res) => {
       return inboxRow(l, { typeNames, redact: st.redact, me });
     });
     const waiting = new Set(await idsWhere(waitingWhere(me, { withAsked: false }))).size;
-    return success(res, { tab, rows, counts: { waiting }, manage });
+    return success(res, {
+      tab, rows, counts: { waiting }, manage, viewAll,
+      // What the All tab may offer (HR Tier 3): the register download.
+      canRegister: passesAdminGate(req.user, PERMISSIONS.LEAVE_REGISTER),
+    });
   } catch (err) {
     console.error('LeaveApproval.inbox error:', err);
     return error(res, 'Failed to load leave to approve', 500);
@@ -667,7 +677,7 @@ const cancel = async (req, res) => {
 
 /**
  * GET /api/leave/requests/:id/attachment — the supporting document, for the
- * applicant, the approvers and leave.manage (not acknowledgers — a sick note
+ * applicant, the approvers and leave.sick (not acknowledgers — a sick note
  * is health data). Streams from private/ like the staff file does.
  */
 const attachment = async (req, res) => {
@@ -702,10 +712,12 @@ const shortName = (u) => (u ? `${(u.firstName || '').charAt(0)} ${u.lastName || 
 
 /**
  * GET /api/leave/register?year= — every request starting in the year, as a
- * .csv that opens in Excel (leave.manage). One row per request. It NAMES sick
- * leave (Emu, T2-4: only leave.manage can download, and they see it in the
- * HMS) — the file is health data once it leaves the HMS, so every download is
- * written to the Leave policy trail (who, when, which year).
+ * .csv that opens in Excel (leave.register; leave.manage carries it). One row
+ * per request. It NAMES sick leave only for a leave.sick holder (T2-4, revised
+ * by HR Tier 3: the register and sick-leave details are now separate rights);
+ * anyone else gets "Private" for a private type. The file can be health data
+ * once it leaves the HMS, so every download is written to the Leave policy
+ * trail (who, when, which year).
  */
 const register = async (req, res) => {
   const year = parseInt(req.query.year, 10) || Number(clinicToday().slice(0, 4));
@@ -716,6 +728,8 @@ const register = async (req, res) => {
       order: [['startDate', 'ASC'], ['id', 'ASC']],
     });
     const typeNames = await typeNameMap();
+    const sick = canSeeSick(req.user);
+    const typeLabel = (key) => (!sick && leaveService.PRIVATE_TYPES.has(key) ? 'Private' : (typeNames[key] || key));
     const headers = ['Employee ID', 'Name', 'Role', 'Type', 'From', 'To', 'Days', 'Charged to', 'Status',
       'Approvers', 'Approved by', 'Cover', 'Recorded by HR', 'Applied on', 'Backdated'];
     const rows = leaves.map((l) => {
@@ -728,11 +742,11 @@ const register = async (req, res) => {
         profile?.employeeId || '',
         fullName(l.User) || 'Former colleague',
         l.User?.role || '',
-        typeNames[l.leaveType] || l.leaveType,
+        typeLabel(l.leaveType),
         a.startDate,
         a.endDate,
         fmtNum(a.days),
-        a.charges.map((c) => `${typeNames[c.leaveType] || c.leaveType} ${fmtNum(c.days)}`).join('; '),
+        a.charges.map((c) => `${typeLabel(c.leaveType)} ${fmtNum(c.days)}`).join('; '),
         REGISTER_STATUS[l.status] || l.status,
         approvers.map((p) => shortName(p.User)).join('; '),
         approvers.filter((p) => p.decision === DECISION.APPROVED).map((p) => shortName(p.User)).join('; '),

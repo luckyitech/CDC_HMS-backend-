@@ -5,7 +5,7 @@ const {
   PERMISSIONS, ADMIN_ACCESS_COVERS, PERMISSION_GROUPS, ALL_PERMISSIONS,
   passesAdminGate, canViewConfidential, hasPermission,
 } = require('../constants/permissions');
-const { canViewHr, canWriteHr } = require('../utils/hrAccess');
+const { canViewHr, canManageCheckinDevices } = require('../utils/hrAccess');
 const { adminOrSelf } = require('../routes/staff');
 const { canDecideLeaveFor } = require('../controllers/leaveController');
 const { isConfidential } = require('../controllers/staffDocumentController');
@@ -60,9 +60,9 @@ describe('passesAdminGate mirrors authorize(\'admin\', cap)', () => {
   test('hrAccess is the same helper in HR spelling', () => {
     const emu = user('doctor', [PERMISSIONS.ADMIN_ACCESS]);
     assert.equal(canViewHr(emu), true);
-    assert.equal(canWriteHr(emu), true);
+    assert.equal(canManageCheckinDevices(emu), true);
     assert.equal(canViewHr(user('doctor')), false);
-    assert.equal(canWriteHr(user('doctor', [PERMISSIONS.HR_VIEW])), false);
+    assert.equal(canManageCheckinDevices(user('doctor', [PERMISSIONS.HR_VIEW])), false);
   });
 });
 

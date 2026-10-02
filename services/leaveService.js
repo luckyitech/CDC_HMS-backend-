@@ -29,7 +29,7 @@ const {
 } = db;
 
 // The one leave type whose type and reason are health data (spec §11): shown
-// only to the person, their approvers, and holders of leave.manage.
+// only to the person, their approvers, and holders of leave.sick (leave.manage carries it).
 const PRIVATE_TYPES = new Set(['Sick']);
 
 const num = (v) => (v === null || v === undefined || v === '' ? null : Number(v));

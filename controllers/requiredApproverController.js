@@ -48,7 +48,7 @@ const activeRequiredIds = async (userId) => (await listFor(userId)).filter((r) =
 
 const list = async (req, res) => {
   try {
-    return success(res, { approvers: await listFor(req.staffUser.id), canEdit: passesAdminGate(req.user, PERMISSIONS.LEAVE_MANAGE) && req.staffUser.id !== req.user.id });
+    return success(res, { approvers: await listFor(req.staffUser.id), canEdit: passesAdminGate(req.user, PERMISSIONS.LEAVE_REQUIRED) && req.staffUser.id !== req.user.id });
   } catch (err) {
     console.error('RequiredApprover.list error:', err);
     return error(res, 'Failed to load required approvers', 500);

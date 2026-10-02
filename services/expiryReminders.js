@@ -7,7 +7,7 @@
 // After expiry nothing more is sent — it stays on the person's to-do list until
 // they renew it (no nagging).
 //
-// The person is told (expiry_self); holders of hr.credentials get the
+// The person is told (expiry_self); holders of hr.expiry.alerts get the
 // clinic-wide alert (expiry_hr). Each (item, threshold, expiry date) fires once
 // — ExpiryReminders is the de-duplication log, so a renewed date starts a fresh
 // set and a restart never double-sends. A licence or document name is not health
@@ -35,8 +35,8 @@ const inDays = (daysLeft) => (daysLeft <= 0 ? 'today' : `in ${daysLeft} day${day
 // Runs at most once per clinic day; the daily pass waits until 06:00 Nairobi.
 let lastRunDate = null;
 
-/** The user ids that should receive clinic-wide expiry alerts (hr.credentials). */
-const credentialHolders = () => hrNotify.holdersOf(PERMISSIONS.HR_CREDENTIALS);
+/** The user ids that should receive clinic-wide expiry alerts (hr.expiry.alerts). */
+const credentialHolders = () => hrNotify.holdersOf(PERMISSIONS.HR_EXPIRY_ALERTS);
 
 /**
  * One item due for a reminder: record it (once) and notify. Returns 1 if it

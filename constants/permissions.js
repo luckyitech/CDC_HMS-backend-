@@ -212,7 +212,11 @@ const PERMISSIONS = {
   // settings still need config.write on top, like every other settings write.
   HR_CHECKIN: 'hr.checkin',
   HR_VIEW:    'hr.view',
-  HR_WRITE:   'hr.write',
+  // hr.write was split (HR Tier 3 Phase 0, 2 Oct 2026) into the three below —
+  // see LEGACY_PERMISSIONS, which keeps every stored hr.write grant working.
+  HR_ATTENDANCE_AMEND: 'hr.attendance.amend',  // manual entries, amending a session
+  HR_WORKHOURS:        'hr.workhours',         // setting someone's working hours
+  HR_TAGS:             'hr.tags',              // naming, testing, retiring entrance tags
 
   // --- HR Suite phase 2: leave (B27, decision D8 — every HR function its own
   // capability so an HR manager or a supervisor can be given all or some).
@@ -241,11 +245,44 @@ const PERMISSIONS = {
   //                  nothing is a toggle that lies (tests/permissionVocabulary).
   HR_SELF:       'hr.self',
   HR_PROFILE_APPROVE: 'hr.profile.approve',
-  HR_CREDENTIALS: 'hr.credentials',
+  // hr.credentials was split (Tier 3 Phase 0) into CPD_VERIFY and
+  // HR_EXPIRY_ALERTS — see LEGACY_PERMISSIONS.
+  CPD_VERIFY:       'cpd.verify',
+  HR_EXPIRY_ALERTS: 'hr.expiry.alerts',
   LEAVE_APPROVE: 'leave.approve',
+  // LEAVE_MANAGE now means: record leave on someone's behalf and cancel
+  // anyone's live request. It still CARRIES see-everyone's-leave, sick-leave
+  // details, required approvers and the register (BUNDLES below), so nobody
+  // who held it loses anything; each of those can now also be given alone.
   LEAVE_MANAGE:  'leave.manage',
+  // LEAVE_POLICY now means: the yearly policy and the leave types. It carries
+  // public holidays and individual entitlements (BUNDLES), and still implies
+  // LEAVE_MANAGE (IMPLIED_BY), exactly as before.
   LEAVE_POLICY:  'leave.policy',
+  LEAVE_VIEW:         'leave.view',          // who is away, when, how long; sick shown "Private"
+  LEAVE_SICK:         'leave.sick',          // sick-leave type, reason and sick note (health data)
+  LEAVE_REQUIRED:     'leave.required',      // set someone's required approvers
+  LEAVE_REGISTER:     'leave.register',      // download the leave register (logged)
+  LEAVE_HOLIDAYS:     'leave.holidays',      // public holidays + the Sunday rule
+  LEAVE_ENTITLEMENTS: 'leave.entitlements',  // per-person entitlement overrides
   HR_SETTINGS:   'hr.settings',
+
+  // --- HR Suite, Tier 3 Phase 0 (2 Oct 2026): the staff file, split out of
+  // users.view / users.write so an HR department can share the work. Both old
+  // capabilities CARRY these (BUNDLES), so nobody loses anything at deploy;
+  // users.view / users.write themselves still gate the Manage Users screen.
+  STAFF_VIEW:      'staff.view',       // the directory and opening a staff file
+  STAFF_EDIT:      'staff.edit',       // personal and employment details, photo
+  STAFF_ONBOARD:   'staff.onboard',    // creating a staff account (onboarding wizard)
+  STAFF_STATUS:    'staff.status',     // suspend / resign / terminate, archive, restore
+  STAFF_DOCUMENTS: 'staff.documents',  // upload, reclassify, archive someone else's documents
+
+  // The right to change OTHER people's HR Suite capabilities, and only those
+  // (HR_DELEGABLE). Like permissions.grant it is checked by a bespoke gate
+  // (canGrantHrPermissions), never authorize(), so admin.access can never
+  // satisfy it; it cannot be self-granted, a holder can never grant it on, and
+  // it is never in a preset. Decisions P-2/P-5/P-6 (2 Oct 2026).
+  HR_GRANT: 'hr.grant',
 
   // Confidential staff documents — a contract, an appraisal, a disciplinary
   // letter, anything on a staff file marked "Admin only", and the archived
@@ -264,9 +301,37 @@ const ALL_PERMISSIONS = Object.values(PERMISSIONS);
 // Superseded capability names, mapped to what they mean now. Kept so a row
 // written before the stock split still resolves to the right access after
 // deploy — including in environments brought up by sequelize.sync() rather
-// than by running the migration. Nothing new should ever be added here.
+// than by running the migration. Only a capability that has been split
+// COMPLETELY (nothing left for the old name to mean) belongs here; one that
+// keeps a meaning of its own and also carries narrower ones is a BUNDLE.
+//
+// hr.write and hr.credentials (HR Tier 3 Phase 0, 2 Oct 2026): every stored
+// grant AND withdrawal of either expands to the parts, so a person who held
+// hr.write holds all four after deploy, and one refused it is refused all four.
+// The next save of their Permissions tab stores the parts instead.
 const LEGACY_PERMISSIONS = {
   'stock.manage': [PERMISSIONS.STOCK_ACCESS, PERMISSIONS.STOCK_WRITE],
+  'hr.write': [PERMISSIONS.HR_VIEW, PERMISSIONS.HR_ATTENDANCE_AMEND, PERMISSIONS.HR_WORKHOURS, PERMISSIONS.HR_TAGS],
+  'hr.credentials': [PERMISSIONS.CPD_VERIFY, PERMISSIONS.HR_EXPIRY_ALERTS],
+};
+
+// A capability that keeps its own meaning AND carries narrower ones
+// (HR Tier 3 Phase 0). Different from IMPLIED_BY, which is a dependency ("a
+// write is meaningless without its read"): withdrawing a PART of a bundle
+// leaves the bundle alone — "manages leave, but may not see sick-leave
+// details" is the case this exists for — while withdrawing the BUNDLE
+// withdraws every part, which is what a withdrawal of it always meant.
+//
+// Resolved when access is worked out (effectivePermissions /
+// deniedPermissions), never written to a row: granting leave.manage stores
+// leave.manage, and the parts follow it wherever it goes.
+const BUNDLES = {
+  [PERMISSIONS.USERS_VIEW]:   [PERMISSIONS.STAFF_VIEW],
+  [PERMISSIONS.USERS_WRITE]:  [PERMISSIONS.STAFF_EDIT, PERMISSIONS.STAFF_ONBOARD,
+    PERMISSIONS.STAFF_STATUS, PERMISSIONS.STAFF_DOCUMENTS],
+  [PERMISSIONS.LEAVE_MANAGE]: [PERMISSIONS.LEAVE_VIEW, PERMISSIONS.LEAVE_SICK,
+    PERMISSIONS.LEAVE_REQUIRED, PERMISSIONS.LEAVE_REGISTER],
+  [PERMISSIONS.LEAVE_POLICY]: [PERMISSIONS.LEAVE_HOLIDAYS, PERMISSIONS.LEAVE_ENTITLEMENTS],
 };
 
 // Granting a capability implies the one it is meaningless without, so the two
@@ -289,8 +354,48 @@ const IMPLIED_BY = {
   [PERMISSIONS.USERS_WRITE]:        PERMISSIONS.USERS_VIEW,
   [PERMISSIONS.APPOINTMENTS_WRITE]: PERMISSIONS.APPOINTMENTS_VIEW,
   [PERMISSIONS.CLINICAL_RECORD]:    PERMISSIONS.CLINICAL_VIEW,
-  [PERMISSIONS.HR_WRITE]:           PERMISSIONS.HR_VIEW,
   [PERMISSIONS.LEAVE_POLICY]:       PERMISSIONS.LEAVE_MANAGE,
+  // HR Tier 3 Phase 0: each acting capability needs the read it acts within.
+  [PERMISSIONS.HR_ATTENDANCE_AMEND]: PERMISSIONS.HR_VIEW,
+  [PERMISSIONS.HR_WORKHOURS]:        PERMISSIONS.HR_VIEW,
+  [PERMISSIONS.STAFF_EDIT]:          PERMISSIONS.STAFF_VIEW,
+  [PERMISSIONS.STAFF_STATUS]:        PERMISSIONS.STAFF_VIEW,
+  [PERMISSIONS.STAFF_DOCUMENTS]:     PERMISSIONS.STAFF_VIEW,
+  [PERMISSIONS.LEAVE_MANAGE]:        PERMISSIONS.LEAVE_VIEW,
+  [PERMISSIONS.LEAVE_SICK]:          PERMISSIONS.LEAVE_VIEW,
+  [PERMISSIONS.LEAVE_REQUIRED]:      PERMISSIONS.LEAVE_VIEW,
+};
+
+/**
+ * A set of capabilities with every dependency (IMPLIED_BY) and every bundle
+ * part (BUNDLES) added, repeated until nothing changes — leave.policy brings
+ * leave.manage, which brings its parts, which bring leave.view. Pure; shared
+ * by effectivePermissions() and the Permissions tab (served in the catalog).
+ */
+const withCarried = (input) => {
+  const set = new Set(input);
+  let grew = true;
+  while (grew) {
+    grew = false;
+    for (const cap of [...set]) {
+      const adds = [...(BUNDLES[cap] || []), ...(IMPLIED_BY[cap] ? [IMPLIED_BY[cap]] : [])];
+      for (const a of adds) if (!set.has(a)) { set.add(a); grew = true; }
+    }
+  }
+  return set;
+};
+
+/** A denial set with each withdrawn bundle's parts withdrawn too. */
+const withBundleDenials = (input) => {
+  const set = new Set(input);
+  let grew = true;
+  while (grew) {
+    grew = false;
+    for (const cap of [...set]) {
+      for (const a of (BUNDLES[cap] || [])) if (!set.has(a)) { set.add(a); grew = true; }
+    }
+  }
+  return set;
 };
 
 // Which portals each role reaches without anything being granted.
@@ -432,11 +537,25 @@ const ADMIN_ACCESS_COVERS = [
   PERMISSIONS.EMAIL_USE,
   PERMISSIONS.HR_CHECKIN,
   PERMISSIONS.HR_VIEW,
-  PERMISSIONS.HR_WRITE,
+  PERMISSIONS.HR_ATTENDANCE_AMEND,
+  PERMISSIONS.HR_WORKHOURS,
+  PERMISSIONS.HR_TAGS,
   PERMISSIONS.HR_SETTINGS,
   PERMISSIONS.HR_SELF,
   PERMISSIONS.HR_PROFILE_APPROVE,
-  PERMISSIONS.HR_CREDENTIALS,
+  PERMISSIONS.CPD_VERIFY,
+  PERMISSIONS.HR_EXPIRY_ALERTS,
+  PERMISSIONS.LEAVE_VIEW,
+  PERMISSIONS.LEAVE_SICK,
+  PERMISSIONS.LEAVE_REQUIRED,
+  PERMISSIONS.LEAVE_REGISTER,
+  PERMISSIONS.LEAVE_HOLIDAYS,
+  PERMISSIONS.LEAVE_ENTITLEMENTS,
+  PERMISSIONS.STAFF_VIEW,
+  PERMISSIONS.STAFF_EDIT,
+  PERMISSIONS.STAFF_ONBOARD,
+  PERMISSIONS.STAFF_STATUS,
+  PERMISSIONS.STAFF_DOCUMENTS,
   PERMISSIONS.INPATIENT_ACCESS,
   PERMISSIONS.INPATIENT_WRITE,
   PERMISSIONS.LAB_VIEW,
@@ -642,79 +761,202 @@ const PERMISSION_GROUPS = [
         roleDefault: 'Doctors, nurses' },
     ],
   },
+  // ---- HR Suite: seven groups (HR Tier 3 Phase 0, 2 Oct 2026) ----
+  // `hr: true` marks the groups an "Grant HR permissions" (hr.grant) holder may
+  // edit on someone else's file — HR_DELEGABLE is derived from it. Each area
+  // is ONE capability: an HR department shares the work by holding different
+  // ones. Department limits on these arrive with the Departments list (Phase 1).
   {
-    key: 'hr',
-    name: 'HR Suite',
-    description: 'Staff time & attendance, leave, HR settings and confidential staff documents. '
-      + 'Everyone can check in, see their own record and apply for their own leave; these decide '
-      + 'who can see, approve and change everyone else\'s.',
+    key: 'hr-self',
+    hr: true,
+    name: 'HR Suite · Self-service',
+    description: 'What every member of staff does for themselves. Withdraw one to stop a '
+      + 'single person using it.',
     areas: [
-      { key: 'hr-self', name: 'My record', appliesIn: 'HR Suite → My leave',
-        description: 'Their own leave: applying, following a request, answering a question '
-          + 'from an approver, withdrawing it or asking to cancel it. Held by every member of '
-          + 'staff; withdraw it to stop one person using self-service.',
-        access: PERMISSIONS.HR_SELF, accessLabel: 'Can apply for and follow their own leave',
+      { key: 'hr-self', name: 'My profile and My leave', appliesIn: 'HR Suite → My profile, My leave',
+        description: 'Their own record: applying for leave, following a request, answering an '
+          + 'approver, asking HR to change a detail, logging CPD.',
+        access: PERMISSIONS.HR_SELF, accessLabel: 'Can use their own profile and leave',
         roleDefault: 'Everyone' },
       { key: 'hr-checkin', name: 'Check in and out', appliesIn: 'HR Suite, entrance tag',
         description: 'Tapping the entrance tag, remembering a phone, and seeing their own '
-          + 'attendance and stars. Held by every member of staff; withdraw it to stop one '
-          + 'person checking in.',
+          + 'attendance and stars.',
         access: PERMISSIONS.HR_CHECKIN, accessLabel: 'Can check in and out and see their own record',
         roleDefault: 'Everyone' },
-      { key: 'hr-attendance', name: 'Time & Attendance', appliesIn: 'HR Suite',
-        description: 'Who is in, flagged taps, the register and amendments; working hours '
-          + 'and entrance tags. Registering a new tag key and changing the check-in rules '
-          + 'also need "HR Suite settings" below.',
-        access: PERMISSIONS.HR_VIEW, write: PERMISSIONS.HR_WRITE,
-        accessLabel: 'Can see everyone\'s attendance',
-        writeLabel: 'Can amend records, set working hours and manage tags',
+    ],
+  },
+  {
+    key: 'hr-people',
+    hr: true,
+    name: 'HR Suite · People and staff files',
+    description: 'Other people\'s staff files. "Users and staff files" under Administration '
+      + 'still carries all of these.',
+    areas: [
+      { key: 'staff-view', name: 'Open staff files', appliesIn: 'HR Suite → Staff, staff files',
+        description: 'The staff directory and every tab of a staff file they are allowed to see. '
+          + 'Confidential documents and sick-leave details stay behind their own controls.',
+        access: PERMISSIONS.STAFF_VIEW, accessLabel: 'Can open staff files',
         roleDefault: 'Administrators' },
-      { key: 'leave-approve', name: 'Approve leave', appliesIn: 'HR Suite',
-        description: 'Can be chosen as an approver on a colleague\'s leave request and decide it — '
-          + 'approve, decline or ask for more information — and choose which balance the days '
-          + 'come off. Nobody can approve their own leave.',
-        access: PERMISSIONS.LEAVE_APPROVE, accessLabel: 'Can approve leave and choose what it is charged to',
+      { key: 'staff-edit', name: 'Edit staff details', appliesIn: 'Staff file → Overview',
+        description: 'Personal, contact, employment and professional details, and the photo.',
+        access: PERMISSIONS.STAFF_EDIT, accessLabel: 'Can edit personal and employment details',
         roleDefault: 'Administrators' },
-      { key: 'leave-manage', name: 'Manage everyone\'s leave', appliesIn: 'HR Suite, staff files',
-        description: 'See every staff member\'s leave — including the type and reason of sick '
-          + 'leave — record leave on someone\'s behalf (approved on the spot) and cancel '
-          + 'approved leave.',
-        access: PERMISSIONS.LEAVE_MANAGE, accessLabel: 'Can see, record and cancel everyone\'s leave',
+      { key: 'staff-onboard', name: 'Onboard new staff', appliesIn: 'HR Suite → Staff → Onboard',
+        description: 'Creating a staff member\'s account with the onboarding wizard. What they '
+          + 'can then do is still set here, by whoever may grant it.',
+        access: PERMISSIONS.STAFF_ONBOARD, accessLabel: 'Can onboard new staff',
         roleDefault: 'Administrators' },
-      { key: 'leave-policy', name: 'Leave policy', appliesIn: 'HR Suite',
-        description: 'The yearly leave policy (days per type, how weekdays count, carry-over), '
-          + 'public holidays, and each person\'s entitlement. Includes managing everyone\'s leave.',
-        access: PERMISSIONS.LEAVE_POLICY, accessLabel: 'Can set the leave policy, holidays and entitlements',
-        roleDefault: 'Administrators' },
-      { key: 'hr-profile-approve', name: 'Profile change requests', appliesIn: 'HR Suite → Profile requests',
-        description: 'Decide what colleagues ask to change on their own record that they cannot edit '
-          + 'themselves — name, National ID, date of birth, licence and qualification details. '
-          + 'An approved change is written to their staff file and logged.',
-        access: PERMISSIONS.HR_PROFILE_APPROVE, accessLabel: 'Can approve or reject profile change requests',
-        roleDefault: 'Administrators' },
-      { key: 'hr-credentials', name: 'Verify CPD & credentials', appliesIn: 'HR Suite → Profile requests',
-        description: 'Verify colleagues\' continuing professional development (CPD) — confirming or '
-          + 'adjusting the points before it counts — and receive the clinic-wide licence and '
-          + 'staff-document expiry reminders.',
-        access: PERMISSIONS.HR_CREDENTIALS, accessLabel: 'Can verify CPD and receive credential expiry alerts',
-        roleDefault: 'Administrators' },
-      { key: 'hr-settings', name: 'HR Suite settings', appliesIn: 'HR Suite',
-        description: 'Check-in rules, registering entrance tag keys, and which alerts go out '
-          + 'by bell, email or WhatsApp.',
-        access: PERMISSIONS.HR_SETTINGS, accessLabel: 'Can change HR Suite settings and register tag keys',
+      { key: 'staff-status', name: 'Employment status', appliesIn: 'Staff file → Permissions',
+        description: 'Suspending, recording a resignation or termination, archiving a file and '
+          + 'restoring it. Anything other than Active or On leave stops them logging in.',
+        access: PERMISSIONS.STAFF_STATUS, accessLabel: 'Can change employment status and archive',
         roleDefault: 'Administrators',
-        warning: 'Entrance tag keys are secrets: someone holding a key can make a tag that '
-          + 'checks anyone in. Grant this only to whoever runs the HR Suite.' },
+        warning: 'This person will be able to suspend or terminate a colleague, which stops '
+          + 'that colleague logging in straight away.' },
+      { key: 'staff-documents', name: 'Staff documents', appliesIn: 'Staff file → Documents',
+        description: 'Uploading to someone else\'s file, reclassifying, archiving and restoring. '
+          + 'Not the confidential drawer.',
+        access: PERMISSIONS.STAFF_DOCUMENTS, accessLabel: 'Can manage colleagues\' documents',
+        roleDefault: 'Administrators' },
       { key: 'users-confidential', name: 'Confidential staff documents', appliesIn: 'HR Suite, staff files',
         description: 'Contracts, appraisals, disciplinary letters — anything on a staff file '
           + 'marked "Admin only", and the archived files. Not part of full administrator '
-          + 'access: an administrator can manage the file without reading what is in the '
-          + 'confidential drawer.',
+          + 'access, and only a permissions administrator can grant it.',
         access: PERMISSIONS.HR_CONFIDENTIAL, accessLabel: 'Can see and classify confidential staff documents',
         roleDefault: 'Nobody by role — must be granted',
         warning: 'This person will be able to read every confidential document on every '
           + 'staff file, and to mark documents confidential or share them with the staff '
           + 'member. Full administrator access does not include this.' },
+      { key: 'hr-profile-approve', name: 'Profile change requests', appliesIn: 'HR Suite → Profile requests',
+        description: 'Decide what colleagues ask to change on their own record — name, National '
+          + 'ID, date of birth, licence and qualification details.',
+        access: PERMISSIONS.HR_PROFILE_APPROVE, accessLabel: 'Can approve or reject profile change requests',
+        roleDefault: 'Administrators' },
+    ],
+  },
+  {
+    key: 'hr-attendance',
+    hr: true,
+    name: 'HR Suite · Attendance',
+    description: 'Everyone else\'s time and attendance. Check-in rules and tag keys are under '
+      + 'HR administration.',
+    areas: [
+      { key: 'hr-attendance', name: 'See attendance', appliesIn: 'HR Suite → Dashboard, Time register',
+        description: 'Who is in, flagged taps, the register and everyone\'s working hours.',
+        access: PERMISSIONS.HR_VIEW, accessLabel: 'Can see everyone\'s attendance',
+        roleDefault: 'Administrators' },
+      { key: 'hr-attendance-amend', name: 'Amend attendance', appliesIn: 'HR Suite → Time register',
+        description: 'Adding a missed check-in or check-out and correcting a session. Every '
+          + 'change is kept with who made it.',
+        access: PERMISSIONS.HR_ATTENDANCE_AMEND, accessLabel: 'Can amend attendance records',
+        roleDefault: 'Administrators' },
+      { key: 'hr-workhours', name: 'Working hours', appliesIn: 'HR Suite → Settings → Working hours',
+        description: 'Setting a person\'s usual week and dated exceptions, which decide when '
+          + 'they are expected in.',
+        access: PERMISSIONS.HR_WORKHOURS, accessLabel: 'Can set working hours',
+        roleDefault: 'Administrators' },
+      { key: 'hr-tags', name: 'Entrance tags', appliesIn: 'HR Suite → Settings → Tags',
+        description: 'Naming, testing and retiring the entrance tags. Registering a new tag key '
+          + 'is "HR Suite settings".',
+        access: PERMISSIONS.HR_TAGS, accessLabel: 'Can manage entrance tags',
+        roleDefault: 'Administrators' },
+    ],
+  },
+  {
+    key: 'hr-leave',
+    hr: true,
+    name: 'HR Suite · Leave',
+    description: 'Everyone else\'s leave. Applying for their own is Self-service.',
+    areas: [
+      { key: 'leave-approve', name: 'Approve leave', appliesIn: 'HR Suite → Leave to approve',
+        description: 'Can be chosen as an approver on a colleague\'s request and decide it, and '
+          + 'choose which balance the days come off. The applicant picks their approvers; '
+          + 'nobody approves their own leave.',
+        access: PERMISSIONS.LEAVE_APPROVE, accessLabel: 'Can be chosen to approve leave',
+        roleDefault: 'Administrators' },
+      { key: 'leave-view', name: 'See everyone\'s leave', appliesIn: 'Leave to approve → All, staff files',
+        description: 'Who is away, when and for how long, with the real leave type. Sick leave '
+          + 'shows as "Private" unless they also hold "Sick-leave details".',
+        access: PERMISSIONS.LEAVE_VIEW, accessLabel: 'Can see everyone\'s leave',
+        roleDefault: 'Administrators' },
+      { key: 'leave-sick', name: 'Sick-leave details', appliesIn: 'Leave, staff files, team calendar',
+        description: 'That a leave was sick leave, the reason given and the sick note. Health '
+          + 'data: give it to as few people as the work needs.',
+        access: PERMISSIONS.LEAVE_SICK, accessLabel: 'Can see sick-leave details',
+        roleDefault: 'Administrators',
+        warning: 'Sick leave is health data. This person will see the type, reason and sick '
+          + 'note of every colleague\'s sick leave.' },
+      { key: 'leave-manage', name: 'Record and cancel leave', appliesIn: 'Staff file → Leave, Leave to approve',
+        description: 'Recording leave on someone\'s behalf (approved on the spot) and cancelling '
+          + 'anyone\'s live request. Also carries seeing everyone\'s leave, sick-leave details, '
+          + 'required approvers and the register — untick any of those to hold it back.',
+        access: PERMISSIONS.LEAVE_MANAGE, accessLabel: 'Can record and cancel leave for others',
+        roleDefault: 'Administrators' },
+      { key: 'leave-required', name: 'Required approvers', appliesIn: 'Staff file → Leave',
+        description: 'Naming who must approve a person\'s leave, whatever they choose.',
+        access: PERMISSIONS.LEAVE_REQUIRED, accessLabel: 'Can set required approvers',
+        roleDefault: 'Administrators' },
+      { key: 'leave-register', name: 'Leave register', appliesIn: 'Leave to approve → All',
+        description: 'Downloading the year\'s leave register as a spreadsheet. Every download '
+          + 'is logged. Sick leave is named only for someone who also holds "Sick-leave details".',
+        access: PERMISSIONS.LEAVE_REGISTER, accessLabel: 'Can download the leave register',
+        roleDefault: 'Administrators' },
+      { key: 'leave-policy', name: 'Leave policy and types', appliesIn: 'HR Suite → Leave settings',
+        description: 'The yearly leave policy (days per type, how weekdays count, carry-over, '
+          + 'publishing) and the leave types. Also carries public holidays, entitlements and '
+          + 'everything in "Record and cancel leave".',
+        access: PERMISSIONS.LEAVE_POLICY, accessLabel: 'Can set the leave policy and types',
+        roleDefault: 'Administrators' },
+      { key: 'leave-holidays', name: 'Public holidays', appliesIn: 'Leave settings → Public holidays',
+        description: 'Adding and retiring public holidays, and the Sunday-holiday rule.',
+        access: PERMISSIONS.LEAVE_HOLIDAYS, accessLabel: 'Can manage public holidays',
+        roleDefault: 'Administrators' },
+      { key: 'leave-entitlements', name: 'Individual entitlements', appliesIn: 'Leave settings → Staff entitlements',
+        description: 'Giving one person more or fewer days than the policy for a year.',
+        access: PERMISSIONS.LEAVE_ENTITLEMENTS, accessLabel: 'Can set individual entitlements',
+        roleDefault: 'Administrators' },
+    ],
+  },
+  {
+    key: 'hr-development',
+    hr: true,
+    name: 'HR Suite · Development',
+    description: 'Professional development and credentials.',
+    areas: [
+      { key: 'cpd-verify', name: 'Verify CPD', appliesIn: 'HR Suite → Profile requests',
+        description: 'Confirming, adjusting or rejecting the CPD points colleagues log, before '
+          + 'they count.',
+        access: PERMISSIONS.CPD_VERIFY, accessLabel: 'Can verify CPD',
+        roleDefault: 'Administrators' },
+      { key: 'hr-expiry-alerts', name: 'Expiry alerts', appliesIn: 'Bell and email',
+        description: 'Receiving the clinic-wide reminders when a licence or staff document is '
+          + 'about to expire, and seeing the list of what is expiring.',
+        access: PERMISSIONS.HR_EXPIRY_ALERTS, accessLabel: 'Receives licence and document expiry alerts',
+        roleDefault: 'Administrators' },
+    ],
+  },
+  {
+    key: 'hr-admin',
+    hr: true,
+    name: 'HR Suite · Administration',
+    description: 'Clinic-wide HR rules, and handing out HR controls.',
+    areas: [
+      { key: 'hr-settings', name: 'HR Suite settings', appliesIn: 'HR Suite → Settings',
+        description: 'Check-in rules, registering entrance tag keys, CPD targets and which '
+          + 'alerts go out by bell, email or WhatsApp.',
+        access: PERMISSIONS.HR_SETTINGS, accessLabel: 'Can change HR Suite settings and register tag keys',
+        roleDefault: 'Administrators',
+        warning: 'Entrance tag keys are secrets: someone holding a key can make a tag that '
+          + 'checks anyone in. Grant this only to whoever runs the HR Suite.' },
+      { key: 'hr-grant', name: 'Grant HR permissions', appliesIn: 'Staff file → Permissions',
+        description: 'Ticking and unticking the HR Suite controls on colleagues\' files — only '
+          + 'the ones they hold themselves, never on their own file, and never confidential '
+          + 'documents or this control. Every change is logged against their name.',
+        access: PERMISSIONS.HR_GRANT, accessLabel: 'Can grant HR Suite permissions to others',
+        roleDefault: 'Nobody by role — granted by a permissions administrator',
+        warning: 'This person will be able to give colleagues any HR Suite control they hold '
+          + 'themselves, including seeing sick-leave details. Only a permissions administrator '
+          + 'can grant this.' },
     ],
   },
   {
@@ -758,9 +1000,13 @@ const PERMISSION_GROUPS = [
         warning: 'This person will be able to make anyone an administrator, and to take '
           + 'that away. Only someone who already holds this can grant it, and nobody can '
           + 'grant it to themselves. Every change is recorded against their name.' },
-      { key: 'users', name: 'Users and staff files', appliesIn: 'Admin',
+      { key: 'users', name: 'Users and staff files', appliesIn: 'Admin, HR Suite',
+        description: 'The Manage Users screen (login accounts). Viewing also carries "Open staff '
+          + 'files"; editing also carries editing details, onboarding, employment status and '
+          + 'staff documents — each of those can be given on its own under HR Suite · People.',
         access: PERMISSIONS.USERS_VIEW, write: PERMISSIONS.USERS_WRITE,
-        accessLabel: 'Can view users', writeLabel: 'Can create and edit users',
+        accessLabel: 'Can view users and open staff files',
+        writeLabel: 'Can create and edit users and staff files',
         roleDefault: 'Administrators' },
       { key: 'config', name: 'Catalog, wards and settings', appliesIn: 'Admin',
         access: null, write: PERMISSIONS.CONFIG_WRITE,
@@ -940,7 +1186,10 @@ const expand = (list) => {
  */
 const deniedPermissions = (user) => {
   if (!user || isTrueAdmin(user)) return new Set();
-  return expand(user.deniedPermissions);
+  // Withdrawing a bundle withdraws its parts (see BUNDLES): someone refused
+  // users.write before Tier 3 must still be refused editing staff files now
+  // that the staff routes check staff.edit.
+  return withBundleDenials(expand(user.deniedPermissions));
 };
 
 /**
@@ -985,12 +1234,12 @@ const effectivePermissions = (user) => {
   // Before the deletes, so a withdrawal still beats an implication: taking away
   // the read has to take the write with it, which is what
   // sanitizeDeniedPermissions already records.
-  Object.entries(IMPLIED_BY).forEach(([writeCap, readCap]) => {
-    if (granted.has(writeCap)) granted.add(readCap);
-  });
+  //
+  // Bundles resolve here too (HR Tier 3): holding leave.manage holds its parts.
+  const carried = withCarried(granted);
 
-  deniedPermissions(user).forEach((p) => granted.delete(p));
-  return granted;
+  deniedPermissions(user).forEach((p) => carried.delete(p));
+  return carried;
 };
 
 const hasPermission = (user, permission) => effectivePermissions(user).has(permission);
@@ -1030,9 +1279,14 @@ const sanitizePermissions = (input) => {
   // A write is meaningless without the access it acts within, so granting one
   // carries the other. Without this the tab could store "can dispense but
   // cannot open Stock", which no screen can represent and no gate expects.
-  Object.entries(IMPLIED_BY).forEach(([held, implied]) => {
-    if (set.has(held)) set.add(implied);
-  });
+  // Repeated until stable — leave.policy → leave.manage → leave.view.
+  let grew = true;
+  while (grew) {
+    grew = false;
+    Object.entries(IMPLIED_BY).forEach(([held, implied]) => {
+      if (set.has(held) && !set.has(implied)) { set.add(implied); grew = true; }
+    });
+  }
   return ALL_PERMISSIONS.filter((p) => set.has(p));
 };
 
@@ -1044,9 +1298,15 @@ const sanitizePermissions = (input) => {
 const sanitizeDeniedPermissions = (input) => {
   if (!Array.isArray(input)) return [];
   const set = expand(input);
-  Object.entries(IMPLIED_BY).forEach(([held, implied]) => {
-    if (set.has(implied)) set.add(held);
-  });
+  // Repeated until stable: refusing leave.view refuses leave.manage, which
+  // refuses leave.policy (a chain that only exists since HR Tier 3).
+  let grew = true;
+  while (grew) {
+    grew = false;
+    Object.entries(IMPLIED_BY).forEach(([held, implied]) => {
+      if (set.has(implied) && !set.has(held)) { set.add(held); grew = true; }
+    });
+  }
   return ALL_PERMISSIONS.filter((p) => set.has(p));
 };
 
@@ -1105,7 +1365,43 @@ const PRESET_EXCLUDED = [
   PERMISSIONS.ADMIN_ACCESS,
   PERMISSIONS.PERMISSIONS_GRANT,
   PERMISSIONS.HR_CONFIDENTIAL,
+  // HR Tier 3 (P-5): only a permissions administrator makes an HR grantor, so
+  // it can never ride inside a template a users.write holder may apply.
+  PERMISSIONS.HR_GRANT,
 ];
+
+// ---------------------------------------------------------------------
+// Delegated HR granting (HR Tier 3 Phase 0, decisions P-2, P-5, P-6)
+// ---------------------------------------------------------------------
+
+// HR capabilities a "Grant HR permissions" holder may never hand out: the
+// confidential drawer (outside admin access on purpose) and hr.grant itself
+// (no chains). Appraisal reading joins this list when appraisals ship.
+const HR_NOT_DELEGABLE = [PERMISSIONS.HR_CONFIDENTIAL, PERMISSIONS.HR_GRANT];
+
+// Everything in the HR Suite groups of the Permissions tab, minus the above.
+// Derived from PERMISSION_GROUPS so a new HR control is delegable the moment
+// it appears on the tab.
+const HR_DELEGABLE = PERMISSION_GROUPS
+  .filter((g) => g.hr)
+  .flatMap((g) => g.areas)
+  .flatMap((a) => [a.access, a.write])
+  .filter(Boolean)
+  .filter((p) => !HR_NOT_DELEGABLE.includes(p));
+
+/**
+ * May this person use the delegated HR granting path?
+ *
+ * An explicit hr.grant (or the true admin account), not withdrawn. Like
+ * permissions.grant it is NOT satisfied by admin.access: holding full
+ * administrator access runs the clinic; handing out HR controls is a separate,
+ * named trust.
+ */
+const canGrantHrPermissions = (user) =>
+  isTrueAdmin(user) || hasPermission(user, PERMISSIONS.HR_GRANT);
+
+/** Either kind of grantor — who may open the Permissions tab for editing at all. */
+const canEditPermissions = (user) => canGrantPermissions(user) || canGrantHrPermissions(user);
 
 // Roles a preset can be defined for — the same set that may hold permissions.
 const PRESET_ROLES = PERMISSIBLE_ROLES;
@@ -1143,4 +1439,11 @@ module.exports = {
   defaultPermissionsFor,
   PRESET_EXCLUDED,
   PRESET_ROLES,
+  BUNDLES,
+  IMPLIED_BY,
+  withCarried,
+  HR_DELEGABLE,
+  HR_NOT_DELEGABLE,
+  canGrantHrPermissions,
+  canEditPermissions,
 };

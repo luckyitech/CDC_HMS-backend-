@@ -93,7 +93,7 @@ const notify = async (event, { recipients = [], title, body = null, link = null,
 /**
  * The active internal staff who hold a capability (admin.access bypass and
  * withdrawals honoured, exactly as the route gate decides). ONE lookup for
- * every "tell whoever handles X" alert: clinic-wide expiry (hr.credentials),
+ * every "tell whoever handles X" alert: clinic-wide expiry (hr.expiry.alerts),
  * new profile change requests (hr.profile.approve).
  */
 const holdersOf = async (capability) => {
