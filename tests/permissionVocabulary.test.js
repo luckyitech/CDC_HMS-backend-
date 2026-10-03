@@ -42,6 +42,10 @@ const CHECKED_ELSEWHERE = {
     'controllers/staffDocumentController.js via canViewConfidential() — the '
     + 'confidential drawer of a staff file; deliberately not an authorize() '
     + 'argument so admin.access can never satisfy it (tests/adminLiteralGates.test.js)',
+  [PERMISSIONS.HR_APPRAISALS]:
+    'services/appraisals.js via canReadAppraisals() — reading every appraisal; '
+    + 'deliberately not an authorize() argument so admin.access can never satisfy it '
+    + '(tests/hrTier3Phase5.test.js)',
   [PERMISSIONS.HR_GRANT]:
     'routes/staff.js permissionsEditor / catalogReader via canGrantHrPermissions() — '
     + 'delegated HR granting; deliberately not an authorize() argument so admin.access '

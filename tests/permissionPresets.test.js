@@ -13,9 +13,10 @@ const { validatePresetPayload } = require('../controllers/permissionPresetContro
 // =====================================================================
 
 describe('PRESET_EXCLUDED — the per-person-only capabilities', () => {
-  test('is exactly admin.access, permissions.grant, hr.confidential and (HR Tier 3) hr.grant', () => {
+  test('is exactly admin.access, permissions.grant, hr.confidential, (HR Tier 3) hr.grant and (T3 P5) hr.appraisals', () => {
     assert.deepEqual([...PRESET_EXCLUDED].sort(), [
       PERMISSIONS.ADMIN_ACCESS, PERMISSIONS.HR_CONFIDENTIAL, PERMISSIONS.PERMISSIONS_GRANT, PERMISSIONS.HR_GRANT,
+      PERMISSIONS.HR_APPRAISALS,
     ].sort());
   });
 

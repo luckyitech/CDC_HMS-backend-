@@ -16,6 +16,7 @@ const hrLists = require('../controllers/hrListsController');
 const hrReports = require('../controllers/hrReportsController');
 const hrOnboarding = require('../controllers/hrOnboardingController');
 const hrRoster = require('../controllers/hrRosterController');
+const hrAppraisals = require('../controllers/hrAppraisalController');
 
 // =====================================================================
 // HR Suite (B21) — /api/hr
@@ -65,6 +66,13 @@ const ONBOARDING_READ = ['admin', 'hr.onboarding', 'hr.onboarding.templates'];
 const ROSTER = ['admin', 'hr.roster'];
 const ROSTER_SHIFTS = ['admin', 'hr.roster.shifts'];
 const ROSTER_READ = ['admin', 'hr.roster', 'hr.roster.shifts'];
+// HR Tier 3 Phase 5 (T3-9 a, T3-10 a): appraisals. Running the cycle is
+// hr.appraisals.run (scoped). Taking part — the person, their reviewer — is
+// every internal role; services/appraisals decides per appraisal (else 404).
+// READING every appraisal is hr.appraisals via canReadAppraisals(), never an
+// authorize() argument, so full admin access can never satisfy it.
+const APPRAISALS_RUN = ['admin', 'hr.appraisals.run'];
+const APPRAISALS_PARTICIPATE = ['doctor', 'staff', 'lab', 'nurse', 'admin', 'hr.self'];
 
 // A tap is one request per person per event; 60 a minute per IP is generous
 // for a whole clinic behind one NAT, and caps a scripted flood.
@@ -218,5 +226,26 @@ router.post('/roster/week/publish', authenticate, authorize(...ROSTER), [...WEEK
 router.get('/roster/shift-types', authenticate, authorize(...ROSTER_READ), hrRoster.shiftTypes);
 router.post('/roster/shift-types', authenticate, authorize(...ROSTER_SHIFTS), hrRoster.createShiftType);
 router.patch('/roster/shift-types/:id', authenticate, authorize(...ROSTER_SHIFTS), [param('id').isInt({ min: 1 }), validate], hrRoster.updateShiftType);
+
+// ---- Appraisals (HR Tier 3 Phase 5) ----
+const AID = [param('id').isInt({ min: 1 }).withMessage('Unknown appraisal'), validate];
+router.get('/appraisals/mine', authenticate, authorize(...APPRAISALS_PARTICIPATE), hrAppraisals.mine);
+router.get('/appraisals/competencies', authenticate, authorize(...APPRAISALS_PARTICIPATE), hrAppraisals.competencies);
+router.post('/appraisals/competencies', authenticate, authorize(...APPRAISALS_RUN), hrAppraisals.createCompetency);
+router.patch('/appraisals/competencies/:id', authenticate, authorize(...APPRAISALS_RUN), AID, hrAppraisals.updateCompetency);
+router.get('/appraisals/cycles', authenticate, authorize(...APPRAISALS_PARTICIPATE), hrAppraisals.cycles);
+router.post('/appraisals/cycles', authenticate, authorize(...APPRAISALS_RUN), hrAppraisals.createCycle);
+router.get('/appraisals/cycles/:id', authenticate, authorize(...APPRAISALS_PARTICIPATE), AID, hrAppraisals.cycleProgress);
+router.patch('/appraisals/cycles/:id', authenticate, authorize(...APPRAISALS_RUN), AID, hrAppraisals.updateCycle);
+router.get('/appraisals/cycles/:id/eligible', authenticate, authorize(...APPRAISALS_RUN), AID, hrAppraisals.eligible);
+router.post('/appraisals/cycles/:id/people', authenticate, authorize(...APPRAISALS_RUN), AID, hrAppraisals.addPeople);
+router.patch('/appraisals/:id/run', authenticate, authorize(...APPRAISALS_RUN), [
+  ...AID.slice(0, 1), body('action').isIn(['reviewer', 'skipSelf', 'return', 'cancel']).withMessage('Unknown action'), validate,
+], hrAppraisals.run);
+router.get('/appraisals/:id', authenticate, authorize(...APPRAISALS_PARTICIPATE), AID, hrAppraisals.getOne);
+router.get('/appraisals/:id/reference', authenticate, authorize(...APPRAISALS_PARTICIPATE), AID, hrAppraisals.reference);
+router.put('/appraisals/:id/self', authenticate, authorize(...APPRAISALS_PARTICIPATE), AID, hrAppraisals.saveSelf);
+router.put('/appraisals/:id/review', authenticate, authorize(...APPRAISALS_PARTICIPATE), AID, hrAppraisals.saveReview);
+router.post('/appraisals/:id/acknowledge', authenticate, authorize(...APPRAISALS_PARTICIPATE), AID, hrAppraisals.acknowledge);
 
 module.exports = router;

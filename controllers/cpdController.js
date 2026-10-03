@@ -295,6 +295,8 @@ const certificate = async (req, res) => {
 module.exports = {
   list, staffList, create, update, remove,
   hrList, hrCount, verify, certificate,
+  // the ONE CPD year builder — also used by services/appraisals (HR Tier 3 P5)
+  yearFor,
   // tests
   shape,
 };

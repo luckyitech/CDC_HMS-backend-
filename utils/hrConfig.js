@@ -56,6 +56,8 @@ const ALERT_EVENTS = [
   // HR Tier 3 Phase 4 (RO-10): a person's week is published; one of their
   // published shifts changed. No detail beyond the week or day.
   'roster_published', 'roster_changed',
+  // HR Tier 3 Phase 5: an appraisal step waits for someone. Never a rating or comment.
+  'appraisal_self', 'appraisal_review', 'appraisal_sent', 'appraisal_acknowledged',
 ];
 const ALERT_CHANNELS = ['bell', 'email', 'whatsapp'];
 const DEFAULT_ALERTS = Object.fromEntries(ALERT_EVENTS.map((e) => [e, { bell: true, email: true, whatsapp: false }]));

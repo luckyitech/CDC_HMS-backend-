@@ -304,6 +304,17 @@ const PERMISSIONS = {
   HR_ROSTER:        'hr.roster',
   HR_ROSTER_SHIFTS: 'hr.roster.shifts',
 
+  // HR Tier 3 Phase 5 (3 Oct 2026, T3-9 a / T3-10 a): appraisals.
+  //   HR_APPRAISALS_RUN  open and close the yearly window, add people, choose
+  //                      reviewers, edit the competencies. Sees who is at which
+  //                      step — NOT what anyone wrote. Department-scopable.
+  //   HR_APPRAISALS      READ every appraisal. Confidential like
+  //                      hr.confidential: NOT covered by admin.access, never
+  //                      delegable, never in a preset; checked by
+  //                      canReadAppraisals() (true admin is the fallback).
+  HR_APPRAISALS_RUN: 'hr.appraisals.run',
+  HR_APPRAISALS:     'hr.appraisals',
+
   // The right to change OTHER people's HR Suite capabilities, and only those
   // (HR_DELEGABLE). Like permissions.grant it is checked by a bespoke gate
   // (canGrantHrPermissions), never authorize(), so admin.access can never
@@ -589,6 +600,7 @@ const ADMIN_ACCESS_COVERS = [
   PERMISSIONS.HR_ONBOARDING_TEMPLATES,
   PERMISSIONS.HR_ROSTER,
   PERMISSIONS.HR_ROSTER_SHIFTS,
+  PERMISSIONS.HR_APPRAISALS_RUN,
   PERMISSIONS.INPATIENT_ACCESS,
   PERMISSIONS.INPATIENT_WRITE,
   PERMISSIONS.LAB_VIEW,
@@ -993,6 +1005,20 @@ const PERMISSION_GROUPS = [
           + 'about to expire, and seeing the list of what is expiring.',
         access: PERMISSIONS.HR_EXPIRY_ALERTS, accessLabel: 'Receives licence and document expiry alerts',
         roleDefault: 'Administrators' },
+      { key: 'hr-appraisals-run', name: 'Run appraisals', appliesIn: 'HR Suite → Appraisals',
+        description: 'Opening and closing the year\'s appraisal window, adding people, choosing '
+          + 'each person\'s reviewer and editing the competencies everyone is rated on. Shows who '
+          + 'is at which step — not what anyone wrote.',
+        access: PERMISSIONS.HR_APPRAISALS_RUN, accessLabel: 'Can run the appraisal cycle',
+        roleDefault: 'Administrators' },
+      { key: 'hr-appraisals', name: 'Read appraisals', appliesIn: 'HR Suite → Appraisals',
+        description: 'Reading every colleague\'s appraisal — ratings, comments, objectives. The '
+          + 'person and their reviewer always see their own. Not part of full administrator '
+          + 'access, and only a permissions administrator can grant it.',
+        access: PERMISSIONS.HR_APPRAISALS, accessLabel: 'Can read every appraisal',
+        roleDefault: 'Nobody by role — must be granted',
+        warning: 'Appraisals are confidential performance records. This person will be able to '
+          + 'read every colleague\'s. Full administrator access does not include this.' },
     ],
   },
   {
@@ -1206,6 +1232,15 @@ const passesGate = (user, allow) => gateResult(user, allow) === 'ok';
 const canViewConfidential = (user) =>
   !isDenied(user, PERMISSIONS.HR_CONFIDENTIAL)
   && (isTrueAdmin(user) || hasPermission(user, PERMISSIONS.HR_CONFIDENTIAL));
+
+/**
+ * Reading every appraisal (HR Tier 3 Phase 5, T3-10 a): an explicit grant of
+ * hr.appraisals, or the true admin account. NOT satisfied by admin.access.
+ * A withdrawal still wins.
+ */
+const canReadAppraisals = (user) =>
+  !isDenied(user, PERMISSIONS.HR_APPRAISALS)
+  && (isTrueAdmin(user) || hasPermission(user, PERMISSIONS.HR_APPRAISALS));
 
 /**
  * A JSON-array column, as a real array.
@@ -1434,6 +1469,8 @@ const PRESET_EXCLUDED = [
   // HR Tier 3 (P-5): only a permissions administrator makes an HR grantor, so
   // it can never ride inside a template a users.write holder may apply.
   PERMISSIONS.HR_GRANT,
+  // HR Tier 3 Phase 5 (T3-10 a): reading appraisals is its own trust.
+  PERMISSIONS.HR_APPRAISALS,
 ];
 
 // ---------------------------------------------------------------------
@@ -1443,7 +1480,7 @@ const PRESET_EXCLUDED = [
 // HR capabilities a "Grant HR permissions" holder may never hand out: the
 // confidential drawer (outside admin access on purpose) and hr.grant itself
 // (no chains). Appraisal reading joins this list when appraisals ship.
-const HR_NOT_DELEGABLE = [PERMISSIONS.HR_CONFIDENTIAL, PERMISSIONS.HR_GRANT];
+const HR_NOT_DELEGABLE = [PERMISSIONS.HR_CONFIDENTIAL, PERMISSIONS.HR_GRANT, PERMISSIONS.HR_APPRAISALS];
 
 // Everything in the HR Suite groups of the Permissions tab, minus the above.
 // Derived from PERMISSION_GROUPS so a new HR control is delegable the moment
@@ -1503,6 +1540,7 @@ const SCOPABLE = [
   PERMISSIONS.HR_REPORTS,
   PERMISSIONS.HR_ONBOARDING,
   PERMISSIONS.HR_ROSTER,
+  PERMISSIONS.HR_APPRAISALS_RUN,
 ];
 
 // Roles a preset can be defined for — the same set that may hold permissions.
@@ -1535,6 +1573,7 @@ module.exports = {
   gateResult,
   passesGate,
   canViewConfidential,
+  canReadAppraisals,
   sanitizePermissions,
   sanitizeDeniedPermissions,
   reconcilePermissionLists,

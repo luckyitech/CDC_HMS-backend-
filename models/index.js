@@ -32,6 +32,11 @@ const OnboardingItem      = require('./OnboardingItem');
 const RosterShiftType     = require('./RosterShiftType');
 const RosterWeek          = require('./RosterWeek');
 const RosterShift         = require('./RosterShift');
+const AppraisalCompetency = require('./AppraisalCompetency');
+const AppraisalCycle      = require('./AppraisalCycle');
+const Appraisal           = require('./Appraisal');
+const AppraisalRating     = require('./AppraisalRating');
+const AppraisalObjective  = require('./AppraisalObjective');
 const StaffDocument       = require('./StaffDocument');
 const Patient             = require('./Patient');
 const PatientVital        = require('./PatientVital');
@@ -207,6 +212,17 @@ User.hasMany(RosterShift);
 RosterShift.belongsTo(User);
 RosterShift.belongsTo(RosterShiftType, { as: 'shiftType', foreignKey: 'shiftTypeId' });
 RosterWeek.belongsTo(Department, { foreignKey: 'departmentId' });
+
+// HR Tier 3 Phase 5 — appraisals (migration 20260928000014).
+User.hasMany(Appraisal);
+Appraisal.belongsTo(User);
+Appraisal.belongsTo(User, { as: 'reviewer', foreignKey: 'reviewerId' });
+Appraisal.belongsTo(AppraisalCycle, { as: 'cycle', foreignKey: 'cycleId' });
+AppraisalCycle.hasMany(Appraisal, { as: 'appraisals', foreignKey: 'cycleId' });
+Appraisal.hasMany(AppraisalRating, { as: 'ratings', foreignKey: 'appraisalId' });
+AppraisalRating.belongsTo(Appraisal, { foreignKey: 'appraisalId' });
+Appraisal.hasMany(AppraisalObjective, { as: 'objectives', foreignKey: 'appraisalId' });
+AppraisalObjective.belongsTo(Appraisal, { foreignKey: 'appraisalId' });
 
 User.hasMany(CpdActivity);
 CpdActivity.belongsTo(User);
@@ -671,6 +687,11 @@ const db = {
   RosterShiftType,
   RosterWeek,
   RosterShift,
+  AppraisalCompetency,
+  AppraisalCycle,
+  Appraisal,
+  AppraisalRating,
+  AppraisalObjective,
   StaffDocument,
   Patient,
   PatientVital,
