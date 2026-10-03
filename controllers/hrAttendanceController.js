@@ -131,7 +131,9 @@ const tap = async (req, res) => {
       await locked.update({ lastCounter: counter, lastTapAt: now }, { transaction });
     }
 
-    const last = await svc.lastSessionToday(me.id, clinicDate, transaction);
+    // A night shift's check-out tap lands after midnight (HR Tier 3 Phase 4).
+    const last = (await svc.lastSessionToday(me.id, clinicDate, transaction))
+      || (await svc.overnightSession(me.id, clinicDate, now, transaction));
     const action = decide({ now, lastSession: last, confirm, cfg });
     // Phase 1: IP/geo are logged, never enforced, so every verified tap is 'verified'.
     const verification = 'verified';

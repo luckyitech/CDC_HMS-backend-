@@ -7,6 +7,7 @@ const selfLeave = require('../controllers/hrSelfLeaveController');
 const selfProfile = require('../controllers/hrProfileController');
 const cpd = require('../controllers/cpdController');
 const staffPhoto = require('../controllers/staffPhotoController');
+const hrRoster = require('../controllers/hrRosterController');
 const { handlePhotoUpload } = require('../middleware/uploadStaffPhoto');
 
 // =====================================================================
@@ -121,5 +122,8 @@ router.get('/approvers', authenticate, authorize(...SELF), selfLeave.approvers);
 router.get('/photo', authenticate, authorize(...SELF), staffPhoto.selfGet);
 router.put('/photo', authenticate, authorize(...SELF), handlePhotoUpload, staffPhoto.selfPut);
 router.delete('/photo', authenticate, authorize(...SELF), staffPhoto.selfDelete);
+
+// ---- My shifts (HR Tier 3 Phase 4, RO-11): published only, next 14 days ----
+router.get('/roster', authenticate, authorize(...SELF), hrRoster.mine);
 
 module.exports = router;

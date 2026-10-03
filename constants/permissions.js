@@ -296,6 +296,14 @@ const PERMISSIONS = {
   HR_ONBOARDING:           'hr.onboarding',
   HR_ONBOARDING_TEMPLATES: 'hr.onboarding.templates',
 
+  // HR Tier 3 Phase 4 (3 Oct 2026, T3-8 / RO-2): the shift roster.
+  //   HR_ROSTER         build, copy and publish a department's week; a
+  //                     published shift becomes that person's expected hours
+  //                     for the day (T3-5 a). Department-scopable.
+  //   HR_ROSTER_SHIFTS  the clinic-wide list of shift types (clinic-wide).
+  HR_ROSTER:        'hr.roster',
+  HR_ROSTER_SHIFTS: 'hr.roster.shifts',
+
   // The right to change OTHER people's HR Suite capabilities, and only those
   // (HR_DELEGABLE). Like permissions.grant it is checked by a bespoke gate
   // (canGrantHrPermissions), never authorize(), so admin.access can never
@@ -579,6 +587,8 @@ const ADMIN_ACCESS_COVERS = [
   PERMISSIONS.HR_REPORTS,
   PERMISSIONS.HR_ONBOARDING,
   PERMISSIONS.HR_ONBOARDING_TEMPLATES,
+  PERMISSIONS.HR_ROSTER,
+  PERMISSIONS.HR_ROSTER_SHIFTS,
   PERMISSIONS.INPATIENT_ACCESS,
   PERMISSIONS.INPATIENT_WRITE,
   PERMISSIONS.LAB_VIEW,
@@ -893,6 +903,17 @@ const PERMISSION_GROUPS = [
         description: 'Setting a person\'s usual week and dated exceptions, which decide when '
           + 'they are expected in.',
         access: PERMISSIONS.HR_WORKHOURS, accessLabel: 'Can set working hours',
+        roleDefault: 'Administrators' },
+      { key: 'hr-roster', name: 'Shift roster', appliesIn: 'HR Suite → Roster',
+        description: 'Building a department\'s week of shifts for nurses, lab and front office, '
+          + 'copying last week and publishing it. A published shift becomes that person\'s '
+          + 'expected hours for the day, so attendance and stars follow the roster.',
+        access: PERMISSIONS.HR_ROSTER, accessLabel: 'Can build and publish the roster',
+        roleDefault: 'Administrators' },
+      { key: 'hr-roster-shifts', name: 'Shift types', appliesIn: 'HR Suite → Roster → Shift types',
+        description: 'The clinic\'s list of shifts the roster picks from — name, start, end and '
+          + 'colour. A shift that ends before it starts runs past midnight.',
+        access: PERMISSIONS.HR_ROSTER_SHIFTS, accessLabel: 'Can define shift types',
         roleDefault: 'Administrators' },
       { key: 'hr-tags', name: 'Entrance tags', appliesIn: 'HR Suite → Settings → Tags',
         description: 'Naming, testing and retiring the entrance tags. Registering a new tag key '
@@ -1455,7 +1476,7 @@ const canEditPermissions = (user) => canGrantPermissions(user) || canGrantHrPerm
 // The HR controls that act on PEOPLE, and so can be limited to departments on
 // the Permissions tab (All staff · their own department · named departments).
 // Everything else in the HR groups changes a clinic-wide rule (policy, holidays,
-// settings, lists, tags, onboarding) or is chosen per request (leave.approve)
+// settings, lists, tags, onboarding templates, shift types) or is chosen per request (leave.approve)
 // or is one's own (hr.self, hr.checkin) — none of those can be narrowed.
 // A control with no scope rows is "All staff". Resolved by utils/hrScope;
 // stored by services/hrScope (PermissionScopes). permissionVocabulary.test
@@ -1481,6 +1502,7 @@ const SCOPABLE = [
   PERMISSIONS.HR_GRANT,
   PERMISSIONS.HR_REPORTS,
   PERMISSIONS.HR_ONBOARDING,
+  PERMISSIONS.HR_ROSTER,
 ];
 
 // Roles a preset can be defined for — the same set that may hold permissions.

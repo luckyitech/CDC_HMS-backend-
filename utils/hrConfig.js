@@ -53,6 +53,9 @@ const ALERT_EVENTS = [
   'change_request_new',
   // HR Tier 2: the cover person is asked; the applicant hears their answer.
   'leave_cover_request', 'leave_cover_answered',
+  // HR Tier 3 Phase 4 (RO-10): a person's week is published; one of their
+  // published shifts changed. No detail beyond the week or day.
+  'roster_published', 'roster_changed',
 ];
 const ALERT_CHANNELS = ['bell', 'email', 'whatsapp'];
 const DEFAULT_ALERTS = Object.fromEntries(ALERT_EVENTS.map((e) => [e, { bell: true, email: true, whatsapp: false }]));

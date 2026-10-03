@@ -8,6 +8,7 @@
 // =====================================================================
 
 const { CLINIC_TZ } = require('./clinicTime');
+const { spanMinutes } = require('./workHours');
 
 const MINUTE = 60 * 1000;
 
@@ -239,9 +240,8 @@ const monthSummary = ({ month, days, rows, today }) => {
 
   for (const day of monthDays) {
     if (day.date <= today && day.expectedStart && day.expectedEnd && !day.onLeave) {
-      const [sh, sm] = day.expectedStart.split(':').map(Number);
-      const [eh, em] = day.expectedEnd.split(':').map(Number);
-      expectedMinutes += Math.max(0, (eh * 60 + em) - (sh * 60 + sm));
+      // A rostered night shift ends the next morning (HR Tier 3 Phase 4).
+      expectedMinutes += spanMinutes(day.expectedStart, day.expectedEnd);
     }
     const sessions = byDay.get(day.date);
     if (!sessions) continue;

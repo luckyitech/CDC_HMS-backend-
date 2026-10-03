@@ -18,6 +18,7 @@ const { parseJsonColumn } = require('../utils/jsonColumn');
 
 const { TAKEN_STATUSES, employmentFlips } = require('../utils/leaveWorkflow');
 const { runExpiryReminders } = require('./expiryReminders');
+const { OVERNIGHT_GRACE_HOURS } = require('./hrAttendanceService');
 
 const { StaffAttendance, StaffLeave, StaffProfile } = db;
 
@@ -58,9 +59,21 @@ const runLeaveStatusSweep = async (now = new Date()) => {
 const INTERVAL_MS = 5 * 60 * 1000;
 let timer = null;
 
+// A session whose expected check-out is TODAY (a rostered night shift, HR
+// Tier 3 Phase 4) is not stale at midnight: it waits until OVERNIGHT_GRACE_HOURS
+// after the shift's end. Every other open session from an earlier day is.
+const isStale = (row, today, now = new Date()) => {
+  if (!(row.clinicDate < today)) return false;
+  if (!row.expectedOutAt) return true;
+  const out = new Date(row.expectedOutAt);
+  if (clinicToday(out) < today) return true;
+  return now.getTime() > out.getTime() + OVERNIGHT_GRACE_HOURS * 3600 * 1000;
+};
+
 const runSweep = async (now = new Date()) => {
   const today = clinicToday(now);
-  const stale = await StaffAttendance.findAll({ where: { status: 'open', clinicDate: { [Op.lt]: today } } });
+  const stale = (await StaffAttendance.findAll({ where: { status: 'open', clinicDate: { [Op.lt]: today } } }))
+    .filter((row) => isStale(row, today, now));
   for (const row of stale) {
     const diag = parseJsonColumn(row.diagnostics) || {};
     await row.update({ status: 'missed_checkout', diagnostics: { ...diag, sweptAt: now.toISOString() } });
@@ -88,4 +101,4 @@ const startScheduler = () => {
 
 const stopScheduler = () => { if (timer) { clearInterval(timer); timer = null; } };
 
-module.exports = { runSweep, runLeaveStatusSweep, runExpiryReminders, startScheduler, stopScheduler };
+module.exports = { isStale, runSweep, runLeaveStatusSweep, runExpiryReminders, startScheduler, stopScheduler };

@@ -8,7 +8,8 @@
 //   4. nothing — no expected hours, no punctuality, no stars
 //
 // A row with isOff → 'off'. A non-off row with no times → its times come from
-// the default (only its grace/override status is its own).
+// the default (only its grace/override status is its own). A dated row may run
+// past midnight (end before start — a rostered night shift, HR Tier 3 P4).
 //
 // The database read that gathers a person's rows lives in the controller
 // (hrAttendanceController.expectedFor); this file only decides.
@@ -56,6 +57,22 @@ const atClinicTime = (clinicDate, hhmm) => {
   return new Date(clinicMidnight(clinicDate).getTime() + (h * 60 + m) * 60 * 1000);
 };
 
+/** 'YYYY-MM-DD' → the next calendar date. */
+const nextDate = (clinicDate) => {
+  const [y, m, d] = String(clinicDate).split('-').map(Number);
+  return new Date(Date.UTC(y, m - 1, d + 1)).toISOString().slice(0, 10);
+};
+
+/** Minutes from start to end of 'HH:MM' times; an end at or before the start runs past midnight. */
+const spanMinutes = (start, end) => {
+  if (!HHMM.test(start || '') || !HHMM.test(end || '')) return 0;
+  const [sh, sm] = start.split(':').map(Number);
+  const [eh, em] = end.split(':').map(Number);
+  const s = sh * 60 + sm;
+  const e = eh * 60 + em;
+  return e > s ? e - s : e + 1440 - s;
+};
+
 /** TIME columns come back as 'HH:MM:SS'; normalise to 'HH:MM'. */
 const toHHMM = (t) => (t ? String(t).slice(0, 5) : null);
 
@@ -101,12 +118,17 @@ const resolveExpected = ({ rows = [], clinicDate, defaults, graceDefault = 0, ho
     if (def === 'off') return { ...none('off'), grace };
     start = def.start; end = def.end;
   }
-  if (!HHMM.test(start) || !HHMM.test(end) || start >= end) return none(source);
+  if (!HHMM.test(start) || !HHMM.test(end) || start === end) return none(source);
+  // An overnight shift (HR Tier 3 Phase 4, roster): a DATED row whose end is
+  // earlier than its start ends on the next clinic date (e.g. Night 19:00–07:00).
+  // Weekly rows and the clinic default never run past midnight.
+  if (start > end && source !== 'date') return none(source);
 
   return {
     startAt: atClinicTime(clinicDate, start),
-    endAt: atClinicTime(clinicDate, end),
+    endAt: atClinicTime(start > end ? nextDate(clinicDate) : clinicDate, end),
     start, end, grace, source,
+    ...(start > end ? { overnight: true } : {}),
   };
 };
 
@@ -129,6 +151,8 @@ module.exports = {
   weekdayOf,
   parseHoursDefault,
   atClinicTime,
+  nextDate,
+  spanMinutes,
   toHHMM,
   resolveExpected,
   datesOfMonth,

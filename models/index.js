@@ -29,6 +29,9 @@ const PermissionScope     = require('./PermissionScope');
 const OnboardingTemplateItem = require('./OnboardingTemplateItem');
 const OnboardingChecklist = require('./OnboardingChecklist');
 const OnboardingItem      = require('./OnboardingItem');
+const RosterShiftType     = require('./RosterShiftType');
+const RosterWeek          = require('./RosterWeek');
+const RosterShift         = require('./RosterShift');
 const StaffDocument       = require('./StaffDocument');
 const Patient             = require('./Patient');
 const PatientVital        = require('./PatientVital');
@@ -198,6 +201,12 @@ OnboardingChecklist.belongsTo(User);
 OnboardingChecklist.hasMany(OnboardingItem, { as: 'items', foreignKey: 'checklistId' });
 OnboardingItem.belongsTo(OnboardingChecklist, { foreignKey: 'checklistId' });
 OnboardingItem.belongsTo(User, { as: 'doneBy', foreignKey: 'doneById' });
+
+// HR Tier 3 Phase 4 — shift roster (migration 20260928000013).
+User.hasMany(RosterShift);
+RosterShift.belongsTo(User);
+RosterShift.belongsTo(RosterShiftType, { as: 'shiftType', foreignKey: 'shiftTypeId' });
+RosterWeek.belongsTo(Department, { foreignKey: 'departmentId' });
 
 User.hasMany(CpdActivity);
 CpdActivity.belongsTo(User);
@@ -659,6 +668,9 @@ const db = {
   OnboardingTemplateItem,
   OnboardingChecklist,
   OnboardingItem,
+  RosterShiftType,
+  RosterWeek,
+  RosterShift,
   StaffDocument,
   Patient,
   PatientVital,

@@ -15,6 +15,7 @@ const cpd = require('../controllers/cpdController');
 const hrLists = require('../controllers/hrListsController');
 const hrReports = require('../controllers/hrReportsController');
 const hrOnboarding = require('../controllers/hrOnboardingController');
+const hrRoster = require('../controllers/hrRosterController');
 
 // =====================================================================
 // HR Suite (B21) — /api/hr
@@ -59,6 +60,11 @@ const REPORTS = ['admin', 'hr.reports'];
 const ONBOARDING = ['admin', 'hr.onboarding'];
 const ONBOARDING_TEMPLATES = ['admin', 'hr.onboarding.templates'];
 const ONBOARDING_READ = ['admin', 'hr.onboarding', 'hr.onboarding.templates'];
+// HR Tier 3 Phase 4 (T3-8, RO-2): the shift roster (department-scoped) and the
+// clinic-wide shift types. Reading the types is for either.
+const ROSTER = ['admin', 'hr.roster'];
+const ROSTER_SHIFTS = ['admin', 'hr.roster.shifts'];
+const ROSTER_READ = ['admin', 'hr.roster', 'hr.roster.shifts'];
 
 // A tap is one request per person per event; 60 a minute per IP is generous
 // for a whole clinic behind one NAT, and caps a scripted flood.
@@ -189,5 +195,28 @@ router.get('/onboarding/count', authenticate, authorize(...ONBOARDING), hrOnboar
 router.get('/onboarding/templates', authenticate, authorize(...ONBOARDING_READ), hrOnboarding.templates);
 router.post('/onboarding/templates', authenticate, authorize(...ONBOARDING_TEMPLATES), hrOnboarding.createTemplateItem);
 router.patch('/onboarding/templates/:id', authenticate, authorize(...ONBOARDING_TEMPLATES), [param('id').isInt({ min: 1 }), validate], hrOnboarding.updateTemplateItem);
+
+// ---- Shift roster (HR Tier 3 Phase 4) ----
+const WEEK = (src) => [
+  src('department').optional({ nullable: true }).custom((v) => v === 'none' || /^\d+$/.test(String(v))).withMessage('Unknown department'),
+  src('weekStart').isISO8601({ strict: true }).withMessage('Choose a week'),
+];
+router.get('/roster/departments', authenticate, authorize(...ROSTER), hrRoster.departments);
+router.get('/roster/week', authenticate, authorize(...ROSTER), [...WEEK(query), validate], hrRoster.week);
+router.put('/roster/week/cell', authenticate, authorize(...ROSTER), [
+  ...WEEK(body),
+  body('userId').isInt({ min: 1 }).withMessage('Choose a person'),
+  body('date').isISO8601({ strict: true }).withMessage('Choose a day'),
+  body('shiftTypeId').optional({ nullable: true }).isInt({ min: 1 }),
+  body('off').optional().isBoolean(),
+  body('clear').optional().isBoolean(),
+  validate,
+], hrRoster.setCell);
+router.post('/roster/week/copy', authenticate, authorize(...ROSTER), [...WEEK(body), validate], hrRoster.copy);
+router.patch('/roster/week', authenticate, authorize(...ROSTER), [...WEEK(body), body('minCover').isInt({ min: 0, max: 50 }).withMessage('Minimum cover must be 0–50 people'), validate], hrRoster.updateWeek);
+router.post('/roster/week/publish', authenticate, authorize(...ROSTER), [...WEEK(body), validate], hrRoster.publish);
+router.get('/roster/shift-types', authenticate, authorize(...ROSTER_READ), hrRoster.shiftTypes);
+router.post('/roster/shift-types', authenticate, authorize(...ROSTER_SHIFTS), hrRoster.createShiftType);
+router.patch('/roster/shift-types/:id', authenticate, authorize(...ROSTER_SHIFTS), [param('id').isInt({ min: 1 }), validate], hrRoster.updateShiftType);
 
 module.exports = router;
