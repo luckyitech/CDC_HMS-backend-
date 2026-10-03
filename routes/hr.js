@@ -13,6 +13,7 @@ const hrSettings = require('../controllers/hrSettingsController');
 const hrProfile = require('../controllers/hrProfileController');
 const cpd = require('../controllers/cpdController');
 const hrLists = require('../controllers/hrListsController');
+const hrReports = require('../controllers/hrReportsController');
 
 // =====================================================================
 // HR Suite (B21) — /api/hr
@@ -49,6 +50,9 @@ const CPD_VERIFY = ['admin', 'cpd.verify'];
 // picker — department names are not secret); changing them is hr.lists.
 const LISTS_READ = ['doctor', 'staff', 'lab', 'nurse', 'admin', 'hr.lists'];
 const LISTS      = ['admin', 'hr.lists'];
+// HR Tier 3 Phase 2 (T3-3, R-1): the Reports page and its downloads. Department
+// scope applies (services/hrReports counts only the people in it).
+const REPORTS = ['admin', 'hr.reports'];
 
 // A tap is one request per person per event; 60 a minute per IP is generous
 // for a whole clinic behind one NAT, and caps a scripted flood.
@@ -161,5 +165,16 @@ router.post('/lists/:list', authenticate, authorize(...LISTS), [
   LIST, body('name').isString().trim().isLength({ min: 2, max: 120 }).withMessage('Give it a name'), validate,
 ], hrLists.create);
 router.patch('/lists/:list/:id', authenticate, authorize(...LISTS), [LIST, param('id').isInt({ min: 1 }), validate], hrLists.update);
+
+// ---- HR reports (HR Tier 3 Phase 2) ----
+const REPORT_QUERY = [
+  query('year').optional().isInt({ min: 2020, max: 2100 }),
+  query('month').optional().matches(/^\d{4}-\d{2}$/).withMessage('month must be YYYY-MM'),
+  query('window').optional().isInt({ min: 1, max: 3650 }),
+];
+router.get('/reports', authenticate, authorize(...REPORTS), [...REPORT_QUERY, validate], hrReports.page);
+router.get('/reports/:report/download', authenticate, authorize(...REPORTS), [
+  param('report').isIn(hrReports.REPORTS).withMessage('Unknown report'), ...REPORT_QUERY, validate,
+], hrReports.download);
 
 module.exports = router;

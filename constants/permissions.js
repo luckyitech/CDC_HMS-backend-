@@ -282,6 +282,12 @@ const PERMISSIONS = {
   // Clinic-wide (never department-scoped); covered by admin.access.
   HR_LISTS: 'hr.lists',
 
+  // HR Tier 3 Phase 2 (2 Oct 2026, T3-3 / R-1): HR Suite → Reports — headcount
+  // and movement, leave owed, expiries, CPD and punctuality, each downloadable
+  // (every download logged). Department-scopable: a limited holder's figures
+  // count only their people. Sick leave appears only as one total (R-3).
+  HR_REPORTS: 'hr.reports',
+
   // The right to change OTHER people's HR Suite capabilities, and only those
   // (HR_DELEGABLE). Like permissions.grant it is checked by a bespoke gate
   // (canGrantHrPermissions), never authorize(), so admin.access can never
@@ -562,6 +568,7 @@ const ADMIN_ACCESS_COVERS = [
   PERMISSIONS.STAFF_STATUS,
   PERMISSIONS.STAFF_DOCUMENTS,
   PERMISSIONS.HR_LISTS,
+  PERMISSIONS.HR_REPORTS,
   PERMISSIONS.INPATIENT_ACCESS,
   PERMISSIONS.INPATIENT_WRITE,
   PERMISSIONS.LAB_VIEW,
@@ -950,7 +957,7 @@ const PERMISSION_GROUPS = [
     key: 'hr-admin',
     hr: true,
     name: 'HR Suite · Administration',
-    description: 'Clinic-wide HR rules, and handing out HR controls.',
+    description: 'Clinic-wide HR rules, HR reports, and handing out HR controls.',
     areas: [
       { key: 'hr-settings', name: 'HR Suite settings', appliesIn: 'HR Suite → Settings',
         description: 'Check-in rules, registering entrance tag keys, CPD targets and which '
@@ -959,6 +966,12 @@ const PERMISSION_GROUPS = [
         roleDefault: 'Administrators',
         warning: 'Entrance tag keys are secrets: someone holding a key can make a tag that '
           + 'checks anyone in. Grant this only to whoever runs the HR Suite.' },
+      { key: 'hr-reports', name: 'HR reports', appliesIn: 'HR Suite → Reports',
+        description: 'Headcount and joiners/leavers, annual leave owed, licences and documents '
+          + 'expiring, CPD progress and punctuality — on screen and as spreadsheets. Every '
+          + 'download is logged. Sick leave appears only as one total of days, never by person.',
+        access: PERMISSIONS.HR_REPORTS, accessLabel: 'Can see and download HR reports',
+        roleDefault: 'Administrators' },
       { key: 'hr-grant', name: 'Grant HR permissions', appliesIn: 'Staff file → Permissions',
         description: 'Ticking and unticking the HR Suite controls on colleagues\' files — only '
           + 'the ones they hold themselves, never on their own file, and never confidential '
@@ -1445,6 +1458,7 @@ const SCOPABLE = [
   PERMISSIONS.CPD_VERIFY,
   PERMISSIONS.HR_EXPIRY_ALERTS,
   PERMISSIONS.HR_GRANT,
+  PERMISSIONS.HR_REPORTS,
 ];
 
 // Roles a preset can be defined for — the same set that may hold permissions.

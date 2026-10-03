@@ -99,6 +99,24 @@ const monthDataFor = async (userId, month, cfg, now = new Date()) => {
   return { ...current, streakNoRed: streak, previousMonth: { month: prev, stars: previous.stars, table: previous.table } };
 };
 
+/**
+ * One month for one person — the same calendar, stars and table as "My stars"
+ * (monthSummary), without the previous month or the streak. Used by the HR
+ * reports (Tier 3 Phase 2) so punctuality there is counted exactly as the
+ * person sees it. `rows` (their work-hours rows) may be passed in.
+ */
+const monthSummaryFor = async (userId, month, cfg, { now = new Date(), rows } = {}) => {
+  const today = clinicToday(now);
+  const hours = rows || await workHoursRowsFor(userId);
+  const days = await daysForMonth(userId, month, cfg, hours);
+  const dates = datesOfMonth(month);
+  const sessions = (await StaffAttendance.findAll({
+    where: { UserId: userId, clinicDate: { [Op.between]: [dates[0], dates[dates.length - 1]] }, status: { [Op.in]: ['open', 'closed', 'missed_checkout'] } },
+    order: [['checkInAt', 'ASC']],
+  })).map(plain);
+  return monthSummary({ month, days, rows: sessions, today });
+};
+
 /** The most recent countable session today (any status but refused/voided). */
 const lastSessionToday = async (userId, clinicDate, transaction) =>
   StaffAttendance.findOne({
@@ -200,6 +218,7 @@ module.exports = {
   leaveDatesFor,
   daysForMonth,
   monthDataFor,
+  monthSummaryFor,
   lastSessionToday,
   hasEarlierSessionToday,
   internalUsers,
