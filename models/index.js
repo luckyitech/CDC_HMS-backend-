@@ -26,6 +26,9 @@ const StaffRequiredApprover = require('./StaffRequiredApprover');
 const Department          = require('./Department');
 const Position            = require('./Position');
 const PermissionScope     = require('./PermissionScope');
+const OnboardingTemplateItem = require('./OnboardingTemplateItem');
+const OnboardingChecklist = require('./OnboardingChecklist');
+const OnboardingItem      = require('./OnboardingItem');
 const StaffDocument       = require('./StaffDocument');
 const Patient             = require('./Patient');
 const PatientVital        = require('./PatientVital');
@@ -188,6 +191,13 @@ StaffProfile.belongsTo(Position, { as: 'positionEntry', foreignKey: 'positionId'
 User.hasMany(PermissionScope, { as: 'permissionScopes' });
 PermissionScope.belongsTo(User);
 PermissionScope.belongsTo(Department, { foreignKey: 'departmentId' });
+
+// HR Tier 3 Phase 3 — onboarding checklists (migration 20260928000012).
+User.hasMany(OnboardingChecklist);
+OnboardingChecklist.belongsTo(User);
+OnboardingChecklist.hasMany(OnboardingItem, { as: 'items', foreignKey: 'checklistId' });
+OnboardingItem.belongsTo(OnboardingChecklist, { foreignKey: 'checklistId' });
+OnboardingItem.belongsTo(User, { as: 'doneBy', foreignKey: 'doneById' });
 
 User.hasMany(CpdActivity);
 CpdActivity.belongsTo(User);
@@ -646,6 +656,9 @@ const db = {
   Department,
   Position,
   PermissionScope,
+  OnboardingTemplateItem,
+  OnboardingChecklist,
+  OnboardingItem,
   StaffDocument,
   Patient,
   PatientVital,

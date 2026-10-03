@@ -16,6 +16,7 @@ const leaveController = require('../controllers/leaveController');
 const staffDocumentController = require('../controllers/staffDocumentController');
 const cpdController = require('../controllers/cpdController');
 const requiredApproverController = require('../controllers/requiredApproverController');
+const hrOnboarding = require('../controllers/hrOnboardingController');
 
 const EMPLOYMENT_STATUSES = ['Active', 'On Leave', 'Suspended', 'Resigned', 'Terminated'];
 const EMPLOYMENT_TYPES    = ['Full-time', 'Part-time', 'Contract', 'Consultant', 'Locum', 'Temporary'];
@@ -34,6 +35,8 @@ const STAFF_EDIT   = ['admin', 'staff.edit'];
 const STAFF_STATUS = ['admin', 'staff.status'];
 const STAFF_DOCS   = ['admin', 'staff.documents'];
 const EXPIRY_LIST  = ['admin', 'staff.view', 'hr.expiry.alerts'];
+// HR Tier 3 Phase 3: a person's onboarding checklist (department-scoped).
+const ONBOARDING   = ['admin', 'hr.onboarding'];
 // The permission catalog: whoever opens a staff file sees its Permissions tab
 // (read-only), and both kinds of grantor need it to edit. Not an authorize()
 // list because hr.grant must never be satisfiable by admin.access.
@@ -210,6 +213,14 @@ router.put('/:employeeId/photo', authenticate, authorize(...STAFF_EDIT), findSta
 router.delete('/:employeeId/photo', authenticate, authorize(...STAFF_EDIT), findStaff, inStaffScope('staff.edit'), staffPhotoController.staffDelete);
 
 // CPD, read-only, for the staff file's Credentials tab (B27 debt fix).
+// ---- Onboarding checklist (HR Tier 3 Phase 3) ----
+const onb = [authenticate, authorize(...ONBOARDING), findStaff, inStaffScope('hr.onboarding')];
+router.get('/:employeeId/onboarding', ...onb, hrOnboarding.staffGet);
+router.post('/:employeeId/onboarding', ...onb, hrOnboarding.staffStart);
+router.patch('/:employeeId/onboarding', ...onb, [body('action').isIn(['close', 'reopen']).withMessage('Choose close or reopen'), validate], hrOnboarding.staffStatus);
+router.post('/:employeeId/onboarding/items', ...onb, hrOnboarding.staffAddItem);
+router.patch('/:employeeId/onboarding/items/:itemId', ...onb, [param('itemId').isInt({ min: 1 }), validate], hrOnboarding.staffItem);
+
 router.get('/:employeeId/cpd', authenticate, findStaff, adminOrSelf, cpdController.staffList);
 
 router.get('/:employeeId/documents', authenticate, findStaff, adminOrSelf, staffDocumentController.list);

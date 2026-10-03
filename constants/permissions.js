@@ -288,6 +288,14 @@ const PERMISSIONS = {
   // count only their people. Sick leave appears only as one total (R-3).
   HR_REPORTS: 'hr.reports',
 
+  // HR Tier 3 Phase 3 (3 Oct 2026, T3-4 / O-6): onboarding checklists.
+  //   HR_ONBOARDING           see, tick, start and close people's checklists
+  //                           (department-scopable).
+  //   HR_ONBOARDING_TEMPLATES edit the checklist template for each role
+  //                           (clinic-wide).
+  HR_ONBOARDING:           'hr.onboarding',
+  HR_ONBOARDING_TEMPLATES: 'hr.onboarding.templates',
+
   // The right to change OTHER people's HR Suite capabilities, and only those
   // (HR_DELEGABLE). Like permissions.grant it is checked by a bespoke gate
   // (canGrantHrPermissions), never authorize(), so admin.access can never
@@ -569,6 +577,8 @@ const ADMIN_ACCESS_COVERS = [
   PERMISSIONS.STAFF_DOCUMENTS,
   PERMISSIONS.HR_LISTS,
   PERMISSIONS.HR_REPORTS,
+  PERMISSIONS.HR_ONBOARDING,
+  PERMISSIONS.HR_ONBOARDING_TEMPLATES,
   PERMISSIONS.INPATIENT_ACCESS,
   PERMISSIONS.INPATIENT_WRITE,
   PERMISSIONS.LAB_VIEW,
@@ -844,6 +854,17 @@ const PERMISSION_GROUPS = [
         description: 'The clinic\'s lists of departments and positions that staff files pick '
           + 'from, and the one-off screen that tidies what was typed before the lists existed.',
         access: PERMISSIONS.HR_LISTS, accessLabel: 'Can manage departments and positions',
+        roleDefault: 'Administrators' },
+      { key: 'hr-onboarding', name: 'Onboarding checklists', appliesIn: 'HR Suite → Onboarding, staff files',
+        description: 'Seeing a new colleague\'s onboarding checklist, ticking the items HR does by '
+          + 'hand (orientation, badge…), adding a one-off item, starting a checklist for someone '
+          + 'already on the staff, and closing one early.',
+        access: PERMISSIONS.HR_ONBOARDING, accessLabel: 'Can run onboarding checklists',
+        roleDefault: 'Administrators' },
+      { key: 'hr-onboarding-templates', name: 'Onboarding templates', appliesIn: 'HR Suite → Onboarding → Templates',
+        description: 'The checklist each role starts with: its items, which tick themselves from '
+          + 'the staff file, and how many days each is due after the start date.',
+        access: PERMISSIONS.HR_ONBOARDING_TEMPLATES, accessLabel: 'Can edit onboarding templates',
         roleDefault: 'Administrators' },
       { key: 'hr-profile-approve', name: 'Profile change requests', appliesIn: 'HR Suite → Profile requests',
         description: 'Decide what colleagues ask to change on their own record — name, National '
@@ -1459,6 +1480,7 @@ const SCOPABLE = [
   PERMISSIONS.HR_EXPIRY_ALERTS,
   PERMISSIONS.HR_GRANT,
   PERMISSIONS.HR_REPORTS,
+  PERMISSIONS.HR_ONBOARDING,
 ];
 
 // Roles a preset can be defined for — the same set that may hold permissions.

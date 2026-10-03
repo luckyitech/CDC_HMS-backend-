@@ -14,6 +14,7 @@ const hrProfile = require('../controllers/hrProfileController');
 const cpd = require('../controllers/cpdController');
 const hrLists = require('../controllers/hrListsController');
 const hrReports = require('../controllers/hrReportsController');
+const hrOnboarding = require('../controllers/hrOnboardingController');
 
 // =====================================================================
 // HR Suite (B21) — /api/hr
@@ -53,6 +54,11 @@ const LISTS      = ['admin', 'hr.lists'];
 // HR Tier 3 Phase 2 (T3-3, R-1): the Reports page and its downloads. Department
 // scope applies (services/hrReports counts only the people in it).
 const REPORTS = ['admin', 'hr.reports'];
+// HR Tier 3 Phase 3 (T3-4, O-6): onboarding checklists (scoped) and the
+// per-role templates (clinic-wide). Reading the templates is for either.
+const ONBOARDING = ['admin', 'hr.onboarding'];
+const ONBOARDING_TEMPLATES = ['admin', 'hr.onboarding.templates'];
+const ONBOARDING_READ = ['admin', 'hr.onboarding', 'hr.onboarding.templates'];
 
 // A tap is one request per person per event; 60 a minute per IP is generous
 // for a whole clinic behind one NAT, and caps a scripted flood.
@@ -176,5 +182,12 @@ router.get('/reports', authenticate, authorize(...REPORTS), [...REPORT_QUERY, va
 router.get('/reports/:report/download', authenticate, authorize(...REPORTS), [
   param('report').isIn(hrReports.REPORTS).withMessage('Unknown report'), ...REPORT_QUERY, validate,
 ], hrReports.download);
+
+// ---- Onboarding checklists (HR Tier 3 Phase 3) ----
+router.get('/onboarding', authenticate, authorize(...ONBOARDING), [query('status').optional().isIn(['open', 'all']), validate], hrOnboarding.list);
+router.get('/onboarding/count', authenticate, authorize(...ONBOARDING), hrOnboarding.count);
+router.get('/onboarding/templates', authenticate, authorize(...ONBOARDING_READ), hrOnboarding.templates);
+router.post('/onboarding/templates', authenticate, authorize(...ONBOARDING_TEMPLATES), hrOnboarding.createTemplateItem);
+router.patch('/onboarding/templates/:id', authenticate, authorize(...ONBOARDING_TEMPLATES), [param('id').isInt({ min: 1 }), validate], hrOnboarding.updateTemplateItem);
 
 module.exports = router;

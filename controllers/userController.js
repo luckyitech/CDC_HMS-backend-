@@ -1,8 +1,9 @@
 const { success, error } = require('../utils/response');
 const {
   PERMISSIONS, PERMISSIBLE_ROLES, STAFF_TYPES, canGrantPermissions, sanitizePermissions, hasPermission, toList,
-  reconcilePermissionLists,
+  reconcilePermissionLists, canGrantHrPermissions, SCOPABLE,
 } = require('../constants/permissions');
+const { hrGrantRefusal } = require('../utils/hrGrant');
 const db = require('../models');
 const sequelize = require('../config/database');
 const bcrypt = require('bcryptjs');
@@ -209,14 +210,35 @@ const resolveAccessAtCreation = ({ body, role, caller, preset }) => {
     && wantType === base.staffType
     && sameSet(granted, presetBase.granted)
     && sameSet(denied, presetBase.denied);
+  // HR Tier 3 Phase 3 (O-1, Emu 3 Oct 2026): new staff start with NO
+  // permissions — no preset, clinical, nothing ticked or withdrawn. That is the
+  // same as sending no access section at all, so anyone who may onboard may do
+  // it. (Before this, the wizard always sent a staff type, and a blank start by
+  // a non-key-holder was refused "without a preset".)
+  const isBlank = !preset && wantType === STAFF_TYPES.CLINICAL && !granted.length && !denied.length;
 
-  if (!isPresetUnchanged && !canGrantPermissions(caller)) {
-    return {
-      code: 403,
-      message: preset
-        ? 'Only a permissions administrator can change access from the preset'
-        : 'Only a permissions administrator can set access without a preset',
-    };
+  // O-1: a "Grant HR permissions" holder may tick, while onboarding, the HR
+  // Suite controls they hold themselves — the same rule as on the Permissions
+  // tab (utils/hrGrant), measured against the preset (or the blank start).
+  let viaHrGrant = false;
+  if (!isPresetUnchanged && !isBlank && !canGrantPermissions(caller)) {
+    if (canGrantHrPermissions(caller)) {
+      const refusal = hrGrantRefusal({
+        caller,
+        target: { id: null, role, permissions: [], deniedPermissions: [] },
+        before: { permissions: presetBase.granted, deniedPermissions: presetBase.denied, staffType: base.staffType },
+        after: { permissions: granted, deniedPermissions: denied, staffType: wantType },
+      });
+      if (refusal) return refusal;
+      viaHrGrant = true;
+    } else {
+      return {
+        code: 403,
+        message: preset
+          ? 'Only a permissions administrator can change access from the preset'
+          : 'Only a permissions administrator can set access without a preset',
+      };
+    }
   }
   if (granted.includes(PERMISSIONS.PERMISSIONS_GRANT) && !canGrantPermissions(caller)) {
     return { message: 'Only a permissions administrator can grant the right to manage permissions', code: 403 };
@@ -230,6 +252,10 @@ const resolveAccessAtCreation = ({ body, role, caller, preset }) => {
       conflicting,
       presetName: preset ? preset.name : null,
       applied: !!preset,
+      // Set when an HR grantor changed access from the preset / blank start:
+      // createStaffAccount then applies their department reach (L-8).
+      viaHrGrant,
+      hrGiven: viaHrGrant ? granted.filter((p) => !presetBase.granted.includes(p)) : [],
       // HR Tier 3 Phase 1: the preset's "own department" limits, for the
       // controls the new person actually ends up with.
       scopes: preset ? cleanPresetScopes(preset.scopes, granted) : {},
@@ -277,8 +303,26 @@ const createStaffAccount = async (req, res, { role, profileFields: rawProfileFie
     // written so a refused grant leaves no half-created account behind.
     const preset = presetId ? await PermissionPreset.findByPk(presetId) : null;
     const resolved = resolveAccessAtCreation({ body: req.body, role, caller: req.user, preset });
-    if (resolved.message) return error(res, resolved.message, resolved.code);
+    if (resolved.message) return error(res, resolved.message, resolved.code, resolved.extra);
     const { access } = resolved;
+
+    // HR Tier 3 Phase 3 (O-1) with Phase 1's L-8: an HR grantor who is limited
+    // to departments onboards with HR controls only into a department they
+    // reach, and every scopable control they give starts at their own reach.
+    if (access.viaHrGrant) {
+      const hrScope = require('../services/hrScope');
+      const { inScope } = require('../utils/hrScope');
+      const grantScope = await hrScope.scopeOf(req.user, PERMISSIONS.HR_GRANT);
+      if (!inScope(grantScope, listFields.departmentId ?? null)) {
+        return error(res, 'You can only give HR permissions to someone in a department you look after — pick one, or leave the permissions blank', 403, { code: 'NOT_WITHIN_SCOPE' });
+      }
+      const scopes = { ...(access.scopes || {}) };
+      for (const cap of access.hrGiven.filter((c) => SCOPABLE.includes(c))) {
+        const mine = await hrScope.scopeOf(req.user, cap);
+        if (!mine.all) scopes[cap] = { kind: 'departments', departmentIds: [...mine.departmentIds].sort((a, b) => a - b) };
+      }
+      access.scopes = scopes;
+    }
 
     const tempPassword   = providedPassword || generateTempPassword();
     const hashedPassword = await bcrypt.hash(tempPassword, 10);
@@ -340,6 +384,12 @@ const createStaffAccount = async (req, res, { role, profileFields: rawProfileFie
       await PermissionPreset.increment('appliedCount', { by: 1, where: { id: preset.id }, transaction });
     }
 
+    // HR Tier 3 Phase 3 (O-3): the role's onboarding checklist starts with the
+    // account — a copy of the template as it is now. No template, no checklist.
+    const checklist = await require('../services/onboarding').startFor({
+      userId: user.id, role, startDate: profileFields.startDate, actorId: req.user.id, transaction, quietIfEmpty: true,
+    });
+
     await transaction.commit();
 
     if (access.conflicting?.length) {
@@ -357,6 +407,7 @@ const createStaffAccount = async (req, res, { role, profileFields: rawProfileFie
 
     return success(res, {
       user: formatUserResponse(user, profile),
+      onboardingChecklist: !!checklist,
       message: 'Account created. Login credentials have been sent to the provided email.',
     }, 201);
   } catch (err) {
