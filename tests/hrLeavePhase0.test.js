@@ -84,9 +84,9 @@ describe('who decides leave (canDecideLeaveFor)', () => {
 
 describe('opening someone\'s leave tab (leaveViewOrSelf)', () => {
   const other = { id: 42 };
-  test('self, users.view and leave.manage pass; anyone else is refused', async () => {
+  test('self, staff.view and leave.manage pass; anyone else is refused', async () => {
     assert.equal((await run(leaveViewOrSelf, { user: user('nurse', [], [], 42), staffUser: other })).allowed, true);
-    assert.equal((await run(leaveViewOrSelf, { user: user('staff', [PERMISSIONS.USERS_VIEW]), staffUser: other })).allowed, true);
+    assert.equal((await run(leaveViewOrSelf, { user: user('staff', [PERMISSIONS.STAFF_VIEW]), staffUser: other })).allowed, true);
     assert.equal((await run(leaveViewOrSelf, { user: user('staff', [PERMISSIONS.LEAVE_MANAGE]), staffUser: other })).allowed, true);
     assert.equal((await run(leaveViewOrSelf, { user: user('nurse'), staffUser: other })).allowed, false);
   });

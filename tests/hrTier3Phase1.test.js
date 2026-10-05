@@ -72,7 +72,9 @@ describe('resolveScope — what a person reaches', () => {
   test('legacy names and broad Administration controls are all staff', () => {
     assert.equal(resolveScope({ user: user('staff', ['hr.write']), capability: P.HR_VIEW,
       rows: [{ capability: 'hr.write', kind: 'department', departmentId: LAB }] }).all, true);
-    assert.equal(resolveScope({ user: user('staff', [P.USERS_VIEW]), capability: P.STAFF_VIEW }).all, true);
+    // users.view no longer reaches staff.view (permissions tidy …015).
+    assert.equal(resolveScope({ user: user('staff', [P.USERS_VIEW]), capability: P.STAFF_VIEW }).all, false);
+    assert.equal(resolveScope({ user: user('staff', [P.USERS_VIEW, P.STAFF_VIEW]), capability: P.STAFF_VIEW }).all, true);
   });
   test('the true admin and full administrator access are always all staff', () => {
     const rows = [{ capability: P.STAFF_VIEW, kind: 'department', departmentId: LAB }];

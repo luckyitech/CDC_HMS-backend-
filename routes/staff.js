@@ -28,8 +28,8 @@ const EMPLOYMENT_TYPES    = ['Full-time', 'Part-time', 'Contract', 'Consultant',
 const LEAVE_MANAGE = ['admin', 'leave.manage'];
 
 // The staff file, one capability per job (HR Tier 3 Phase 0, 2 Oct 2026).
-// users.view / users.write carry all of these (constants/permissions BUNDLES),
-// so nobody who held them loses anything.
+// The permissions tidy (migration …015) wrote these onto everyone who held
+// users.view / users.write; those two now gate Manage Users only.
 const STAFF_VIEW   = ['admin', 'staff.view'];
 const STAFF_EDIT   = ['admin', 'staff.edit'];
 const STAFF_STATUS = ['admin', 'staff.status'];
@@ -52,7 +52,6 @@ const catalogReader = (req, res, next) => {
 // "May view staff" is exactly what authorize('admin', 'staff.view') admits —
 // the gate on the list this file is opened from — so whoever can see the
 // directory can open a file, and nobody can open a file they could not list.
-// (users.view carries staff.view, so it still opens files — HR Tier 3.)
 // It used to test `role === 'admin'`, which refused a doctor holding
 // admin.access (403 on every file but their own) while every WRITE on the same
 // file already went through authorize('admin', 'users.write') and let them in.

@@ -1,3 +1,4 @@
+require('./_noScopeRows'); // a direct staff.view grant is scopable — never open a DB pool here
 const { test, describe } = require('node:test');
 const assert = require('node:assert/strict');
 
@@ -72,9 +73,10 @@ describe('adminOrSelf — opening a staff file', () => {
     const req = { user: user('doctor', [PERMISSIONS.ADMIN_ACCESS]), staffUser: someoneElse };
     assert.deepEqual(await run(adminOrSelf, req), { allowed: true });
   });
-  test('a holder of users.view opens any file', async () => {
-    const req = { user: user('staff', [PERMISSIONS.USERS_VIEW]), staffUser: someoneElse };
+  test('a holder of staff.view opens any file; users.view alone (Manage Users) no longer does — permissions tidy …015', async () => {
+    const req = { user: user('staff', [PERMISSIONS.STAFF_VIEW]), staffUser: someoneElse };
     assert.deepEqual(await run(adminOrSelf, req), { allowed: true });
+    assert.equal((await run(adminOrSelf, { user: user('staff', [PERMISSIONS.USERS_VIEW]), staffUser: someoneElse })).allowed, false);
   });
   test('the true admin account still opens any file', async () => {
     const req = { user: user('admin'), staffUser: someoneElse };
@@ -90,8 +92,8 @@ describe('adminOrSelf — opening a staff file', () => {
     assert.equal(r.code, 403);
     assert.equal(r.body.success, false);
   });
-  test('users.view withdrawn from an admin.access holder refuses', async () => {
-    const req = { user: user('doctor', [PERMISSIONS.ADMIN_ACCESS], [PERMISSIONS.USERS_VIEW]), staffUser: someoneElse };
+  test('staff.view withdrawn from an admin.access holder refuses', async () => {
+    const req = { user: user('doctor', [PERMISSIONS.ADMIN_ACCESS], [PERMISSIONS.STAFF_VIEW]), staffUser: someoneElse };
     assert.equal((await run(adminOrSelf, req)).allowed, false);
   });
 });

@@ -44,15 +44,15 @@ const read = (...p) => fs.readFileSync(path.join(__dirname, '..', ...p), 'utf8')
 const u = (id, role = 'nurse', permissions = []) => ({ id, role, permissions, deniedPermissions: [], staffType: 'clinical' });
 const req = { UserId: 10, participants: [{ UserId: 20, kind: 'approver', decision: 'pending' }] };
 
-describe('a users.view holder opens a request from the staff file — read-only, redacted', () => {
-  test('users.view: may open, redacted, view-only', () => {
-    const s = standing(req, u(40, 'staff', ['users.view']));
+describe('a staff.view holder opens a request from the staff file — read-only, redacted', () => {
+  test('staff.view: may open, redacted, view-only', () => {
+    const s = standing(req, u(40, 'staff', ['staff.view']));
     assert.equal(s.mayOpen, true);
     assert.equal(s.redact, true);
     assert.equal(s.viewOnly, true);
     assert.equal(s.isApprover, false);
   });
-  test('without users.view a stranger still gets nothing', () => {
+  test('without staff.view a stranger still gets nothing', () => {
     const s = standing(req, u(40, 'staff'));
     assert.equal(s.mayOpen, false);
   });
@@ -60,7 +60,7 @@ describe('a users.view holder opens a request from the staff file — read-only,
     assert.match(read('controllers', 'leaveApprovalController.js'), /if \(!st\.mayOpen \|\| st\.redact\) return error\(res, 'Leave request not found', 404\);/);
   });
   test('an approver is not view-only', () => {
-    assert.equal(standing(req, u(20, 'staff', ['users.view'])).viewOnly, false);
+    assert.equal(standing(req, u(20, 'staff', ['staff.view'])).viewOnly, false);
   });
 });
 

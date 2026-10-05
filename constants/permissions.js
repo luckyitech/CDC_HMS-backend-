@@ -268,9 +268,9 @@ const PERMISSIONS = {
   HR_SETTINGS:   'hr.settings',
 
   // --- HR Suite, Tier 3 Phase 0 (2 Oct 2026): the staff file, split out of
-  // users.view / users.write so an HR department can share the work. Both old
-  // capabilities CARRY these (BUNDLES), so nobody loses anything at deploy;
-  // users.view / users.write themselves still gate the Manage Users screen.
+  // users.view / users.write so an HR department can share the work. Those two
+  // carried these until the permissions tidy (migration …015) wrote them onto
+  // every holder; users.view / users.write now gate the Manage Users screen only.
   STAFF_VIEW:      'staff.view',       // the directory and opening a staff file
   STAFF_EDIT:      'staff.edit',       // personal and employment details, photo
   STAFF_ONBOARD:   'staff.onboard',    // creating a staff account (onboarding wizard)
@@ -363,10 +363,13 @@ const LEGACY_PERMISSIONS = {
 // Resolved when access is worked out (effectivePermissions /
 // deniedPermissions), never written to a row: granting leave.manage stores
 // leave.manage, and the parts follow it wherever it goes.
+//
+// users.view / users.write USED to carry the staff-file controls too. The
+// permissions tidy (migration 20260928000015, decision P-9 b, 3 Oct 2026) wrote
+// those parts onto everyone who held them, so from that release they gate the
+// Manage Users screen only — giving someone Manage Users no longer hands them
+// staff files.
 const BUNDLES = {
-  [PERMISSIONS.USERS_VIEW]:   [PERMISSIONS.STAFF_VIEW],
-  [PERMISSIONS.USERS_WRITE]:  [PERMISSIONS.STAFF_EDIT, PERMISSIONS.STAFF_ONBOARD,
-    PERMISSIONS.STAFF_STATUS, PERMISSIONS.STAFF_DOCUMENTS],
   [PERMISSIONS.LEAVE_MANAGE]: [PERMISSIONS.LEAVE_VIEW, PERMISSIONS.LEAVE_SICK,
     PERMISSIONS.LEAVE_REQUIRED, PERMISSIONS.LEAVE_REGISTER],
   [PERMISSIONS.LEAVE_POLICY]: [PERMISSIONS.LEAVE_HOLIDAYS, PERMISSIONS.LEAVE_ENTITLEMENTS],
@@ -834,8 +837,7 @@ const PERMISSION_GROUPS = [
     key: 'hr-people',
     hr: true,
     name: 'HR Suite · People and staff files',
-    description: 'Other people\'s staff files. "Users and staff files" under Administration '
-      + 'still carries all of these.',
+    description: 'Other people\'s staff files, one control per job.',
     areas: [
       { key: 'staff-view', name: 'Open staff files', appliesIn: 'HR Suite → Staff, staff files',
         description: 'The staff directory and every tab of a staff file they are allowed to see. '
@@ -1092,10 +1094,9 @@ const PERMISSION_GROUPS = [
         warning: 'This person will be able to make anyone an administrator, and to take '
           + 'that away. Only someone who already holds this can grant it, and nobody can '
           + 'grant it to themselves. Every change is recorded against their name.' },
-      { key: 'users', name: 'Users and staff files', appliesIn: 'Admin, HR Suite',
-        description: 'The Manage Users screen (login accounts). Viewing also carries "Open staff '
-          + 'files"; editing also carries editing details, onboarding, employment status and '
-          + 'staff documents — each of those can be given on its own under HR Suite · People.',
+      { key: 'users', name: 'Users (login accounts)', appliesIn: 'Admin → Manage Users',
+        description: 'The Manage Users screen (login accounts). Staff files, onboarding, '
+          + 'employment status and staff documents are separate controls under HR Suite · People.',
         access: PERMISSIONS.USERS_VIEW, write: PERMISSIONS.USERS_WRITE,
         accessLabel: 'Can view users and open staff files',
         writeLabel: 'Can create and edit users and staff files',

@@ -70,6 +70,9 @@ const formatUserResponse = (user, profile) => {
       employeeId:       profile.employeeId,
       position:         profile.position,
       department:       profile.department,
+      // HR Tier 3 Phase 1 list ids — Manage Users picks from the lists too.
+      positionId:       profile.positionId ?? null,
+      departmentId:     profile.departmentId ?? null,
       ward:             profile.ward,
       shift:            profile.shift,
       employmentType:   profile.employmentType,

@@ -30,11 +30,12 @@ const run = (middleware, req) => new Promise((resolve) => {
 const P = PERMISSIONS;
 
 describe('the old broad controls keep everything they gave (bundles)', () => {
-  test('users.view opens staff files; users.write carries every staff-file job', () => {
-    assert.equal(hasPermission(user('staff', [P.USERS_VIEW]), P.STAFF_VIEW), true);
+  test('after the permissions tidy (…015) users.view / users.write gate Manage Users only', () => {
+    assert.equal(hasPermission(user('staff', [P.USERS_VIEW]), P.STAFF_VIEW), false);
     const w = user('staff', [P.USERS_WRITE]);
+    assert.equal(hasPermission(w, P.USERS_VIEW), true);
     for (const cap of [P.STAFF_VIEW, P.STAFF_EDIT, P.STAFF_ONBOARD, P.STAFF_STATUS, P.STAFF_DOCUMENTS]) {
-      assert.equal(hasPermission(w, cap), true, cap);
+      assert.equal(hasPermission(w, cap), false, cap);
     }
   });
   test('leave.manage carries see-everyone, sick details, required approvers and the register', () => {
@@ -71,13 +72,14 @@ describe('withdrawing a part leaves the bundle; withdrawing the bundle withdraws
     // The stored denial does not take leave.manage with it.
     assert.deepEqual(sanitizeDeniedPermissions([P.LEAVE_SICK]), [P.LEAVE_SICK]);
   });
-  test('a withdrawal of users.write (before Tier 3) still refuses every staff-file write, even with admin.access', async () => {
-    const u = user('doctor', [P.ADMIN_ACCESS], [P.USERS_WRITE]);
+  test('a withdrawal of users.write (before Tier 3), once tidied (…015), still refuses every staff-file write, even with admin.access', async () => {
+    const t = require('../migrations/20260928000015-hr-permission-tidy')._tidy({ permissions: [P.ADMIN_ACCESS], deniedPermissions: [P.USERS_WRITE] });
+    const u = user('doctor', t.permissions, t.deniedPermissions);
     for (const cap of [P.STAFF_EDIT, P.STAFF_ONBOARD, P.STAFF_STATUS, P.STAFF_DOCUMENTS]) {
       assert.equal(passesAdminGate(u, cap), false, cap);
       assert.equal((await run(authorize('admin', cap), { user: u })).allowed, false, cap);
     }
-    assert.equal(passesAdminGate(u, P.STAFF_VIEW), true, 'viewing is users.view, not withdrawn');
+    assert.equal(passesAdminGate(u, P.STAFF_VIEW), true, 'viewing was never part of the users.write withdrawal');
   });
   test('withdrawing leave.view refuses leave.manage and leave.policy too (a chain)', () => {
     const denied = sanitizeDeniedPermissions([P.LEAVE_VIEW]);
