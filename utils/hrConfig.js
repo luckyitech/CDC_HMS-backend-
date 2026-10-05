@@ -23,7 +23,8 @@ const { Setting } = db;
 const K = {
   debounceSeconds:      'hr.checkin.debounceSeconds',
   minSessionMinutes:    'hr.checkin.minSessionMinutes',
-  autoCheckin:          'hr.checkin.autoCheckin',
+  // hr.checkin.autoCheckin is RETIRED (5 Oct 2026, HR fixes #6): the first
+  // tap of the day always checks in. A stored row is harmless and never read.
   confirmCheckout:      'hr.checkin.confirmCheckout',
   geo:                  'hr.checkin.geo',              // 'off' | 'log'
   hoursDefault:         'hr.hours.default',            // JSON, see utils/workHours.js parseHoursDefault
@@ -98,7 +99,6 @@ const cleanVisibleTypes = (value) => {
 const DEFAULTS = {
   debounceSeconds: 120,
   minSessionMinutes: 10,
-  autoCheckin: true,
   confirmCheckout: true,
   geo: 'log',
   // Decided with Emu, 23 Sep 2026: Mon–Fri 08:00–17:00, Sat 08:00–13:00, Sun off.
@@ -123,7 +123,6 @@ const GEO_MODES = ['off', 'log'];
 const FIELDS = {
   debounceSeconds:      { key: K.debounceSeconds,      label: 'Ignore repeat taps within (seconds)' },
   minSessionMinutes:    { key: K.minSessionMinutes,    label: 'Shortest session counted (minutes)' },
-  autoCheckin:          { key: K.autoCheckin,          label: 'First tap checks in immediately' },
   confirmCheckout:      { key: K.confirmCheckout,      label: 'Check-out asks for confirmation' },
   geo:                  { key: K.geo,                  label: 'Phone location' },
   hoursDefault:         { key: K.hoursDefault,         label: 'Clinic-wide default hours' },
@@ -166,7 +165,6 @@ const getHrConfig = async () => {
   return {
     debounceSeconds:   int(m[K.debounceSeconds], DEFAULTS.debounceSeconds, 0, 3600),
     minSessionMinutes: int(m[K.minSessionMinutes], DEFAULTS.minSessionMinutes, 0, 720),
-    autoCheckin:       bool(m[K.autoCheckin], DEFAULTS.autoCheckin),
     confirmCheckout:   bool(m[K.confirmCheckout], DEFAULTS.confirmCheckout),
     geo:               GEO_MODES.includes(m[K.geo]) ? m[K.geo] : DEFAULTS.geo,
     hoursDefault,
@@ -199,7 +197,6 @@ const setHrConfig = async (changes = {}) => {
   if (changes.minSessionMinutes !== undefined) await write(K.minSessionMinutes, num('minSessionMinutes', 0, 720));
   if (changes.graceMinutes !== undefined)      await write(K.graceMinutes, num('graceMinutes', 0, 240));
   if (changes.deviceDays !== undefined)        await write(K.deviceDays, num('deviceDays', 1, 3650));
-  if (changes.autoCheckin !== undefined)       await write(K.autoCheckin, changes.autoCheckin ? 'true' : 'false');
   if (changes.confirmCheckout !== undefined)   await write(K.confirmCheckout, changes.confirmCheckout ? 'true' : 'false');
   if (changes.positiveFeedback !== undefined)  await write(K.positiveFeedback, changes.positiveFeedback ? 'true' : 'false');
   if (changes.geo !== undefined) {

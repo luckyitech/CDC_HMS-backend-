@@ -249,7 +249,26 @@ const employmentFlips = ({ profiles = [], coveringToday = new Set(), endedRecent
     .map((p) => p.userId),
 });
 
+/**
+ * The cancel-request reminder (5 Oct 2026, HR fixes #3). An undecided cancel
+ * request still counts the leave as taken; if nobody has decided by the day
+ * before the leave starts, the approvers are reminded once. Pure: which of
+ * these leaves are due, given the clinic's tomorrow and the leave ids already
+ * reminded.
+ *
+ * @param {{ id:number, status:string, startDate:string }[]} leaves
+ * @param {string} tomorrow  'YYYY-MM-DD' at the clinic
+ * @param {Set<number>} reminded
+ */
+const CANCEL_REMINDER = 'cancel_request_pending';
+const cancelRemindersDue = (leaves, tomorrow, reminded = new Set()) => leaves.filter((l) =>
+  l.status === STATUS.CANCEL_REQUESTED
+  && String(l.startDate).slice(0, 10) === tomorrow
+  && !reminded.has(Number(l.id)));
+
 module.exports = {
+  CANCEL_REMINDER,
+  cancelRemindersDue,
   employmentFlips,
   STATUS,
   ALL_STATUSES,

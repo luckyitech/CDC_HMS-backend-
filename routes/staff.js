@@ -140,6 +140,8 @@ router.put('/:employeeId', authenticate, authorize(...STAFF_EDIT), findStaff, in
   body('yearsExperience').optional({ nullable: true, checkFalsy: true }).isInt({ min: 0 }).withMessage('Years of experience must be a positive number'),
   body('emergencyContact').optional({ nullable: true }).isObject().withMessage('Emergency contact must be an object'),
   body('roleDetails').optional({ nullable: true }).isObject().withMessage('Role details must be an object'),
+  // Reports to (#1): '' / null clears; who may be chosen is checked in the controller.
+  body('reportsToId').optional({ nullable: true, checkFalsy: true }).isInt({ min: 1 }).withMessage('Choose a staff member as the line manager'),
   validate,
 ], staffController.update);
 
@@ -153,7 +155,10 @@ router.patch('/:employeeId/status', authenticate, authorize(...STAFF_STATUS), fi
 // capability propagates on its own and can never be reliably revoked. Since HR
 // Tier 3 a "Grant HR permissions" holder may also call it, for HR controls only.
 router.patch('/:employeeId/permissions', authenticate, permissionsEditor, findStaff, [
-  body('permissions').isArray().withMessage('Permissions must be a list'),
+  // Either the lists, or { presetId } — "Apply preset…" replaces them with the
+  // preset's (#22); the controller resolves the preset and checks it.
+  body('presetId').optional({ nullable: true }).isInt({ min: 1 }).withMessage('Choose a preset'),
+  body('permissions').if(body('presetId').not().exists()).isArray().withMessage('Permissions must be a list'),
   // Optional so a caller that only grants leaves existing withdrawals alone;
   // see staffController.updatePermissions.
   body('deniedPermissions').optional().isArray().withMessage('Withdrawn permissions must be a list'),

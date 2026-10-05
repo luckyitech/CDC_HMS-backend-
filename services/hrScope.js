@@ -110,7 +110,10 @@ const filterInScope = async (user, capabilities, items, getUserId = (x) => x.Use
 };
 
 /** Every active internal account holding `capability` whose scope covers this person. */
-const holdersFor = async (capability, targetUserId) => {
+// `holds` decides who holds the control at all — the route-gate answer by
+// default; hr.confidential passes canViewConfidential (an explicit grant, NOT
+// admin.access — 5 Oct 2026, HR fixes #11).
+const holdersFor = async (capability, targetUserId, { holds = (u) => passesAdminGate(u, capability) } = {}) => {
   const staff = await db.User.findAll({
     where: { role: { [Op.in]: INTERNAL_ROLES }, isActive: true },
     attributes: ['id', 'role', 'permissions', 'deniedPermissions', 'staffType'],
@@ -118,7 +121,7 @@ const holdersFor = async (capability, targetUserId) => {
   const dept = await departmentOf(targetUserId);
   const out = [];
   for (const u of staff) {
-    if (!passesAdminGate(u, capability)) continue;
+    if (!holds(u)) continue;
     if (await canActOn(u, capability, targetUserId, { targetDepartmentId: dept })) out.push(u.id);
   }
   return out;

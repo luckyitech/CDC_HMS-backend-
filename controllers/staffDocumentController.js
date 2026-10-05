@@ -10,7 +10,9 @@ const { canViewConfidential, passesAdminGate, PERMISSIONS } = require('../consta
 const hrScope = require('../services/hrScope');
 const { resolveStoredFile } = require('../utils/staffDocumentStorage');
 const { Op } = require('sequelize');
-const { HEALTH_DOCUMENT_CATEGORIES, isHealthDocument, canSeeHealthDocumentsOf } = require('../utils/hrAccess');
+const {
+  HEALTH_DOCUMENT_CATEGORIES, isHealthDocument, canSeeHealthDocumentsOf, documentVisibility,
+} = require('../utils/hrAccess');
 const db = require('../models');
 
 const { StaffDocument, User } = db;
@@ -144,7 +146,7 @@ const list = async (req, res) => {
 
     return success(res, documents.map(formatDocument));
   } catch (err) {
-    console.error('List staff documents error:', err.message);
+    console.error('StaffDocument.list error:', err);
     return error(res, 'Failed to load documents', 500);
   }
 };
@@ -175,20 +177,19 @@ const upload = async (req, res) => {
       return error(res, 'Expiry date must be in YYYY-MM-DD format', 400);
     }
 
-    // Only a confidential-drawer holder chooses visibility. Anything anyone
-    // else uploads — a staff member about themselves, an administrator without
-    // the grant — is visible to the staff member by definition; letting them
-    // file into the drawer would let them create a document they cannot see.
-    let visibility = 'Admin only';
-    if (confidential) {
-      if (req.body.visibility && !VISIBILITIES.includes(req.body.visibility)) {
-        discard(req.file);
-        return error(res, 'Invalid visibility', 400);
-      }
-      visibility = req.body.visibility || 'Admin only';
-    } else {
-      visibility = 'Staff';
+    // Only a confidential-drawer holder chooses visibility. Anyone else's
+    // upload is visible to the staff member — EXCEPT a contract, appraisal or
+    // disciplinary letter, which goes to the confidential drawer by category
+    // (#2, 5 Oct 2026): it leaves the uploader's view, but never reaches the
+    // employee by accident (utils/hrAccess.documentVisibility).
+    if (confidential && req.body.visibility && !VISIBILITIES.includes(req.body.visibility)) {
+      discard(req.file);
+      return error(res, 'Invalid visibility', 400);
     }
+    const visibility = documentVisibility({
+      confidential, category: category || 'Other', requested: req.body.visibility,
+      isSelf: req.staffUser.id === req.user.id,
+    });
 
     const document = await StaffDocument.create({
       UserId:     req.staffUser.id,
@@ -209,7 +210,7 @@ const upload = async (req, res) => {
     return success(res, formatDocument(document), 201);
   } catch (err) {
     discard(req.file);
-    console.error('Upload staff document error:', err.message);
+    console.error('StaffDocument.upload error:', err);
     return error(res, 'Failed to upload document', 500);
   }
 };
@@ -240,6 +241,13 @@ const update = async (req, res) => {
     if (category !== undefined) {
       if (!CATEGORIES.includes(category)) return error(res, 'Invalid document category', 400);
       updates.category = category;
+      // Someone without the drawer moving a visible document INTO a
+      // confidential category files it there, the same rule as an upload (#2).
+      if (document.visibility === 'Staff' && visibility === undefined
+          && !(await withDocAccess(req)).confidential
+          && documentVisibility({ confidential: false, category, isSelf: req.staffUser.id === req.user.id }) === 'Admin only') {
+        updates.visibility = 'Admin only';
+      }
     }
     if (visibility !== undefined) {
       if (!VISIBILITIES.includes(visibility)) return error(res, 'Invalid visibility', 400);
@@ -264,7 +272,7 @@ const update = async (req, res) => {
 
     return success(res, formatDocument(document));
   } catch (err) {
-    console.error('Update staff document error:', err.message);
+    console.error('StaffDocument.update error:', err);
     return error(res, 'Failed to update document', 500);
   }
 };

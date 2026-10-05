@@ -66,6 +66,10 @@ const listTable = (Sequelize, users, extra = {}) => ({
 });
 
 module.exports = {
+  // Read by migration …016 (the backfill for databases where this one's
+  // starter-limit block was skipped), so the two can never drift.
+  _starterScopes: STARTER_SCOPES,
+
   async up(queryInterface, Sequelize) {
     const qi = queryInterface;
     const users = await findTable(qi, 'Users') || 'Users';

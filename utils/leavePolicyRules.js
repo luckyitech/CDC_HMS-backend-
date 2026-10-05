@@ -95,7 +95,8 @@ const editability = ({ year, today, policy }) => {
  * @returns {{ ok: boolean, errors: string[], value: object }}
  *   `value.types` holds a clean row for every key the body sent (only active keys).
  */
-const validatePolicy = (body = {}, { activeKeys = [] } = {}) => {
+// names: { key → label } so messages say "Study / CPD", not "Study" (#14).
+const validatePolicy = (body = {}, { activeKeys = [], names = {} } = {}) => {
   const errors = [];
   const value = {};
   const active = new Set(activeKeys);
@@ -165,7 +166,7 @@ const validatePolicy = (body = {}, { activeKeys = [] } = {}) => {
   for (const [key, row] of Object.entries(types)) {
     if (!active.has(key)) { errors.push(`"${key}" is not an active leave type.`); continue; }
     const r = row || {};
-    const name = r.name || key;
+    const name = names[key] || r.name || key;
     const clean = {};
 
     clean.enabled = r.enabled === undefined ? true : !!r.enabled;
@@ -228,9 +229,10 @@ const validatePolicy = (body = {}, { activeKeys = [] } = {}) => {
  * What must be true before a year is published.
  * @param {object} policy   loadPolicy()-shaped: { types: { [key]: row }, visibleTypes }
  * @param {string[]} activeKeys
+ * @param {object} [names]  { key → label } for the messages (#14)
  * @returns {string[]} problems (empty = can publish)
  */
-const publishProblems = (policy, activeKeys = []) => {
+const publishProblems = (policy, activeKeys = [], names = {}) => {
   const problems = [];
   const types = policy?.types || {};
   const enabled = activeKeys.filter((k) => types[k] && types[k].enabled);
@@ -240,7 +242,7 @@ const publishProblems = (policy, activeKeys = []) => {
   for (const k of activeKeys) {
     const t = types[k];
     if (t && t.enabled && t.grant !== 'unlimited' && (t.days === null || t.days === undefined)) {
-      problems.push(`${k} has no number of days.`);
+      problems.push(`${names[k] || k} has no number of days.`);
     }
   }
   return problems;

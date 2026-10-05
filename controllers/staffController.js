@@ -28,7 +28,10 @@ const { cleanSpec, sameSpec, scopeOfSpec, withinScope } = require('../utils/hrSc
 
 // hrGrantRefusal moved to utils/hrGrant (HR Tier 3 Phase 3) so the onboarding
 // wizard applies the same rule; re-exported below for existing callers.
-const { hrGrantRefusal } = require('../utils/hrGrant');
+const { hrGrantRefusal, loginEmailRefusal, canChangeLoginEmail, presetApplyRefusal } = require('../utils/hrGrant');
+const { cleanPresetScopes } = require('./permissionPresetController');
+const { resolveReportsTo, reportsToSummary, ReportsToError } = require('../services/reportsTo');
+const { sendHrNoticeEmail } = require('../utils/emailService');
 
 const { collectAllEvents, resolveDateFilter } = require('./activityController');
 
@@ -270,13 +273,50 @@ const scopeExtras = async (caller, staffUser) => {
   return extras;
 };
 
+/**
+ * What the staff file adds on top of formatStaff for THIS caller: the line
+ * manager's name (#1) and whether the "Login email · Change" control may be
+ * shown (#16 — the same rule update() enforces).
+ */
+const fileExtras = async (caller, profile, staffUser) => ({
+  reportsTo: await reportsToSummary(profile.reportsToId),
+  // The control saves through PUT /api/staff/:employeeId, so it also needs
+  // that route's gate: staff.edit, with this person in scope (review nit 1).
+  loginEmailEditable: canChangeLoginEmail(caller, staffUser)
+    && passesAdminGate(caller, PERMISSIONS.STAFF_EDIT)
+    && await hrScope.canActOn(caller, PERMISSIONS.STAFF_EDIT, staffUser.id),
+});
+
+/** The staff file as every single-file endpoint returns it, for THIS caller. */
+const fullFile = async (caller, profile, staffUser) => ({
+  ...formatStaff(profile, staffUser),
+  ...(await fileExtras(caller, profile, staffUser)),
+  ...(await scopeExtras(caller, staffUser)),
+});
+
 const getOne = async (req, res) => {
   try {
-    return success(res, { ...formatStaff(req.staffProfile, req.staffUser), ...(await scopeExtras(req.user, req.staffUser)) });
+    return success(res, await fullFile(req.user, req.staffProfile, req.staffUser));
   } catch (err) {
-    console.error('Get staff error:', err.message);
+    console.error('StaffProfile.getOne error:', err);
     return error(res, 'Failed to load staff member', 500);
   }
+};
+
+/**
+ * Tells the OLD address that the login email changed (#16), so a takeover
+ * attempt is visible to the real owner. Never fails the change: the mail
+ * service already swallows send errors, and this catch covers the rest.
+ */
+const notifyLoginEmailChanged = (oldEmail, user, newEmail) => {
+  if (!oldEmail) return;
+  sendHrNoticeEmail({
+    to: oldEmail,
+    name: user.firstName,
+    title: 'Your login email was changed',
+    body: `The email you use to sign in to CDC HMS was changed to ${newEmail || '(none)'}.\n`
+      + 'Password-reset links now go to the new address. If you did not expect this, tell HR or the administrator at once.',
+  }).catch((e) => console.error('StaffProfile.notifyLoginEmailChanged error:', e));
 };
 
 /**
@@ -297,6 +337,15 @@ const update = async (req, res) => {
 
   let transaction;
   try {
+    // The login email (#16): the reset link goes wherever it points, so only a
+    // Manage Users editor may change it — never on an administrator's account
+    // unless a permissions administrator (utils/hrGrant.loginEmailRefusal).
+    const emailChanging = updates.email !== undefined && (updates.email || null) !== (user.email || null);
+    if (emailChanging) {
+      if (!updates.email || !String(updates.email).trim()) return error(res, 'A login email is required', 400, { code: 'EMAIL_REQUIRED' });
+      const refused = loginEmailRefusal({ caller: req.user, target: user });
+      if (refused) return error(res, refused.message, refused.code, refused.extra || {});
+    }
     // A duplicate email would otherwise surface as a raw unique-constraint
     // error from the driver.
     if (updates.email && updates.email !== user.email) {
@@ -306,16 +355,28 @@ const update = async (req, res) => {
 
     const userUpdates = {};
     USER_FIELDS.forEach((field) => {
+      if (field === 'email' && !emailChanging) return;
       if (updates[field] !== undefined) userUpdates[field] = updates[field];
     });
 
     const profileUpdates = {};
     PROFILE_FIELDS.forEach((field) => {
-      if (updates[field] === undefined) return;
+      if (updates[field] === undefined || field === 'reportsToId') return;
       profileUpdates[field] = DATE_FIELDS.has(field) && updates[field] === ''
         ? null
         : updates[field];
     });
+
+    // Reports to (#1): any active staff member, never themselves, never a loop.
+    // The manager may sit outside the editor's department (owner decision).
+    if (updates.reportsToId !== undefined) {
+      try {
+        profileUpdates.reportsToId = await resolveReportsTo(user.id, updates.reportsToId, req.user);
+      } catch (e) {
+        if (e instanceof ReportsToError) return error(res, e.message, e.status, { code: e.code });
+        throw e;
+      }
+    }
 
     // Department and position come from the lists (HR Tier 3 Phase 1, T3-2a).
     let listFields;
@@ -376,13 +437,15 @@ const update = async (req, res) => {
 
     await transaction.commit();
 
+    if (userUpdates.email !== undefined) notifyLoginEmailChanged(userBefore.email, user, userUpdates.email);
+
     await profile.reload();
     await user.reload();
 
-    return success(res, formatStaff(profile, user));
+    return success(res, await fullFile(req.user, profile, user));
   } catch (err) {
     if (transaction) await transaction.rollback();
-    console.error('Update staff error:', err.message);
+    console.error('StaffProfile.update error:', err);
     return error(res, 'Failed to update staff member', 500);
   }
 };
@@ -428,10 +491,10 @@ const updateStatus = async (req, res) => {
     await profile.reload();
     await user.reload();
 
-    return success(res, formatStaff(profile, user));
+    return success(res, await fullFile(req.user, profile, user));
   } catch (err) {
     if (transaction) await transaction.rollback();
-    console.error('Update staff status error:', err.message);
+    console.error('StaffProfile.updateStatus error:', err);
     return error(res, 'Failed to update employment status', 500);
   }
 };
@@ -524,11 +587,45 @@ const restore = async (req, res) => {
     });
 
     await profile.reload();
-    return success(res, formatStaff(profile, user));
+    return success(res, await fullFile(req.user, profile, user));
   } catch (err) {
-    console.error('Restore staff error:', err.message);
+    console.error('StaffProfile.restore error:', err);
     return error(res, 'Failed to restore staff member', 500);
   }
+};
+
+/**
+ * "Apply preset…" on the Permissions tab (#22, 5 Oct 2026): { presetId } in
+ * place of the lists. The preset REPLACES the person's grants, withdrawals,
+ * staff type and department limits (same meaning as in the wizard); every
+ * rule of an ordinary save then runs on the result. Returns { body, preset }
+ * or { refusal }.
+ */
+const presetBody = async (req, user) => {
+  const preset = await db.PermissionPreset.findByPk(Number(req.body.presetId));
+  if (!preset || preset.status !== 'active') return { refusal: { message: 'That permission preset is not available', code: 400 } };
+  if (preset.baseRole !== user.role) {
+    return { refusal: { message: `The "${preset.name}" preset is for a ${preset.baseRole} account, not a ${user.role}`, code: 400 } };
+  }
+  const pg = toList(preset.permissions);
+  const pd = toList(preset.deniedPermissions);
+  const { granted, denied } = reconcilePermissionLists(pg, pd);
+  if (!canGrantPermissions(req.user)) {
+    const refusal = presetApplyRefusal({ caller: req.user, granted, denied });
+    if (refusal) return { refusal };
+  }
+  const limits = cleanPresetScopes(preset.scopes, granted);
+  return {
+    preset,
+    body: {
+      permissions: granted,
+      deniedPermissions: denied,
+      staffType: preset.staffType,
+      // Every scopable control the preset grants gets the preset's limit, or
+      // "all staff" — a person's old limits do not survive a replace.
+      scopes: Object.fromEntries(SCOPABLE.filter((c) => granted.includes(c)).map((c) => [c, limits[c] || { kind: 'all' }])),
+    },
+  };
 };
 
 /**
@@ -542,11 +639,30 @@ const restore = async (req, res) => {
  */
 const updatePermissions = async (req, res) => {
   const user = req.staffUser;
-  const { permissions, deniedPermissions, staffType } = req.body;
 
   if (!PERMISSIBLE_ROLES.includes(user.role)) {
     return error(res, `Permissions cannot be granted to a ${user.role} account`, 400);
   }
+
+  let body = req.body;
+  let preset = null;
+  if (req.body.presetId !== undefined && req.body.presetId !== null && req.body.presetId !== '') {
+    // Never on your own account (review S3): a preset can't hold admin.access or
+    // permissions.grant, so replacing your own access would drop them in a click.
+    if (user.id === req.user.id) {
+      return error(res, 'Apply a preset to someone else; change your own access by hand.', 403, { code: 'OWN_ACCOUNT' });
+    }
+    try {
+      const applied = await presetBody(req, user);
+      if (applied.refusal) return error(res, applied.refusal.message, applied.refusal.code, applied.refusal.extra || {});
+      ({ body, preset } = applied);
+    } catch (err) {
+      console.error('StaffProfile.updatePermissions error:', err);
+      return error(res, 'Failed to update permissions', 500);
+    }
+  }
+  const { permissions, deniedPermissions, staffType } = body;
+  if (!Array.isArray(permissions)) return error(res, 'Permissions must be a list', 400);
 
   // Clinical or non-clinical. Changed here rather than on the general profile
   // update because it is an access decision, not a descriptive one: it is what
@@ -618,7 +734,7 @@ const updatePermissions = async (req, res) => {
     // directly loses its scope rows (a scope belongs to a grant).
     const storedScopes = await hrScope.scopesFor(user.id);
     const scopeChanges = {};
-    const sentScopes = req.body.scopes && typeof req.body.scopes === 'object' ? req.body.scopes : {};
+    const sentScopes = body.scopes && typeof body.scopes === 'object' ? body.scopes : {};
     for (const [cap, raw] of Object.entries(sentScopes)) {
       if (!SCOPABLE.includes(cap)) return error(res, `${cap} cannot be limited to departments`, 400, { code: 'NOT_SCOPABLE' });
       const spec = cleanSpec(raw);
@@ -646,7 +762,10 @@ const updatePermissions = async (req, res) => {
         before: { permissions: was.granted, deniedPermissions: was.denied, staffType: user.staffType },
         after,
       });
-      if (refusal) return error(res, refusal.message, refusal.code, refusal.extra);
+      if (refusal) {
+        const message = preset ? `The "${preset.name}" preset can't be applied by you: ${refusal.message}` : refusal.message;
+        return error(res, message, refusal.code, refusal.extra);
+      }
       // …and gives nothing wider than they hold. Checked for every control that
       // is newly granted or whose scope changes (a scope change is a change).
       const targetDept = await hrScope.departmentOf(user.id);
@@ -669,10 +788,11 @@ const updatePermissions = async (req, res) => {
 
     // One transaction only when scopes change too; a grants-only save stays the
     // single update it always was.
-    if (Object.keys(scopeChanges).length) {
+    if (Object.keys(scopeChanges).length || preset) {
       await sequelize.transaction(async (transaction) => {
         await user.update(after, { transaction });
-        await hrScope.saveScopes(user.id, scopeChanges, req.user.id, { transaction });
+        if (Object.keys(scopeChanges).length) await hrScope.saveScopes(user.id, scopeChanges, req.user.id, { transaction });
+        if (preset) await db.PermissionPreset.increment('appliedCount', { by: 1, where: { id: preset.id }, transaction });
       });
     } else {
       await user.update(after);
@@ -693,6 +813,7 @@ const updatePermissions = async (req, res) => {
             to: scopeChanges,
           },
         } : {}),
+        ...(preset ? { appliedPreset: { from: null, to: preset.name } } : {}),
       },
       editedAt:     new Date(),
     });
@@ -704,9 +825,9 @@ const updatePermissions = async (req, res) => {
     }
 
     await user.reload();
-    return success(res, { ...formatStaff(req.staffProfile, user), ...(await scopeExtras(req.user, user)) });
+    return success(res, await fullFile(req.user, req.staffProfile, user));
   } catch (err) {
-    console.error('Update staff permissions error:', err.message);
+    console.error('StaffProfile.updatePermissions error:', err);
     return error(res, 'Failed to update permissions', 500);
   }
 };
@@ -940,4 +1061,6 @@ module.exports = {
   activity,
   // Exported for reuse by userController so both files format staff identically.
   formatStaff,
+  // And so both login-email paths warn the old address the same way (#16).
+  notifyLoginEmailChanged,
 };

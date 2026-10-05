@@ -18,6 +18,7 @@ const { monthSummary, streakNoRed, clinicHHMM } = require('../utils/attendanceRu
 const { parseJsonColumn } = require('../utils/jsonColumn');
 const { STAFF_ROLES } = require('../constants/staffRoles');
 const { holidayMap } = require('./leaveService');
+const { TAKEN_STATUSES } = require('../utils/leaveWorkflow');
 
 const { StaffAttendance, StaffWorkHours, StaffLeave, User, StaffProfile, HrNfcTag, UserDevice, UserEditLog } = db;
 
@@ -36,10 +37,26 @@ const expectedFor = async (userId, clinicDate, cfg, rows) => {
   });
 };
 
-/** The clinic dates (Set) in [from, to] the person is on APPROVED leave. */
+/**
+ * The grace for a session's check-out star (#8, 5 Oct 2026): the person's own
+ * grace for that clinic date — the one the check-in used (stored on the
+ * session since this fix), else re-resolved for that date (older sessions;
+ * a night shift's date, not today). Never the clinic-wide default alone.
+ */
+const graceOf = async (session, cfg) => {
+  const stored = parseJsonColumn(session.diagnostics)?.grace;
+  if (stored !== null && stored !== undefined && Number.isFinite(Number(stored))) return Number(stored);
+  return (await expectedFor(session.UserId, session.clinicDate, cfg)).grace;
+};
+
+/**
+ * The clinic dates (Set) in [from, to] the person is on leave that COUNTS as
+ * taken — Approved, or Approved with an undecided cancel request (#3, 5 Oct
+ * 2026: still away until an approver or HR confirms the cancel).
+ */
 const leaveDatesFor = async (userId, from, to) => {
   const leaves = await StaffLeave.findAll({
-    where: { UserId: userId, status: 'Approved', startDate: { [Op.lte]: to }, endDate: { [Op.gte]: from } },
+    where: { UserId: userId, status: { [Op.in]: TAKEN_STATUSES }, startDate: { [Op.lte]: to }, endDate: { [Op.gte]: from } },
     attributes: ['startDate', 'endDate'],
   });
   const set = new Set();
@@ -165,7 +182,9 @@ const hasEarlierSessionToday = async (userId, clinicDate, transaction) =>
 const internalUsers = async () =>
   User.findAll({
     where: { role: { [Op.in]: STAFF_ROLES }, isActive: true },
-    attributes: ['id', 'firstName', 'lastName', 'role', 'email'],
+    // permissions / deniedPermissions / staffType: the Today board expects
+    // only people who hold "Check in and out" (#9, utils/attendanceRules.expectedAtWork).
+    attributes: ['id', 'firstName', 'lastName', 'role', 'email', 'permissions', 'deniedPermissions', 'staffType'],
     include: [{ model: StaffProfile, attributes: ['employeeId', 'position', 'department', 'deletedAt'], required: false }],
     order: [['firstName', 'ASC'], ['lastName', 'ASC']],
   });
@@ -255,6 +274,7 @@ module.exports = {
   OVERNIGHT_GRACE_HOURS,
   hasEarlierSessionToday,
   internalUsers,
+  graceOf,
   personOf,
   SESSION_INCLUDE,
   serializeSession,

@@ -207,7 +207,8 @@ const hrList = async (req, res) => {
       order: [[decided ? 'verifiedAt' : 'createdAt', decided ? 'DESC' : 'ASC']],
       limit: 300,
     });
-    return success(res, rows.map(shape));
+    // mine: the verifier's own entry — shown, but someone else decides (#4).
+    return success(res, rows.map((r) => ({ ...shape(r), mine: Number(r.UserId) === Number(req.user.id) })));
   } catch (err) {
     console.error('Cpd.hrList error:', err);
     return error(res, 'Failed to load CPD to verify', 500);
@@ -217,7 +218,12 @@ const hrList = async (req, res) => {
 /** GET /api/hr/cpd/count — pending (the sidebar/tab badge). */
 const hrCount = async (req, res) => {
   try {
-    const n = await CpdActivity.count({ where: { status: 'pending', ...(await hrScope.scopeWhere(req.user, PERMISSIONS.CPD_VERIFY)) } });
+    // Your own entries are not counted — someone else verifies them (#4).
+    const scoped = await hrScope.userIdsInScope(req.user, PERMISSIONS.CPD_VERIFY);
+    const n = await CpdActivity.count({ where: {
+      status: 'pending',
+      UserId: scoped === null ? { [Op.ne]: req.user.id } : { [Op.in]: scoped.filter((id) => id !== req.user.id) },
+    } });
     return success(res, { pending: n });
   } catch (err) {
     console.error('Cpd.hrCount error:', err);
@@ -248,6 +254,11 @@ const verify = async (req, res) => {
     const row = await CpdActivity.findByPk(Number(req.params.id));
     if (!row || !(await hrScope.canActOn(req.user, PERMISSIONS.CPD_VERIFY, row.UserId))) return error(res, 'Activity not found', 404);
     if (row.status !== 'pending') return error(res, 'This activity has already been decided', 400, { code: 'NOT_PENDING' });
+    // Nobody verifies their own CPD (#4, 5 Oct 2026) — the same rule as a
+    // change to your own record (hrProfileController OWN_REQUEST).
+    if (Number(row.UserId) === Number(req.user.id)) {
+      return error(res, 'Someone else must verify your own CPD', 403, { code: 'OWN_ACTIVITY' });
+    }
 
     await row.update({
       status: decision === 'verify' ? 'verified' : 'rejected',

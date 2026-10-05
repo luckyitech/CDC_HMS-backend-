@@ -34,7 +34,30 @@ const canSeeHealthDocumentsOf = (user, staffUser) =>
     || passesAdminGate(user, PERMISSIONS.LEAVE_SICK)
   );
 
+// Categories that belong in the confidential drawer by default (5 Oct 2026,
+// HR fixes #2). The server decides, by category: someone WITHOUT
+// hr.confidential who files one of these on SOMEONE ELSE's file files it
+// 'Admin only' anyway — it leaves their view once uploaded (the screen warns
+// first), but it never reaches the employee by accident. The person's own
+// upload to their own file (their contract copy) stays visible to them. A
+// holder still chooses freely.
+const ADMIN_ONLY_CATEGORIES = ['Employment Contract', 'Appraisal', 'Disciplinary'];
+
+/**
+ * Pure: the visibility to store for an upload (or a re-categorisation).
+ *   confidential  the caller holds hr.confidential for this person
+ *   category      the document's category
+ *   requested     what a holder asked for (ignored for anyone else)
+ *   isSelf        the caller is filing on their own file
+ */
+const documentVisibility = ({ confidential, category, requested, isSelf = false }) => {
+  if (confidential) return requested || 'Admin only';
+  if (isSelf) return 'Staff';
+  return ADMIN_ONLY_CATEGORIES.includes(category) ? 'Admin only' : 'Staff';
+};
+
 module.exports = {
   canViewHr, canManageCheckinDevices,
   HEALTH_DOCUMENT_CATEGORIES, isHealthDocument, canSeeHealthDocumentsOf,
+  ADMIN_ONLY_CATEGORIES, documentVisibility,
 };

@@ -32,6 +32,8 @@ const OnboardingItem      = require('./OnboardingItem');
 const RosterShiftType     = require('./RosterShiftType');
 const RosterWeek          = require('./RosterWeek');
 const RosterShift         = require('./RosterShift');
+const HrChecklistItem     = require('./HrChecklistItem');
+const HrChecklistEvent    = require('./HrChecklistEvent');
 const AppraisalCompetency = require('./AppraisalCompetency');
 const AppraisalCycle      = require('./AppraisalCycle');
 const Appraisal           = require('./Appraisal');
@@ -212,6 +214,13 @@ User.hasMany(RosterShift);
 RosterShift.belongsTo(User);
 RosterShift.belongsTo(RosterShiftType, { as: 'shiftType', foreignKey: 'shiftTypeId' });
 RosterWeek.belongsTo(Department, { foreignKey: 'departmentId' });
+
+// HR Suite → Manual: the shared go-live / first-week checklist (migration
+// 20260928000018). Who ticked / wrote the note / archived, and the history.
+HrChecklistItem.belongsTo(User, { as: 'doneBy', foreignKey: 'doneById' });
+HrChecklistItem.belongsTo(User, { as: 'noteBy', foreignKey: 'noteById' });
+HrChecklistItem.belongsTo(User, { as: 'createdBy', foreignKey: 'createdById' });
+HrChecklistEvent.belongsTo(User, { as: 'by', foreignKey: 'byId' });
 
 // HR Tier 3 Phase 5 — appraisals (migration 20260928000014).
 User.hasMany(Appraisal);
@@ -687,6 +696,8 @@ const db = {
   RosterShiftType,
   RosterWeek,
   RosterShift,
+  HrChecklistItem,
+  HrChecklistEvent,
   AppraisalCompetency,
   AppraisalCycle,
   Appraisal,

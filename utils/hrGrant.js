@@ -5,6 +5,7 @@
 
 const {
   PERMISSIONS, hasPermission, isTrueAdmin, canGrantPermissions, HR_DELEGABLE, HR_NOT_DELEGABLE, passesAdminGate,
+  canGrantHrPermissions, canEditPermissions, canViewConfidential, canReadAppraisals, reconcilePermissionLists, toList,
 } = require('../constants/permissions');
 
 /**
@@ -54,4 +55,88 @@ const hrGrantRefusal = ({ caller, target, before, after }) => {
   return null;
 };
 
-module.exports = { hrGrantRefusal };
+/**
+ * Does `user` hold `cap` the way that control's own gate decides? The two
+ * explicit-grant controls (hr.confidential, hr.appraisals) are NOT carried by
+ * admin.access, and the two grant keys have their own tests.
+ */
+const holdsControl = (user, cap) => {
+  if (cap === PERMISSIONS.HR_CONFIDENTIAL) return canViewConfidential(user);
+  if (cap === PERMISSIONS.HR_APPRAISALS) return canReadAppraisals(user);
+  if (cap === PERMISSIONS.PERMISSIONS_GRANT) return canGrantPermissions(user);
+  if (cap === PERMISSIONS.HR_GRANT) return canGrantHrPermissions(user);
+  return passesAdminGate(user, cap);
+};
+
+// Accounts whose login email only a permissions editor may change: whoever
+// could read or grant what most needs protecting (5 Oct 2026, review S2).
+const PROTECTED_CONTROLS = [
+  PERMISSIONS.ADMIN_ACCESS, PERMISSIONS.PERMISSIONS_GRANT, PERMISSIONS.HR_GRANT,
+  PERMISSIONS.HR_CONFIDENTIAL, PERMISSIONS.HR_APPRAISALS, PERMISSIONS.USERS_WRITE,
+];
+const isAccessHolder = (user) => isTrueAdmin(user) || PROTECTED_CONTROLS.some((c) => holdsControl(user, c));
+
+/**
+ * May `caller` change `target`'s LOGIN email? (5 Oct 2026, HR fixes #16 and
+ * review S2.) The password-reset link goes to whatever email is stored, so
+ * changing it is an account-takeover path. ONE rule for both endpoints
+ * (PUT /api/staff/:employeeId and PUT /api/users/:id). Pure: null when
+ * allowed, or { message, code, extra }.
+ *
+ *   1. only someone who passes the Manage Users write gate (users.write);
+ *   2. never someone who holds more than the caller: every control GRANTED to
+ *      the target (their stored grants — role defaults are not grants) must be
+ *      one the caller holds, and only the true admin may change the true
+ *      admin's;
+ *   3. never a protected account — a true admin, or a holder of admin.access,
+ *      permissions.grant, hr.grant, hr.confidential, hr.appraisals or
+ *      users.write — unless the caller is a true admin or can edit
+ *      permissions; an HR grantor (hr.grant, not a permissions administrator)
+ *      is then held to the Permissions-tab rule (hrGrantRefusal: never
+ *      yourself, never an administrator) and never a peer HR grantor.
+ */
+const loginEmailRefusal = ({ caller, target }) => {
+  if (!passesAdminGate(caller, PERMISSIONS.USERS_WRITE)) {
+    return { message: 'Only someone who manages login accounts (Manage Users) can change a login email', code: 403, extra: { code: 'LOGIN_EMAIL_NOT_ALLOWED' } };
+  }
+  if (isTrueAdmin(caller)) return null;
+  const protectedMsg = { message: 'Only a permissions administrator can change the login email of someone who holds administrator, permission-granting or confidential access', code: 403, extra: { code: 'LOGIN_EMAIL_PROTECTED' } };
+  if (isTrueAdmin(target)) return protectedMsg;
+  const targetGrants = reconcilePermissionLists(toList(target.permissions), toList(target.deniedPermissions)).granted;
+  const lacking = targetGrants.filter((c) => !holdsControl(caller, c));
+  if (lacking.length) {
+    return { message: 'You can only change the login email of someone whose access you hold yourself', code: 403, extra: { code: 'LOGIN_EMAIL_HOLDS_MORE', capabilities: lacking } };
+  }
+  if (!isAccessHolder(target) || canGrantPermissions(caller)) return null;
+  if (canEditPermissions(caller)) {
+    const same = { permissions: [], deniedPermissions: [], staffType: target.staffType };
+    const refused = hrGrantRefusal({ caller, target, before: same, after: same });
+    if (!refused && !holdsControl(target, PERMISSIONS.HR_GRANT)) return null;
+  }
+  return protectedMsg;
+};
+
+/**
+ * May a "Grant HR permissions" holder (NOT a permissions administrator) apply
+ * this preset to an existing account? (5 Oct 2026, HR fixes #22.) Only when
+ * EVERY control in it is one they may grant: an HR control (HR_DELEGABLE, never
+ * hr.confidential / hr.grant), and — for what it grants — one they hold
+ * themselves. Pure: null when allowed, or { message, code, extra }. The usual
+ * Permissions-tab rules (hrGrantRefusal, scope reach) still run on the result.
+ */
+const presetApplyRefusal = ({ caller, granted = [], denied = [] }) => {
+  const notHr = [...granted, ...denied].filter((p) => !HR_DELEGABLE.includes(p) || HR_NOT_DELEGABLE.includes(p));
+  if (notHr.length) {
+    return { message: 'This preset includes controls outside the HR Suite — only a permissions administrator can apply it', code: 403, extra: { code: 'PRESET_NOT_DELEGABLE', capabilities: [...new Set(notHr)] } };
+  }
+  const notHeld = granted.filter((p) => !passesAdminGate(caller, p));
+  if (notHeld.length) {
+    return { message: 'This preset gives controls you do not hold yourself — only someone who holds them, or a permissions administrator, can apply it', code: 403, extra: { code: 'PRESET_NOT_HELD', capabilities: notHeld } };
+  }
+  return null;
+};
+
+/** The login-email rule alone; the staff file adds its own edit gate (staffController.fileExtras). */
+const canChangeLoginEmail = (caller, target) => !loginEmailRefusal({ caller, target });
+
+module.exports = { hrGrantRefusal, loginEmailRefusal, canChangeLoginEmail, presetApplyRefusal };

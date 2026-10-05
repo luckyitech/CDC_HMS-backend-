@@ -3,7 +3,9 @@ const {
   PERMISSIONS, PERMISSIBLE_ROLES, STAFF_TYPES, canGrantPermissions, sanitizePermissions, hasPermission, toList,
   reconcilePermissionLists, canGrantHrPermissions, SCOPABLE,
 } = require('../constants/permissions');
-const { hrGrantRefusal } = require('../utils/hrGrant');
+const { hrGrantRefusal, loginEmailRefusal } = require('../utils/hrGrant');
+const { resolveReportsTo, ReportsToError } = require('../services/reportsTo');
+const { notifyLoginEmailChanged } = require('./staffController');
 const db = require('../models');
 const sequelize = require('../config/database');
 const bcrypt = require('bcryptjs');
@@ -298,6 +300,15 @@ const createStaffAccount = async (req, res, { role, profileFields: rawProfileFie
     }
     const { department: _d, position: _p, ...otherFields } = rawProfileFields;
     const profileFields = { ...otherFields, ...listFields };
+    // Reports to (#1, 5 Oct 2026): chosen on wizard step 2. A new person has no
+    // reports yet, so only the manager is checked (active staff member).
+    try {
+      const reportsToId = await resolveReportsTo(null, req.body.reportsToId, req.user);
+      if (reportsToId) profileFields.reportsToId = reportsToId;
+    } catch (e) {
+      if (e instanceof ReportsToError) return error(res, e.message, e.status, { code: e.code });
+      throw e;
+    }
 
     const existingUser = await User.findOne({ where: { email } });
     if (existingUser) return error(res, 'Email already in use', 400);
@@ -672,6 +683,15 @@ const updateUser = async (req, res) => {
     userFields.forEach((field) => {
       if (updates[field] !== undefined) userUpdates[field] = updates[field];
     });
+    // The login email (#16, 5 Oct 2026): same rule as the staff file — never an
+    // administrator's account unless a permissions administrator.
+    const emailChanging = userUpdates.email !== undefined && (userUpdates.email || null) !== (user.email || null);
+    if (!emailChanging) delete userUpdates.email;
+    if (emailChanging) {
+      if (!userUpdates.email || !String(userUpdates.email).trim()) return error(res, 'A login email is required', 400, { code: 'EMAIL_REQUIRED' });
+      const refused = loginEmailRefusal({ caller: req.user, target: user });
+      if (refused) return error(res, refused.message, refused.code, refused.extra || {});
+    }
 
     // ── Permissions ──────────────────────────────────────────────────────────
     // Restricted to a PERMISSIONS ADMINISTRATOR (a permissions.grant holder, or
@@ -811,10 +831,14 @@ const updateUser = async (req, res) => {
       });
     }
 
+    if (emailChanging && STAFF_ROLES.includes(user.role)) {
+      notifyLoginEmailChanged(userBefore.email, user, userUpdates.email);
+    }
+
     await user.reload();
     return success(res, { user: formatUserResponse(user, profile) });
   } catch (err) {
-    console.error('Update user error:', err.message);
+    console.error('User.updateUser error:', err);
     return error(res, 'Failed to update user. Please try again.', 500);
   }
 };

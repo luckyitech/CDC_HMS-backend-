@@ -170,8 +170,51 @@ const copyPlan = ({ previous = [], existing = [], today, leave = new Set(), peop
   return out;
 };
 
+// ---------------------------------------------------------------------------
+// Roster vs hand-set dated working hours (5 Oct 2026, HR fixes #5). Owner
+// decision: the ROSTER wins. Both write dated StaffWorkHours rows; a hand-set
+// override on a day with a published roster cell needs an explicit confirm,
+// and publishing reports any hand-set override it replaced.
+// ---------------------------------------------------------------------------
+
+const hhmm = (t) => (t ? String(t).slice(0, 5) : null);
+const graceOf = (g) => (g === null || g === undefined || g === '' ? null : Number(g));
+
+/** Do a requested override and a stored dated row say the same thing? */
+const sameDatedHours = (a, b) => !!a && !!b
+  && !!a.isOff === !!b.isOff
+  && (a.isOff || (hhmm(a.startTime) === hhmm(b.startTime) && hhmm(a.endTime) === hhmm(b.endTime)))
+  && graceOf(a.graceMinutes) === graceOf(b.graceMinutes);
+
+/**
+ * Which requested overrides actually CHANGE something. The Working hours
+ * editor sends every override back on each save (including the rows a
+ * published roster wrote); an unchanged one must be left alone, or every save
+ * would quietly turn the roster's rows into hand-set ones.
+ *
+ * @param {Array} overrides  [{ date, isOff, startTime, endTime, graceMinutes, remove? }]
+ * @param {Map}   existing   date → the active dated row for that date
+ * @returns {Array} the overrides to apply
+ */
+const changedOverrides = (overrides, existing) => overrides.filter((o) => {
+  const ex = existing.get(o.date);
+  if (o.remove) return !!ex;
+  return !sameDatedHours(o, ex);
+});
+
+/**
+ * The dates where a hand change would replace a PUBLISHED roster cell.
+ * @param {Array} changes     from changedOverrides
+ * @param {Array} liveCells   [{ date, ... }] active cells with publishedAt set
+ */
+const rosterClashes = (changes, liveCells) => {
+  const byDate = new Map(liveCells.map((c) => [String(c.date).slice(0, 10), c]));
+  return changes.filter((o) => byDate.has(o.date)).map((o) => ({ date: o.date, cell: byDate.get(o.date) }));
+};
+
 module.exports = {
   ROSTER_ROLES, REST_HOURS, COLOURS,
   addDays, mondayOf, isMonday, weekDates, isRosterRole,
   cleanShiftType, minutesOf, isOvernight, workHoursOf, spanOf, warningsFor, copyPlan,
+  sameDatedHours, changedOverrides, rosterClashes,
 };

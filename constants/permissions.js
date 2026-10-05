@@ -1098,8 +1098,8 @@ const PERMISSION_GROUPS = [
         description: 'The Manage Users screen (login accounts). Staff files, onboarding, '
           + 'employment status and staff documents are separate controls under HR Suite · People.',
         access: PERMISSIONS.USERS_VIEW, write: PERMISSIONS.USERS_WRITE,
-        accessLabel: 'Can view users and open staff files',
-        writeLabel: 'Can create and edit users and staff files',
+        accessLabel: 'Can see the Manage Users list (login accounts)',
+        writeLabel: 'Can create and edit login accounts in Manage Users',
         roleDefault: 'Administrators' },
       { key: 'config', name: 'Catalog, wards and settings', appliesIn: 'Admin',
         access: null, write: PERMISSIONS.CONFIG_WRITE,
@@ -1507,6 +1507,27 @@ const canGrantHrPermissions = (user) =>
 /** Either kind of grantor — who may open the Permissions tab for editing at all. */
 const canEditPermissions = (user) => canGrantPermissions(user) || canGrantHrPermissions(user);
 
+// "HR staff" (HR Suite → Manual and its shared go-live checklist, 5 Oct 2026):
+// whoever holds at least ONE HR Suite control beyond Self-service — every
+// control in the HR groups of the Permissions tab except "My profile and My
+// leave" and "Check in and out", which everyone has. Derived from
+// PERMISSION_GROUPS, so a new HR control counts the moment it appears on the
+// tab. Mirrored by the frontend's HR_STAFF_CONTROLS / isHrStaff
+// (tests/hrManualChecklist.test.js keeps the two lists equal).
+const HR_STAFF_CONTROLS = [...new Set(PERMISSION_GROUPS
+  .filter((g) => g.hr && g.key !== 'hr-self')
+  .flatMap((g) => g.areas)
+  .flatMap((a) => [a.access, a.write])
+  .filter(Boolean))];
+
+/**
+ * Is this person HR staff? Passes the same gate authorize('admin', <control>)
+ * would for ANY one of HR_STAFF_CONTROLS — admin.access and the true admin
+ * pass; a control withdrawn from them does not count, but withdrawing one
+ * control never hides the manual from someone who still holds another.
+ */
+const isHrStaff = (user) => !!user && HR_STAFF_CONTROLS.some((p) => passesAdminGate(user, p));
+
 // ---------------------------------------------------------------------
 // Department scopes on HR controls (HR Tier 3 Phase 1, P-1/P-7/P-8)
 // ---------------------------------------------------------------------
@@ -1589,4 +1610,6 @@ module.exports = {
   HR_NOT_DELEGABLE,
   canGrantHrPermissions,
   canEditPermissions,
+  HR_STAFF_CONTROLS,
+  isHrStaff,
 };

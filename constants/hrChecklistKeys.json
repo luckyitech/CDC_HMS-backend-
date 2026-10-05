@@ -1,0 +1,59 @@
+{
+ "_generated": "by cdc-hms/scripts/build-hr-manual.mjs from the HR Suite Manual — do not edit by hand",
+ "sections": {
+  "golive": [
+   "golive-departments",
+   "golive-hr-controls",
+   "golive-presets",
+   "golive-leave-policy",
+   "golive-holidays-2027",
+   "golive-carry-cap",
+   "golive-approvers-reviewers",
+   "golive-cpd-expiry",
+   "golive-grace",
+   "golive-onboarding-templates",
+   "golive-roster",
+   "golive-appraisals",
+   "golive-tell-staff",
+   "golive-upload-test"
+  ],
+  "day1": [
+   "day1-read",
+   "day1-sign-in",
+   "day1-phone",
+   "day1-dashboard",
+   "day1-register",
+   "day1-staff-files"
+  ],
+  "day2": [
+   "day2-missed-checkouts",
+   "day2-refused-taps",
+   "day2-settings",
+   "day2-part-timers",
+   "day2-not-yet-in"
+  ],
+  "day3": [
+   "day3-policy",
+   "day3-holidays",
+   "day3-leave-all",
+   "day3-record-leave",
+   "day3-calendar",
+   "day3-approvers"
+  ],
+  "day4": [
+   "day4-lists",
+   "day4-onboarding",
+   "day4-requests",
+   "day4-upload",
+   "day4-expiring"
+  ],
+  "day5": [
+   "day5-roster",
+   "day5-publish",
+   "day5-appraisals",
+   "day5-reports",
+   "day5-troubleshooting",
+   "day5-agree-controls"
+  ]
+ }
+}

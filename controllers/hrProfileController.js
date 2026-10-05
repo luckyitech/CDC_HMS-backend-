@@ -28,6 +28,7 @@ const { resolveStoredFile } = require('../utils/staffDocumentStorage');
 const leaveService = require('../services/leaveService');
 const db = require('../models');
 const sequelize = require('../config/database');
+const { reportsToSummary } = require('../services/reportsTo');
 
 const { User, StaffProfile, StaffChangeRequest, StaffDocument, StaffLeave, UserEditLog } = db;
 
@@ -39,9 +40,11 @@ const fullName = (u) => (u ? `${u.firstName} ${u.lastName}`.trim() : null);
 // the access internals (the Permissions tab never shows in My profile).
 const ACCESS_KEYS = ['permissions', 'deniedPermissions', 'effectivePermissions', 'defaultPermissions',
   'canHoldPermissions', 'isTrueAdmin', 'passwordChangedAt'];
-const selfShape = (profile, user) => {
+const selfShape = async (profile, user) => {
   const s = formatStaff(profile, user);
   for (const k of ACCESS_KEYS) delete s[k];
+  // The line manager by name (#1, 5 Oct 2026) — read-only on My profile.
+  s.reportsTo = await reportsToSummary(profile.reportsToId);
   return s;
 };
 
@@ -104,7 +107,7 @@ const me = async (req, res) => {
     ]);
     const typeNames = Object.fromEntries(typeList.map((t) => [t.key, t.name]));
     const days = (d) => Math.ceil((new Date(d).getTime() - new Date(`${today}T00:00:00Z`).getTime()) / 86400000);
-    const shaped = selfShape(profile, user);
+    const shaped = await selfShape(profile, user);
 
     return success(res, {
       profile: shaped,
@@ -148,7 +151,7 @@ const saveContact = async (req, res) => {
       phone: user.phone, address: profile.address, city: profile.city, emergencyContact: parseJsonColumn(profile.emergencyContact),
     };
     const changes = { ...buildChanges(before, clean.user), ...buildChanges(before, clean.profile) };
-    if (!Object.keys(changes).length) return success(res, { profile: selfShape(profile, user), changed: [] });
+    if (!Object.keys(changes).length) return success(res, { profile: await selfShape(profile, user), changed: [] });
 
     await sequelize.transaction(async (t) => {
       if (Object.keys(clean.user).length) await user.update(clean.user, { transaction: t });
@@ -163,7 +166,7 @@ const saveContact = async (req, res) => {
     });
 
     await profile.reload({ include: [{ model: User, attributes: { exclude: SECRET } }] });
-    return success(res, { profile: selfShape(profile, profile.User), changed: Object.keys(changes) });
+    return success(res, { profile: await selfShape(profile, profile.User), changed: Object.keys(changes) });
   } catch (err) {
     console.error('SelfProfile.saveContact error:', err);
     return error(res, 'Failed to save your contact details', 500);

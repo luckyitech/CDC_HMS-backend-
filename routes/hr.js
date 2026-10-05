@@ -93,6 +93,10 @@ router.post('/attendance/tap', authenticate, tapLimiter, authorize(...CHECKIN), 
   validate,
 ], hrAttendance.tap);
 
+// What the tap page needs to know before the tap (#7, 5 Oct 2026): whether to
+// ask the phone for its location at all. Same gate as the tap itself.
+router.get('/attendance/checkin-config', authenticate, authorize(...CHECKIN), hrAttendance.checkinConfig);
+
 // ---- Attendance: own record ------------------------------------------------
 router.get('/attendance/me',         authenticate, authorize(...CHECKIN), hrAttendance.mine);
 router.get('/attendance/me/summary', authenticate, authorize(...CHECKIN), [
@@ -139,7 +143,6 @@ router.post('/tags/:id/test', authenticate, authorize(...TAGS), [param('id').isI
 // ---- Settings ----------------------------------------------------------------
 router.get('/settings', authenticate, authorize(...SETTINGS_READ), hrSettings.get);
 router.put('/settings', authenticate, authorize(...SETTINGS), [
-  body('autoCheckin').optional().isBoolean().toBoolean(),
   body('confirmCheckout').optional().isBoolean().toBoolean(),
   body('positiveFeedback').optional().isBoolean().toBoolean(),
   validate,

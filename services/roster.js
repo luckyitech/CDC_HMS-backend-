@@ -213,17 +213,40 @@ const unLive = async (cell, actorId, transaction) => {
     { where: { id: cell.workHoursId, status: 'active' }, transaction });
 };
 
+/**
+ * Makes a cell the person's dated working hours. Returns the HAND-SET dated
+ * overrides it replaced (#5, 5 Oct 2026 — the roster wins, and says so):
+ * [{ userId, date, hours }]. A row an earlier roster cell wrote is not "hand-set".
+ */
 const makeLive = async (cell, actorId, transaction) => {
   // The roster's word is the latest: any dated row for that day is retired first.
-  await StaffWorkHours.update({ status: 'retired', updatedById: actorId },
-    { where: { UserId: cell.UserId, date: cell.date, status: 'active' }, transaction });
+  const current = await StaffWorkHours.findAll({ where: { UserId: cell.UserId, date: cell.date, status: 'active' }, transaction });
+  let replaced = [];
+  if (current.length) {
+    const owned = new Set((await RosterShift.findAll({
+      where: { workHoursId: { [Op.in]: current.map((r) => r.id) } }, attributes: ['workHoursId'], raw: true, transaction,
+    })).map((c) => c.workHoursId));
+    replaced = current.filter((r) => !owned.has(r.id)).map((r) => ({
+      userId: cell.UserId, date: String(cell.date).slice(0, 10),
+      hours: r.isOff ? 'Off' : `${toHHMM(r.startTime)}–${toHHMM(r.endTime)}`,
+    }));
+    await StaffWorkHours.update({ status: 'retired', updatedById: actorId },
+      { where: { id: { [Op.in]: current.map((r) => r.id) } }, transaction });
+  }
   const wh = R.workHoursOf({ isOff: cell.isOff, startTime: toHHMM(cell.startTime), endTime: toHHMM(cell.endTime) });
   const row = await StaffWorkHours.create({
     UserId: cell.UserId, weekday: null, date: cell.date, ...wh, graceMinutes: null,
     status: 'active', createdById: actorId, updatedById: actorId,
   }, { transaction });
   await cell.update({ publishedAt: new Date(), workHoursId: row.id, updatedById: actorId }, { transaction });
+  return replaced;
 };
+
+/** "Tue 6 Oct: 09:00–13:00 (set by hand)" lines for a person's Activity log. */
+const replacedLine = (list) => list.map((r) => `${dayLabel(r.date)}: ${r.hours} (set by hand)`).join('; ');
+
+/** Names the people in a replaced-override list, for the screen. */
+const nameReplaced = (list, people) => list.map((r) => ({ ...r, name: fullName(people.find((u) => u.id === r.userId)) }));
 
 const describe = (c) => (c.isOff ? 'Off' : `${c.name || 'Shift'} ${toHHMM(c.startTime)}–${toHHMM(c.endTime)}`);
 
@@ -314,19 +337,23 @@ const setCell = async (user, { department, weekStart, userId, date, shiftTypeId,
       await old.update({ status: 'removed', updatedById: user.id }, { transaction });
     }
     let cell = null;
+    let replaced = [];
     if (!clear) {
       cell = await RosterShift.create({
         UserId: person.id, date, shiftTypeId: type ? type.id : null, isOff: !!off,
         startTime: type ? toHHMM(type.startTime) : null, endTime: type ? toHHMM(type.endTime) : null,
         status: 'active', createdById: user.id, updatedById: user.id,
       }, { transaction });
-      if (live) await makeLive(cell, user.id, transaction);
+      if (live) replaced = await makeLive(cell, user.id, transaction);
     }
     const wasLive = !!old?.publishedAt;
     if (live || wasLive) {
       const from = old ? describe({ ...old.get({ plain: true }), name: old.shiftType?.name }) : 'not rostered';
       const to = cell ? describe({ ...cell.get({ plain: true }), name: type?.name }) : 'not rostered (usual hours)';
-      await writeUserEditLog({ targetUserId: person.id, actor: user, transaction, changes: { roster: { from: `${dayLabel(date)}: ${from}`, to } } });
+      await writeUserEditLog({ targetUserId: person.id, actor: user, transaction, changes: {
+        roster: { from: `${dayLabel(date)}: ${from}`, to },
+        ...(replaced.length ? { workingHours: { from: replacedLine(replaced), to: 'replaced by the roster' } } : {}),
+      } });
     }
     await transaction.commit();
     if (live || wasLive) {
@@ -336,7 +363,7 @@ const setCell = async (user, { department, weekStart, userId, date, shiftTypeId,
       }).catch(() => {});
     }
     if (cell) await cell.reload({ include: [{ model: RosterShiftType, as: 'shiftType', attributes: ['id', 'name', 'colour'], required: false }] });
-    return { cell: cell ? shapeCell(cell) : null, live, changed: true };
+    return { cell: cell ? shapeCell(cell) : null, live, changed: true, replacedOverrides: nameReplaced(replaced, [person]) };
   } catch (err) {
     try { await transaction.rollback(); } catch { /* already done */ }
     throw err;
@@ -366,6 +393,7 @@ const copyLastWeek = async (user, { department, weekStart }) => {
 
   const transaction = await sequelize.transaction();
   const touched = new Set();
+  const replaced = [];
   try {
     const week = await ensureWeek(user, departmentId, weekStart, transaction);
     const live = week.status === 'published';
@@ -373,10 +401,14 @@ const copyLastWeek = async (user, { department, weekStart }) => {
       const clash = await RosterShift.count({ where: { UserId: p.UserId, date: p.date, status: 'active' }, transaction });
       if (clash) continue;
       const cell = await RosterShift.create({ ...p, status: 'active', createdById: user.id, updatedById: user.id }, { transaction });
-      if (live) { await makeLive(cell, user.id, transaction); touched.add(p.UserId); }
+      if (live) { replaced.push(...await makeLive(cell, user.id, transaction)); touched.add(p.UserId); }
     }
     for (const uid of touched) {
-      await writeUserEditLog({ targetUserId: uid, actor: user, transaction, changes: { roster: { from: null, to: `Week of ${dayLabel(weekStart)}: copied from last week` } } });
+      const mine = replaced.filter((r) => r.userId === uid);
+      await writeUserEditLog({ targetUserId: uid, actor: user, transaction, changes: {
+        roster: { from: null, to: `Week of ${dayLabel(weekStart)}: copied from last week` },
+        ...(mine.length ? { workingHours: { from: replacedLine(mine), to: 'replaced by the roster' } } : {}),
+      } });
     }
     await transaction.commit();
   } catch (err) {
@@ -389,7 +421,7 @@ const copyLastWeek = async (user, { department, weekStart }) => {
       body: 'Open My profile in the HR Suite to see your shifts.', link: '/hr/me', actorName: fullName(user),
     }).catch(() => {});
   }
-  return { copied: plan.length };
+  return { copied: plan.length, replacedOverrides: nameReplaced(replaced, people) };
 };
 
 const setMinCover = async (user, { department, weekStart, minCover }) => {
@@ -424,6 +456,7 @@ const publish = async (user, { department, weekStart }) => {
   const ids = people.map((u) => u.id);
   const transaction = await sequelize.transaction();
   const counts = new Map();
+  const replaced = [];
   try {
     const week = await ensureWeek(user, departmentId, weekStart, transaction);
     const cells = ids.length ? await RosterShift.findAll({
@@ -431,14 +464,18 @@ const publish = async (user, { department, weekStart }) => {
       transaction, lock: transaction.LOCK.UPDATE,
     }) : [];
     for (const c of cells) {
-      await makeLive(c, user.id, transaction);
+      replaced.push(...await makeLive(c, user.id, transaction));
       counts.set(c.UserId, (counts.get(c.UserId) || 0) + 1);
     }
     if (week.status !== 'published') {
       await week.update({ status: 'published', publishedAt: new Date(), publishedById: user.id }, { transaction });
     }
     for (const [uid, n] of counts) {
-      await writeUserEditLog({ targetUserId: uid, actor: user, transaction, changes: { roster: { from: null, to: `Week of ${dayLabel(weekStart)} published (${n} day${n === 1 ? '' : 's'})` } } });
+      const mine = replaced.filter((r) => r.userId === uid);
+      await writeUserEditLog({ targetUserId: uid, actor: user, transaction, changes: {
+        roster: { from: null, to: `Week of ${dayLabel(weekStart)} published (${n} day${n === 1 ? '' : 's'})` },
+        ...(mine.length ? { workingHours: { from: replacedLine(mine), to: 'replaced by the roster' } } : {}),
+      } });
     }
     await transaction.commit();
   } catch (err) {
@@ -451,7 +488,12 @@ const publish = async (user, { department, weekStart }) => {
       body: 'Open My profile in the HR Suite to see your shifts.', link: '/hr/me', actorName: fullName(user),
     }).catch(() => {});
   }
-  return { published: [...counts.values()].reduce((a, b) => a + b, 0), people: counts.size };
+  return {
+    published: [...counts.values()].reduce((a, b) => a + b, 0),
+    people: counts.size,
+    // #5: hand-set dated working hours the roster replaced, for the publish result.
+    replacedOverrides: nameReplaced(replaced, people),
+  };
 };
 
 /** My published shifts, today and the next 13 days (RO-11). Drafts never show. */

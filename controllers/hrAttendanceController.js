@@ -22,7 +22,8 @@ const { clinicToday } = require('../utils/clinicTime');
 const { getHrConfig } = require('../utils/hrConfig');
 const { verifySun } = require('../utils/ntag424');
 const { decrypt } = require('../utils/crypto');
-const { decide, punctuality, starFor, clinicHHMM, minutesBetween } = require('../utils/attendanceRules');
+const { decide, punctuality, starFor, clinicHHMM, minutesBetween, expectedAtWork } = require('../utils/attendanceRules');
+const { TAKEN_STATUSES } = require('../utils/leaveWorkflow');
 const { buildTapMessages, titleFor } = require('../utils/tapMessages');
 const { buildChanges } = require('../utils/auditChanges');
 const { parseJsonColumn } = require('../utils/jsonColumn');
@@ -154,15 +155,17 @@ const tap = async (req, res) => {
         expectedInAt: expected.startAt, expectedOutAt: expected.endAt,
         checkInPunctuality: punct.state, lateMinutes: punct.state === 'late' ? punct.minutes : (expected.startAt ? 0 : null),
         checkOutPunctuality: 'none', status: 'open', createdById: me.id,
-        diagnostics: { ua, ctr: ctrHex, geoAccuracy: geo.accuracy, hoursSource: expected.source },
+        // grace: the person's own grace for this day, so the check-out star
+        // uses the same one (#8) — the tap, a manual entry and an amend agree.
+        diagnostics: { ua, ctr: ctrHex, geoAccuracy: geo.accuracy, hoursSource: expected.source, grace: expected.grace },
       }, { transaction });
       star = { side: 'in', colour: starFor('in', punct.state) };
       outAction = 'checked_in';
     } else if (action === 'offer_checkout') {
-      punct = punctuality({ at: now, expectedAt: last.expectedOutAt, graceMinutes: cfg.graceMinutes, kind: 'out' });
+      punct = punctuality({ at: now, expectedAt: last.expectedOutAt, graceMinutes: await svc.graceOf(last, cfg), kind: 'out' });
       confirmToken = jwt.sign({ t: 'hr-confirm', u: me.id, tagId: tag.id, ctr: ctrHex }, process.env.JWT_SECRET, { expiresIn: CONFIRM_TTL });
     } else if (action === 'checkout') {
-      punct = punctuality({ at: now, expectedAt: last.expectedOutAt, graceMinutes: cfg.graceMinutes, kind: 'out' });
+      punct = punctuality({ at: now, expectedAt: last.expectedOutAt, graceMinutes: await svc.graceOf(last, cfg), kind: 'out' });
       const diag = parseJsonColumn(last.diagnostics) || {};
       await last.update({
         checkOutAt: now, checkOutMethod: 'nfc', checkOutVerification: verification, checkOutTagId: tag.id,
@@ -204,6 +207,21 @@ const tap = async (req, res) => {
     if (transaction) { try { await transaction.rollback(); } catch { /* ignore */ } }
     console.error('StaffAttendance.tap error:', err);
     return error(res, 'The tap could not be recorded. Please try again.', 500);
+  }
+};
+
+/**
+ * GET /api/hr/attendance/checkin-config — { geo: 'off' | 'log' }. With
+ * "Phone location: Off" the tap page must not ask the phone for its location
+ * (#7); the server already discards one sent anyway (geoOf).
+ */
+const checkinConfig = async (req, res) => {
+  try {
+    const cfg = await getHrConfig();
+    return success(res, { geo: cfg.geo });
+  } catch (err) {
+    console.error('StaffAttendance.checkinConfig error:', err);
+    return error(res, 'Failed to load the check-in settings', 500);
   }
 };
 
@@ -268,7 +286,8 @@ const today = async (req, res) => {
 
     const [hoursRows, leaves, todayRows, missed] = await Promise.all([
       StaffWorkHours.findAll({ where: { UserId: { [Op.in]: ids }, status: 'active' } }),
-      StaffLeave.findAll({ where: { UserId: { [Op.in]: ids }, status: 'Approved', startDate: { [Op.lte]: clinicDate }, endDate: { [Op.gte]: clinicDate } }, attributes: ['UserId'] }),
+      // Approved, or Approved with an undecided cancel request — still away (#3).
+      StaffLeave.findAll({ where: { UserId: { [Op.in]: ids }, status: { [Op.in]: TAKEN_STATUSES }, startDate: { [Op.lte]: clinicDate }, endDate: { [Op.gte]: clinicDate } }, attributes: ['UserId'] }),
       StaffAttendance.findAll({ where: { clinicDate, UserId: { [Op.in]: ids } }, include: svc.SESSION_INCLUDE, order: [['checkInAt', 'ASC']] }),
       StaffAttendance.findAll({ where: { status: 'missed_checkout', UserId: { [Op.in]: ids } }, include: svc.SESSION_INCLUDE, order: [['clinicDate', 'DESC']], limit: 50 }),
     ]);
@@ -278,9 +297,13 @@ const today = async (req, res) => {
     const byUser = new Map();
     for (const r of todayRows) { const l = byUser.get(r.UserId) || []; l.push(r); byUser.set(r.UserId, l); }
 
+    // #9: the board expects only people who check in (not administrator
+    // accounts, not anyone whose Check in is withdrawn) — unless they tapped.
+    const board = users.filter((u) => expectedAtWork(u) || (byUser.get(u.id) || []).length);
+
     const people = [];
-    const counts = { inNow: 0, total: users.length, notYetIn: 0, lateToday: 0, flaggedToday: 0, refusedToday: 0, missedCheckouts: missed.length };
-    for (const u of users) {
+    const counts = { inNow: 0, total: board.length, notYetIn: 0, lateToday: 0, flaggedToday: 0, refusedToday: 0, missedCheckouts: missed.length };
+    for (const u of board) {
       const expected = await svc.expectedFor(u.id, clinicDate, cfg, hoursBy.get(u.id) || []);
       const sessions = (byUser.get(u.id) || []).filter((r) => ['open', 'closed', 'missed_checkout'].includes(r.status));
       const refused = (byUser.get(u.id) || []).filter((r) => r.status === 'refused');
@@ -291,7 +314,7 @@ const today = async (req, res) => {
       if (open) state = 'in';
       else if (last) state = 'out';
       else if (onLeave.has(u.id)) state = 'on_leave';
-      else if (!expected.startAt) state = 'off';
+      else if (!expected.startAt || !expectedAtWork(u)) state = 'off';
       else { state = 'not_in'; lateMinutes = Math.max(0, minutesBetween(expected.startAt, now)); }
       const first = sessions[0];
       const lateIn = first && first.checkInPunctuality === 'late';
@@ -506,4 +529,4 @@ const getOne = async (req, res) => {
   }
 };
 
-module.exports = { tap, mine, mySummary, today, list, manual, amend, getOne };
+module.exports = { tap, checkinConfig, mine, mySummary, today, list, manual, amend, getOne };

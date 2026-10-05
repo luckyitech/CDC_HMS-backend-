@@ -258,8 +258,10 @@ const savePolicy = async (req, res) => {
     const edit = rules.editability({ year, today: clinicToday(), policy: existing ? { status: existing.status } : null });
     if (!edit.canEdit && !edit.canCreate) return error(res, edit.reason, 409, { code: edit.code });
 
-    const activeKeys = (await leaveService.listTypes()).map((t) => t.key);
-    const { ok, errors, value } = rules.validatePolicy(req.body || {}, { activeKeys });
+    const activeTypes = await leaveService.listTypes();
+    const activeKeys = activeTypes.map((t) => t.key);
+    const names = Object.fromEntries(activeTypes.map((t) => [t.key, t.name]));
+    const { ok, errors, value } = rules.validatePolicy(req.body || {}, { activeKeys, names });
     if (!ok) return error(res, errors[0], 400, { code: 'POLICY_INVALID', errors });
 
     const before = await leaveService.loadPolicy(year, { publishedOnly: false });
@@ -289,9 +291,10 @@ const publishPolicy = async (req, res) => {
     if (row.status === 'published') return error(res, `The ${year} policy is already published.`, 409, { code: 'ALREADY_PUBLISHED' });
     if (!edit.canPublish) return error(res, edit.reason, 409, { code: edit.code });
 
-    const activeKeys = (await leaveService.listTypes()).map((t) => t.key);
+    const activeTypes = await leaveService.listTypes();
+    const activeKeys = activeTypes.map((t) => t.key);
     const policy = await leaveService.loadPolicy(year, { publishedOnly: false });
-    const problems = rules.publishProblems(policy, activeKeys);
+    const problems = rules.publishProblems(policy, activeKeys, Object.fromEntries(activeTypes.map((t) => [t.key, t.name])));
     if (problems.length) return error(res, problems[0], 400, { code: 'POLICY_INCOMPLETE', errors: problems });
 
     await row.update({ status: 'published', publishedAt: new Date(), publishedById: req.user.id, updatedBy: req.user.id });
@@ -327,7 +330,8 @@ const copyPolicy = async (req, res) => {
     const source = await leaveService.loadPolicy(from, { publishedOnly: false });
     if (!source) return error(res, `There is no ${from} policy to copy.`, 404, { code: 'NO_POLICY' });
 
-    const activeKeys = (await leaveService.listTypes()).map((t) => t.key);
+    const activeTypes = await leaveService.listTypes();
+    const activeKeys = activeTypes.map((t) => t.key);
     const body = {
       weekWeights: source.weekWeights,
       countingMode: source.countingMode,
@@ -340,7 +344,7 @@ const copyPolicy = async (req, res) => {
       visibleTypes: (Array.isArray(source.visibleTypes) ? source.visibleTypes : activeKeys).filter((k) => activeKeys.includes(k)),
       types: Object.fromEntries(Object.entries(source.types).filter(([k]) => activeKeys.includes(k))),
     };
-    const { ok, errors, value } = rules.validatePolicy(body, { activeKeys });
+    const { ok, errors, value } = rules.validatePolicy(body, { activeKeys, names: Object.fromEntries(activeTypes.map((t) => [t.key, t.name])) });
     if (!ok) return error(res, `The ${from} policy can't be copied as it stands: ${errors[0]}`, 400, { code: 'POLICY_INVALID', errors });
 
     const before = await leaveService.loadPolicy(year, { publishedOnly: false });
@@ -659,15 +663,15 @@ const saveEntitlement = async (req, res) => {
     if (!(await hrScope.canActOn(req.user, PERMISSIONS.LEAVE_ENTITLEMENTS, user.id))) return error(res, 'Staff member not found', 404);
 
     const balances = Array.isArray(req.body.balances) ? req.body.balances : [];
-    const known = new Set((await leaveService.listTypes({ includeRetired: true })).map((t) => t.key));
+    const typeNames = await typeNameMap();
     for (const b of balances) {
-      if (!b || !known.has(b.leaveType)) return error(res, `Unknown leave type: ${b?.leaveType}`, 400);
+      if (!b || !typeNames[b.leaveType]) return error(res, `Unknown leave type: ${b?.leaveType}`, 400);
       for (const f of ['entitled', 'carriedOver']) {
         const v = b[f];
         if (v === undefined || v === null || v === '') continue;
         const n = Number(v);
         if (!Number.isFinite(n) || n < 0 || n > 366 || Math.round(n * 4) !== n * 4) {
-          return error(res, `${b.leaveType}: ${f === 'entitled' ? 'days' : 'carried-in days'} must be between 0 and 366, in quarter days.`, 400);
+          return error(res, `${typeNames[b.leaveType]}: ${f === 'entitled' ? 'days' : 'carried-in days'} must be between 0 and 366, in quarter days.`, 400);
         }
       }
     }

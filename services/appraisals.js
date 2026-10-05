@@ -358,7 +358,7 @@ const saveSelf = async (user, id, body = {}) => {
     if (body.submit) {
       const fresh = await AppraisalRating.findAll({ where: { appraisalId: a.id }, transaction });
       if (!A.allRated(fresh.map((r) => r.get({ plain: true })), 'self')) throw new AppraisalError('Rate every competency before you submit', 'NOT_RATED');
-      if (!a.reviewerId) throw new AppraisalError('HR has not chosen your reviewer yet — your answers are saved; submit once they have', 'NO_REVIEWER', 409);
+      if (!a.reviewerId) throw new AppraisalError('HR has not chosen your reviewer yet, so nothing was saved. Use Save draft to keep your answers, and submit once HR has chosen your reviewer.', 'NO_REVIEWER', 409);
       Object.assign(patch, { status: 'review', selfSubmittedAt: new Date() });
       submitted = a.reviewerId;
     }

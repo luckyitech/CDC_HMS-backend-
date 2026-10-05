@@ -124,7 +124,14 @@ const clinicMidnight = (clinicDate) => {
 // "today's" queue, "today's" registrations, "today's" movements.
 const clinicStartOfDay = (now = new Date()) => clinicMidnight(clinicToday(now));
 
+// The hour (0–23) in Nairobi. The daily HR passes (expiry reminders, the
+// cancel-request reminder) wait until 06:00 so nobody is woken by a bell or an
+// email just after midnight. Moved here from services/expiryReminders (5 Oct 2026).
+const nairobiHour = (now = new Date()) =>
+  Number(new Intl.DateTimeFormat('en-GB', { timeZone: 'Africa/Nairobi', hour: 'numeric', hour12: false }).format(now)) % 24;
+
 module.exports = {
+  nairobiHour,
   clinicToday,
   clinicDatePlusDays,
   clinicMonthStart,

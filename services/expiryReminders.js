@@ -8,7 +8,8 @@
 // they renew it (no nagging).
 //
 // The person is told (expiry_self); holders of hr.expiry.alerts get the
-// clinic-wide alert (expiry_hr). Each (item, threshold, expiry date) fires once
+// clinic-wide alert (expiry_hr). A CONFIDENTIAL ('Admin only') document is told
+// only to holders of hr.confidential (expiry_hr), never the person (#11). Each (item, threshold, expiry date) fires once
 // — ExpiryReminders is the de-duplication log, so a renewed date starts a fresh
 // set and a restart never double-sends. A licence or document name is not health
 // data, so it may appear in the notice; nothing clinical does.
@@ -19,10 +20,10 @@
 
 const { Op } = require('sequelize');
 const db = require('../models');
-const { clinicToday } = require('../utils/clinicTime');
+const { clinicToday, nairobiHour } = require('../utils/clinicTime');
 const { daysUntil, dueThreshold, isoDay } = require('../utils/expiry');
 const { getHrConfig } = require('../utils/hrConfig');
-const { PERMISSIONS } = require('../constants/permissions');
+const { PERMISSIONS, canViewConfidential } = require('../constants/permissions');
 const hrNotify = require('./hrNotify');
 const hrScope = require('./hrScope');
 const { isHealthDocument } = require('../utils/hrAccess');
@@ -30,7 +31,6 @@ const { isHealthDocument } = require('../utils/hrAccess');
 const { User, StaffProfile, StaffDocument, ExpiryReminder } = db;
 
 const fullName = (u) => (u ? `${u.firstName} ${u.lastName}`.trim() : 'A colleague');
-const nairobiHour = (now) => Number(new Intl.DateTimeFormat('en-GB', { timeZone: 'Africa/Nairobi', hour: 'numeric', hour12: false }).format(now)) % 24;
 const inDays = (daysLeft) => (daysLeft <= 0 ? 'today' : `in ${daysLeft} day${daysLeft === 1 ? '' : 's'}`);
 
 // Runs at most once per clinic day; the daily pass waits until 06:00 Nairobi.
@@ -61,12 +61,15 @@ const fireOne = async ({ kind, refId, threshold, expiryDate, daysLeft, ownerId, 
   });
   if (!created) return 0;   // already sent for this milestone and date
 
-  await hrNotify.notify('expiry_self', {
-    recipients: [ownerId],
-    title: selfTitle,
-    body: 'Open the HMS to renew it.',
-    link: selfLink,
-  });
+  // ownerId null: a confidential document — the person is not told (#11).
+  if (ownerId) {
+    await hrNotify.notify('expiry_self', {
+      recipients: [ownerId],
+      title: selfTitle,
+      body: 'Open the HMS to renew it.',
+      link: selfLink,
+    });
+  }
   if (hrRecipients.length) {
     await hrNotify.notify('expiry_hr', {
       recipients: hrRecipients,
@@ -135,6 +138,43 @@ const runExpiryReminders = async (now = new Date()) => {
       hrTitle: `${fullName(d.User)}'s ${isHealthDocument(d) ? 'document' : label} expires ${inDays(daysLeft)}`,
       hrLink: '/hr/requests',
       hrRecipients: await recipientsFor(d.UserId),
+    });
+  }
+
+  // --- Confidential documents with an expiry (Admin only, live) — #11 -------
+  // A contract filed Admin only is the document most likely to carry an end
+  // date. Only holders of "Confidential staff documents" whose scope covers the
+  // person are told — never the person, never the general expiry holders.
+  // Health documents (sick notes) stay out entirely.
+  const confidentialHolders = new Map();
+  const confidentialFor = async (userId) => {
+    if (!confidentialHolders.has(userId)) {
+      confidentialHolders.set(userId, await hrScope.holdersFor(PERMISSIONS.HR_CONFIDENTIAL, userId, { holds: canViewConfidential }));
+    }
+    return confidentialHolders.get(userId);
+  };
+  const confidentialDocs = await StaffDocument.findAll({
+    where: { isArchived: false, visibility: 'Admin only', expiryDate: { [Op.ne]: null } },
+    include: [{
+      model: User, attributes: ['id', 'firstName', 'lastName', 'isActive'], where: { isActive: true },
+      include: [{ model: StaffProfile, attributes: ['employeeId'], required: false }],
+    }],
+  });
+  for (const d of confidentialDocs) {
+    if (isHealthDocument(d)) continue;
+    const expiryDate = isoDay(d.expiryDate);
+    if (!expiryDate) continue;
+    const daysLeft = daysUntil(d.expiryDate, today);
+    const threshold = dueThreshold(daysLeft, thresholds);
+    if (threshold === null) continue;
+    const recipients = await confidentialFor(d.UserId);
+    if (!recipients.length) continue;
+    const label = d.category || d.fileName || 'A document';
+    sent += await fireOne({
+      kind: 'document', refId: d.id, threshold, expiryDate, daysLeft, ownerId: null,
+      hrTitle: `${fullName(d.User)}'s ${label} (confidential) expires ${inDays(daysLeft)}`,
+      hrLink: d.User.StaffProfile?.employeeId ? `/hr/staff/${d.User.StaffProfile.employeeId}?tab=documents` : '/hr/staff',
+      hrRecipients: recipients,
     });
   }
 

@@ -13,7 +13,7 @@ const { Op } = require('sequelize');
 const db = require('../models');
 const { clinicToday } = require('../utils/clinicTime');
 const { getHrConfig } = require('../utils/hrConfig');
-const { PERMISSIONS } = require('../constants/permissions');
+const { PERMISSIONS, canViewConfidential } = require('../constants/permissions');
 const { STAFF_ROLES } = require('../constants/staffRoles');
 const { summariseCpd, cadreForRole } = require('../utils/cpd');
 const { isHealthDocument } = require('../utils/hrAccess');
@@ -118,8 +118,13 @@ const cpdReport = async (people, year, today, names) => {
   return { year, people: rows };
 };
 
-/** Licences and staff-visible documents expired or expiring (R-6). */
-const expiryReport = async (people, today, window, names) => {
+/**
+ * Licences and documents expired or expiring (R-6). Staff-visible documents
+ * for everyone in the report; CONFIDENTIAL ('Admin only') ones only for the
+ * people whose confidential drawer the viewer may open (#11, 5 Oct 2026 —
+ * hr.confidential, an explicit grant, within its scope). Sick notes never.
+ */
+const expiryReport = async (people, today, window, names, viewer = null) => {
   const byId = new Map(people.map((p) => [p.id, p]));
   const items = [];
   for (const p of people) {
@@ -132,15 +137,27 @@ const expiryReport = async (people, today, window, names) => {
     }
   }
   if (people.length) {
+    const confidentialIds = new Set();
+    if (viewer && canViewConfidential(viewer)) {
+      for (const id of byId.keys()) {
+        if (await hrScope.canActOn(viewer, PERMISSIONS.HR_CONFIDENTIAL, id)) confidentialIds.add(id);
+      }
+    }
     const docs = await StaffDocument.findAll({
-      where: { UserId: { [Op.in]: [...byId.keys()] }, isArchived: false, visibility: 'Staff', expiryDate: { [Op.ne]: null } },
-      attributes: ['id', 'UserId', 'category', 'fileName', 'expiryDate'],
+      where: {
+        UserId: { [Op.in]: [...byId.keys()] },
+        isArchived: false,
+        visibility: confidentialIds.size ? { [Op.in]: ['Staff', 'Admin only'] } : 'Staff',
+        expiryDate: { [Op.ne]: null },
+      },
+      attributes: ['id', 'UserId', 'category', 'fileName', 'expiryDate', 'visibility'],
     });
     for (const d of docs) {
       if (isHealthDocument(d)) continue;   // a sick note is never listed
+      if (d.visibility !== 'Staff' && !confidentialIds.has(Number(d.UserId))) continue;
       items.push({
         ...personCols(byId.get(Number(d.UserId)), names), kind: 'document',
-        item: d.category || d.fileName || 'Document', expiryDate: d.expiryDate,
+        item: `${d.category || d.fileName || 'Document'}${d.visibility === 'Staff' ? '' : ' (confidential)'}`, expiryDate: d.expiryDate,
       });
     }
   }
@@ -180,7 +197,7 @@ const build = async (user, { year, month, window } = {}) => {
   const [leave, cpd, expiries, punctuality] = await Promise.all([
     leaveReport(employed, y, today, names),
     cpdReport(employed, y, today, names),
-    expiryReport(employed, today, w, names),
+    expiryReport(employed, today, w, names, user),
     punctualityReport(employed.filter((p) => p.profile?.employmentStatus !== 'Suspended'), m, names),
   ]);
 

@@ -9,6 +9,7 @@
 
 const { CLINIC_TZ } = require('./clinicTime');
 const { spanMinutes } = require('./workHours');
+const { PERMISSIONS, INTERNAL_ROLES, passesGate } = require('../constants/permissions');
 
 const MINUTE = 60 * 1000;
 
@@ -281,7 +282,20 @@ const monthSummary = ({ month, days, rows, today }) => {
   };
 };
 
+/**
+ * Is this person EXPECTED at work on the Today board (#9, 5 Oct 2026)? Not an
+ * administrator account, and passes the "Check in and out" gate — the same
+ * list the tap route uses (routes/hr.js CHECKIN: every internal role by role,
+ * or a grant of hr.checkin; a withdrawal wins). So withdrawing Check in on
+ * someone's Permissions tab takes them off the "Not yet in" list. Someone not
+ * expected still appears if they tapped.
+ */
+const CHECKIN_GATE = [...INTERNAL_ROLES, PERMISSIONS.HR_CHECKIN];
+const expectedAtWork = (user) => !!user && user.role !== 'admin' && passesGate(user, CHECKIN_GATE);
+
 module.exports = {
+  expectedAtWork,
+  CHECKIN_GATE,
   MINUTE,
   minutesBetween,
   clinicHHMM,
