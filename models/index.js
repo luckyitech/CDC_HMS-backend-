@@ -34,6 +34,7 @@ const RosterWeek          = require('./RosterWeek');
 const RosterShift         = require('./RosterShift');
 const HrChecklistItem     = require('./HrChecklistItem');
 const HrChecklistEvent    = require('./HrChecklistEvent');
+const FormDraft           = require('./FormDraft');
 const AppraisalCompetency = require('./AppraisalCompetency');
 const AppraisalCycle      = require('./AppraisalCycle');
 const Appraisal           = require('./Appraisal');
@@ -221,6 +222,12 @@ HrChecklistItem.belongsTo(User, { as: 'doneBy', foreignKey: 'doneById' });
 HrChecklistItem.belongsTo(User, { as: 'noteBy', foreignKey: 'noteById' });
 HrChecklistItem.belongsTo(User, { as: 'createdBy', foreignKey: 'createdById' });
 HrChecklistEvent.belongsTo(User, { as: 'by', foreignKey: 'byId' });
+
+// Autosave drafts (20260928000019) — author + canonical patient. Not part of
+// the record; deleted with either (CASCADE in the migration).
+FormDraft.belongsTo(User, { as: 'author', foreignKey: 'userId' });
+FormDraft.belongsTo(Patient);
+Patient.hasMany(FormDraft);
 
 // HR Tier 3 Phase 5 — appraisals (migration 20260928000014).
 User.hasMany(Appraisal);
@@ -698,6 +705,7 @@ const db = {
   RosterShift,
   HrChecklistItem,
   HrChecklistEvent,
+  FormDraft,
   AppraisalCompetency,
   AppraisalCycle,
   Appraisal,

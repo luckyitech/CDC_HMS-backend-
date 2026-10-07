@@ -45,6 +45,14 @@ sequelize.authenticate()
         console.error('[HR] missed-checkout sweep not started:', err.message);
       }
 
+      // Autosave drafts: one bell reminder on day 12, deleted after 14 days
+      // untouched. Hourly. Never affects the API.
+      try {
+        require('./services/draftSweep').startScheduler();
+      } catch (err) {
+        console.error('[Drafts] draft sweep not started:', err.message);
+      }
+
       // Staff Email phase 5: check every connected mailbox every 5 minutes
       // (metadata of every email + replies into patient threads). Never
       // affects the API. MAIL_SYNC_DISABLED=1 turns it off.

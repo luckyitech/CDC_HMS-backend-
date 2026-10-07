@@ -41,6 +41,13 @@ app.use('/api/sse', require('./routes/sse'));
 // mounted further down with the rest of the routes.
 app.use('/api/comms/webhook', require('./routes/commsWebhook'));
 
+// Autosave drafts — mounted BEFORE the general limiter. The general limiter
+// counts per IP, and the whole clinic reaches the API from one public IP: a
+// few doctors typing (a save every few seconds each) would otherwise use up
+// the clinic's shared 1000-per-15-minutes and lock EVERYONE out. The drafts
+// router parses its own JSON and has its own per-USER limiter instead.
+app.use('/api/drafts', require('./routes/formDrafts'));
+
 // Rate limiting — Prevent brute force and DoS attacks
 // Applied to ALL endpoints: 1000 requests per 15 minutes per IP
 // (matches generalLimiter in middleware/rateLimiter.js and the README)
