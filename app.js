@@ -76,6 +76,7 @@ app.use('/api/auth',               require('./routes/auth'));
 app.use('/api/patients',           require('./routes/patients'));
 app.use('/api/queue',              require('./routes/queue'));
 app.use('/api/prescriptions',      require('./routes/prescriptions'));
+app.use('/api/remote-requests',    require('./routes/remoteRequests'));  // orders outside a consultation
 app.use('/api/lab-tests',          require('./routes/labTests'));
 app.use('/api/lab-packages',       require('./routes/labPackages'));
 app.use('/api/treatment-plans',    require('./routes/treatmentPlans'));

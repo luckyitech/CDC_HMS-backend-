@@ -28,6 +28,13 @@ const Prescription = defineModel('Prescription', {
   notes: {
     type: DataTypes.TEXT,
   },
+  // The remote request (phone / WhatsApp / email / walk-in without a visit)
+  // this prescription answered — NULL when written in a consultation.
+  // Migration 20260928000020.
+  remoteRequestId: {
+    type: DataTypes.INTEGER,
+    allowNull: true,
+  },
 }, {
   indexes: [
     { unique: true, fields: ['prescriptionNumber'], name: 'unique_prescriptionNumber' },

@@ -130,6 +130,12 @@ const LabTest = defineModel('LabTest', {
     type: DataTypes.BOOLEAN,
     defaultValue: false,
   },
+  // The remote request this lab request answered (same on every row of the
+  // requisition) — NULL when ordered in a consultation. Migration 20260928000020.
+  remoteRequestId: {
+    type: DataTypes.INTEGER,
+    allowNull: true,
+  },
 }, {
   indexes: [
     { unique: true, fields: ['testNumber'], name: 'unique_testNumber' },

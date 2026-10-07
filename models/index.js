@@ -35,6 +35,7 @@ const RosterShift         = require('./RosterShift');
 const HrChecklistItem     = require('./HrChecklistItem');
 const HrChecklistEvent    = require('./HrChecklistEvent');
 const FormDraft           = require('./FormDraft');
+const RemoteRequest       = require('./RemoteRequest');
 const AppraisalCompetency = require('./AppraisalCompetency');
 const AppraisalCycle      = require('./AppraisalCycle');
 const Appraisal           = require('./Appraisal');
@@ -228,6 +229,15 @@ HrChecklistEvent.belongsTo(User, { as: 'by', foreignKey: 'byId' });
 FormDraft.belongsTo(User, { as: 'author', foreignKey: 'userId' });
 FormDraft.belongsTo(Patient);
 Patient.hasMany(FormDraft);
+
+// Remote requests (20260928000020) — a prescription / lab request outside a
+// consultation. The rows it produced point back through remoteRequestId.
+Patient.hasMany(RemoteRequest);
+RemoteRequest.belongsTo(Patient);
+RemoteRequest.belongsTo(User, { as: 'doctor', foreignKey: 'doctorId' });
+RemoteRequest.belongsTo(User, { as: 'cancelledBy', foreignKey: 'cancelledById' });
+Prescription.belongsTo(RemoteRequest, { as: 'remoteRequest', foreignKey: 'remoteRequestId' });
+LabTest.belongsTo(RemoteRequest, { as: 'remoteRequest', foreignKey: 'remoteRequestId' });
 
 // HR Tier 3 Phase 5 — appraisals (migration 20260928000014).
 User.hasMany(Appraisal);
@@ -706,6 +716,7 @@ const db = {
   HrChecklistItem,
   HrChecklistEvent,
   FormDraft,
+  RemoteRequest,
   AppraisalCompetency,
   AppraisalCycle,
   Appraisal,

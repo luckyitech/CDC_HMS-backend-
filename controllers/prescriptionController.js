@@ -1,5 +1,8 @@
 const { Op } = require('sequelize');
 const { success, error } = require('../utils/response');
+const { resolvePatient } = require('../utils/patientFamily');
+const { checkLink } = require('../services/remoteRequests');
+const { parseJsonColumn } = require('../utils/jsonColumn');
 const db = require('../models');
 const { generatePrescriptionNumber } = require('../utils/generateId');
 
@@ -37,8 +40,10 @@ const formatPrescription = (prescription) => {
     date: p.date,
     diagnosis: p.diagnosis,
     status: p.status,
-    medications: p.medications,
+    // Through parseJsonColumn (convention A4): MariaDB hands JSON back as text.
+    medications: parseJsonColumn(p.medications) || [],
     notes: p.notes,
+    remoteRequestId: p.remoteRequestId || null,
     createdAt: p.createdAt,
   };
 };
@@ -85,10 +90,22 @@ const prescriptionIncludes = [
  */
 const create = async (req, res) => {
   // Step 1: Guard against writing to an inactive (merged) patient
-  const targetPatient = await Patient.findByPk(req.body.patientId, { attributes: ['id', 'mergedIntoId', 'status'] });
+  const targetPatient = await Patient.findByPk(req.body.patientId, { attributes: ['id', 'uhid', 'mergedIntoId', 'status'] });
   if (!targetPatient) return error(res, 'Patient not found', 404);
   if (targetPatient.mergedIntoId !== null || targetPatient.status === 'Inactive') {
     return error(res, 'This patient profile is inactive. No new prescriptions can be created.', 403);
+  }
+
+  // Step 1b: a prescription answering a REMOTE request (phone / WhatsApp /
+  // email / walk-in) must point at the author's own, same-day request for this
+  // patient (services/remoteRequests — the one rule for every order).
+  const { remoteRequestId: askedLink, ...body } = req.body;
+  let remoteRequestId = null;
+  if (askedLink != null && askedLink !== '') {
+    const family = await resolvePatient(targetPatient.uhid);
+    const link = await checkLink(askedLink, { userId: req.user.id, patientIds: family.patientIds });
+    if (link.refusal) return error(res, link.refusal.message, link.refusal.status, { code: link.refusal.code });
+    remoteRequestId = link.id;
   }
 
   // Step 2: Generate unique ID
@@ -98,10 +115,11 @@ const create = async (req, res) => {
   // req.user.id comes from the authenticate middleware (JWT token)
   // CRITICAL: PatientId must be PascalCase (auto-generated FK naming convention)
   const prescription = await Prescription.create({
-    ...req.body,
+    ...body,
     PatientId: req.body.patientId,  // Map lowercase to PascalCase FK
     prescriptionNumber,
     doctorId: req.user.id,  // Auto-assign to the logged-in doctor
+    remoteRequestId,
   });
 
   // Step 3: Re-fetch with relationships
@@ -211,8 +229,14 @@ const update = async (req, res) => {
 
   if (!prescription) return error(res, 'Prescription not found', 404);
 
-  // Update the prescription with request body data
-  await prescription.update(req.body);
+  // Update the prescription with request body data — never its identity or
+  // attribution (who wrote it, for whom, its number, the remote request it
+  // answered). Found 6 Oct 2026: the body was applied whole.
+  const {
+    id: _id, PatientId: _p, patientId: _pid, doctorId: _d, prescriptionNumber: _n, remoteRequestId: _r, // eslint-disable-line no-unused-vars
+    ...changes
+  } = req.body;
+  await prescription.update(changes);
 
   // Re-fetch with relationships for the response
   const updated = await Prescription.findByPk(prescription.id, {

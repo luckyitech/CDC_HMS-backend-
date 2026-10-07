@@ -1,5 +1,6 @@
 const { Op } = require('sequelize');
 const { success, error } = require('../utils/response');
+const { checkLink } = require('../services/remoteRequests');
 const { resolvePatient } = require('../utils/patientFamily');
 const { clinicToday, clinicClockTime } = require('../utils/clinicTime');
 const db = require('../models');
@@ -89,6 +90,7 @@ const formatLabTest = (labTest, includePatientDetails = false) => {
     completedDate: lt.completedDate,
     reportGenerated: lt.reportGenerated,
     notes: lt.notes,
+    remoteRequestId: lt.remoteRequestId || null,
     createdAt: lt.createdAt,
   };
 
@@ -210,7 +212,7 @@ const create = async (req, res) => {
 const createRequest = async (req, res) => {
   const {
     uhid, priority = 'Routine', notes = null,
-    onBehalfOfDoctorId = null, supersedesRequisition = null, tests,
+    onBehalfOfDoctorId = null, supersedesRequisition = null, tests, remoteRequestId: askedLink = null,
   } = req.body;
 
   if (!uhid) return error(res, 'Patient UHID is required', 400);
@@ -229,6 +231,11 @@ const createRequest = async (req, res) => {
     return error(res, 'Select the doctor you are requesting these labs on behalf of', 400);
   }
   const onBehalfId = isDoctor ? null : onBehalfOfDoctorId;
+
+  // A request answering a REMOTE request must point at the author's own,
+  // same-day request for this patient (services/remoteRequests).
+  const link = await checkLink(askedLink, { userId: req.user.id, patientIds: family.patientIds });
+  if (link.refusal) return error(res, link.refusal.message, link.refusal.status, { code: link.refusal.code });
 
   // Validate every test up front so we don't half-create a request.
   for (const t of tests) {
@@ -264,6 +271,7 @@ const createRequest = async (req, res) => {
       orderedTime,
       status: 'Pending',
       notes,
+      remoteRequestId: link.id,
     });
   }
 
