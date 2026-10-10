@@ -125,6 +125,22 @@ const create = async (req, res) => {
     if (!family) return error(res, `Patient ${uhid} not found`, 404);
     if (family.isDeactivated) return error(res, 'This patient profile is inactive. No new studies can be created.', 403);
 
+    // RESUME, don't duplicate (10 Oct 2026): a study left as a Draft — the
+    // doctor navigated away mid-exam — keeps its readings on the server. A
+    // second visit to the exam used to open a NEW Draft, so the old one and
+    // its readings were orphaned, invisible, and the exam could never be
+    // completed. Now the newest Draft for this patient is handed back with
+    // its readings (200, `resumed: true`) and only when there is none is a
+    // new study started (201).
+    const open = await NeuropathyStudy.findOne({
+      where: { PatientId: { [Op.in]: family.patientIds }, status: 'Draft' },
+      include: [...studyIncludes, { model: NeuropathyReading }],
+      order: [['createdAt', 'DESC']],
+    });
+    if (open) {
+      return success(res, { ...formatStudy(open, { withReadings: true }), resumed: true });
+    }
+
     const study = await NeuropathyStudy.create({
       PatientId: family.patient.id,
       performedById: req.user.id,
@@ -230,24 +246,30 @@ const complete = async (req, res) => {
  */
 const list = async (req, res) => {
   try {
-    const { uhid, includeCancelled } = req.query;
+    const { uhid, includeCancelled, status } = req.query;
     const limit = Math.min(parseInt(req.query.limit, 10) || 100, 500);
     const where = {};
+    // status=Draft — the in-progress worklist (10 Oct 2026): exams left
+    // mid-way, to resume or withdraw from the Neuropathy Suite.
+    if (status && ['Draft', 'Completed', 'Cancelled'].includes(status)) where.status = status;
 
     if (uhid) {
       const family = await resolvePatient(uhid);
       if (!family) return error(res, `Patient ${uhid} not found`, 404);
       where.PatientId = { [Op.in]: family.patientIds };
     }
-    if (!includeCancelled) where.status = { [Op.ne]: 'Cancelled' };
+    if (!includeCancelled && !where.status) where.status = { [Op.ne]: 'Cancelled' };
 
+    const withReadings = where.status === 'Draft';   // the worklist shows how far each got
     const studies = await NeuropathyStudy.findAll({
       where,
-      include: studyIncludes,
+      include: withReadings ? [...studyIncludes, { model: NeuropathyReading }] : studyIncludes,
       order: [['studyDate', 'DESC'], ['createdAt', 'DESC']],
       limit,
     });
-    return success(res, studies.map((s) => formatStudy(s)));
+    return success(res, studies.map((s) => (withReadings
+      ? { ...formatStudy(s), readingsCount: (s.NeuropathyReadings || []).filter((r) => !r.omitted).length }
+      : formatStudy(s))));
   } catch (err) {
     console.error('NeuropathyStudy.list error:', err);
     return error(res, 'Failed to fetch neuropathy studies', 500);
