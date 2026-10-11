@@ -173,6 +173,19 @@ const PERMISSIONS = {
   // is a prescribing decision, and the route files already say so.
   GLP1_WRITE: 'glp1.write',
 
+  // Dermatology (specialist module, 7 Oct 2026): recording skin findings, the
+  // day's look at each, amendments and "entered in error". Doctors write by
+  // role; this lets a clinic grant it to someone else (a dermatology nurse).
+  // Not in the clinical-staff default bundle on purpose — reading follows
+  // clinical.view. Routes answer 404 while the module is switched off.
+  DERM_RECORD: 'derm.record',
+
+  // Histology / cytology (specialist module, Phase 3, 7 Oct 2026): requesting a
+  // histology or cytology specimen and typing its result. Doctors by role;
+  // lets a clinic grant it to someone else. Reading follows clinical.view.
+  // Routes answer 404 while the module is switched off.
+  HISTOLOGY_RECORD: 'histology.record',
+
   // Patient equipment and CareLink partners. Issuing, replacing and retiring a
   // device, and maintaining the caregiver contacts attached to a patient.
   EQUIPMENT_WRITE: 'equipment.write',
@@ -728,6 +741,18 @@ const PERMISSION_GROUPS = [
           + 'stopping a course stays with the doctor role.',
         access: null, write: PERMISSIONS.GLP1_WRITE, readVia: PERMISSIONS.CLINICAL_VIEW,
         writeLabel: 'Can record injections and reviews', roleDefault: 'Clinical staff' },
+      { key: 'dermatology', name: 'Dermatology', appliesIn: 'Doctor (specialist module)',
+        description: 'Recording skin findings on the body map, each visit\'s look at them, and '
+          + 'amendments. Doctors have it by role. Only matters where the clinic has switched the '
+          + 'Dermatology module on.',
+        access: null, write: PERMISSIONS.DERM_RECORD, readVia: PERMISSIONS.CLINICAL_VIEW,
+        writeLabel: 'Can record skin findings', roleDefault: 'Doctors' },
+      { key: 'histology', name: 'Histology / cytology', appliesIn: 'Doctor (specialist module)',
+        description: 'Requesting a histology or cytology specimen (skin, thyroid nodule, lymph '
+          + 'node, other) and typing its result. Doctors have it by role. Only matters where the '
+          + 'clinic has switched the Histology / cytology module on.',
+        access: null, write: PERMISSIONS.HISTOLOGY_RECORD, readVia: PERMISSIONS.CLINICAL_VIEW,
+        writeLabel: 'Can request histology and record results', roleDefault: 'Doctors' },
       { key: 'equipment', name: 'Patient equipment', appliesIn: 'Staff, Doctor',
         description: 'Issuing, replacing and retiring a device, and the CareLink caregiver '
           + 'contacts attached to a patient.',

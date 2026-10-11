@@ -4,6 +4,7 @@ const { body } = require('express-validator');
 const validate = require('../middleware/validate');
 const { authenticate, authorize } = require('../middleware/auth');
 const assessmentController = require('../controllers/assessmentController');
+const { error } = require('../utils/response');
 
 // ====================================
 // UNDERSTANDING AUTHORIZATION
@@ -23,27 +24,15 @@ const assessmentController = require('../controllers/assessmentController');
 // ------------------------------------
 // Authorization: Doctor only
 // Why? Only licensed doctors can perform and document initial patient assessments
+// RETIRED 10 Oct 2026 (Emu): the Initial Assessment form is gone — its
+// content is now history sections inside the consultation note
+// (utils/noteSections.js). Old assessments stay readable below; nothing new
+// is written here.
 router.post(
   '/',
   authenticate,
   authorize('doctor'),
-  [
-    // Validation rules
-    body('uhid')
-      .notEmpty()
-      .withMessage('Patient UHID is required'),
-    body('hpi').optional(),
-    body('ros').optional(),
-    body('pastMedicalHistory').optional(),
-    body('familyHistory').optional(),
-    body('socialHistory').optional(),
-    body('data')
-      .optional()
-      .isObject()
-      .withMessage('Assessment data must be a JSON object'),
-    validate,
-  ],
-  assessmentController.create
+  (req, res) => error(res, 'The initial assessment has been replaced by the history sections in Consultation notes.', 410)
 );
 
 // ------------------------------------

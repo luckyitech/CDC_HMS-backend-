@@ -11,6 +11,7 @@ const {
 } = require('../utils/passwordRotation');
 const { notifyStaffOfRotationPolicy } = require('../services/passwordRotationNotifier');
 const { recordSettingChanges } = require('../services/settingChangeLog');
+const clinicModules = require('../services/clinicModules');
 const db = require('../models');
 
 const { User } = db;
@@ -438,6 +439,34 @@ const updateEmail = async (req, res) => {
   }
 };
 
+// ─── Specialist modules ─────────────────────────────────────────────────
+// GET /api/settings/modules — { modules: { dermatology: false }, list: [{ key, label, description }] }
+const getModules = async (req, res) => {
+  try {
+    const modules = await clinicModules.getModules();
+    return success(res, { modules, list: clinicModules.MODULES });
+  } catch (err) {
+    console.error('Settings.getModules error:', err);
+    return error(res, 'Server error', 500);
+  }
+};
+
+// PUT /api/settings/modules — { modules: { dermatology: true } }
+const updateModules = async (req, res) => {
+  try {
+    const sent = req.body.modules || {};
+    const unknown = Object.keys(sent).filter((k) => !clinicModules.MODULE_KEYS.includes(k));
+    if (unknown.length) return error(res, `Unknown module: ${unknown.join(', ')}`, 400);
+    const bad = Object.keys(sent).filter((k) => typeof sent[k] !== 'boolean');
+    if (bad.length) return error(res, `Switch values must be true or false: ${bad.join(', ')}`, 400);
+    const modules = await clinicModules.setModules(sent, req.user);
+    return success(res, { modules, list: clinicModules.MODULES });
+  } catch (err) {
+    console.error('Settings.updateModules error:', err);
+    return error(res, 'Server error', 500);
+  }
+};
+
 module.exports = {
   getEmail,
   updateEmail,
@@ -450,4 +479,6 @@ module.exports = {
   updateComms,
   testComms,
   updateCommsCosts,
+  getModules,
+  updateModules,
 };

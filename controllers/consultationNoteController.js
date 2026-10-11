@@ -4,8 +4,10 @@ const { resolvePatient } = require('../utils/patientFamily');
 const { clinicToday, clinicClockTime } = require('../utils/clinicTime');
 const { PERMISSIONS, hasPermission } = require('../constants/permissions');
 const db = require('../models');
+const { cleanSections, renderNoteText, htmlToText } = require('../utils/noteSections');
+const noteSections = require('../services/noteSections');
 
-const { ConsultationNote, Patient, User } = db;
+const { ConsultationNote, Patient, User, sequelize } = db;
 
 // ====================================
 // HELPER FUNCTIONS
@@ -37,7 +39,41 @@ const formatConsultationNote = (note) => {
     assessment: n.assessment,
     plan: n.plan,
     prescriptionIds: n.prescriptionIds,
+    // History sections (10 Oct 2026) — [] for a note written before them
+    sections: n.sections || [],
   };
+};
+
+/** Attach each note's sections (one query for the whole page). */
+const withSections = async (notes) => {
+  const list = Array.isArray(notes) ? notes : [notes];
+  const byNote = await noteSections.loadSections(list.map((n) => n.id));
+  list.forEach((n) => { n.setDataValue('sections', byNote[n.id] || []); });
+  return notes;
+};
+
+/**
+ * A note made of sections: the rows to save and the plain-text rendition
+ * that goes in `notes`. Returns null when the client sent no sections (a
+ * legacy client, or a plain note).
+ */
+const sectionsFromBody = (body) => {
+  const rows = cleanSections(body.sections);
+  if (!Array.isArray(body.sections)) return null;
+  return { rows, notes: renderNoteText(rows) };
+};
+
+/**
+ * Allergies are the patient file's — the Allergies section is that one copy,
+ * shown in the note and written back when saved (Emu, 10 Oct 2026).
+ */
+const writeAllergiesBack = async (family, rows, transaction) => {
+  const al = rows.find((r) => r.key === 'al');
+  if (!al) return;
+  const text = htmlToText(al.html).replace(/\s*\n\s*/g, '; ').trim().slice(0, 255);
+  if (!text) return;
+  if (String(family.patient.allergies || '').trim() === text) return;
+  await family.patient.update({ allergies: text }, { transaction });
 };
 
 /**
@@ -93,23 +129,37 @@ const create = async (req, res) => {
     const date = clinicToday(now);
     const time = clinicClockTime({}, now);
 
-    // Create the consultation note
-    const consultationNote = await ConsultationNote.create({
-      PatientId: family.patient.id,  // PascalCase FK
-      notes,
-      vitals,
-      assessment,
-      plan,
-      prescriptionIds: prescriptionIds || [],
-      doctorId: req.user.id,  // From JWT token
-      date,
-      time,
+    const structured = sectionsFromBody(req.body);
+    const noteText = structured ? structured.notes : notes;
+    if (!noteText || !String(noteText).trim()) {
+      return error(res, 'Nothing to save yet — write the consultation note first', 400);
+    }
+
+    // Create the consultation note (+ its sections) as one unit
+    const consultationNote = await sequelize.transaction(async (transaction) => {
+      const created = await ConsultationNote.create({
+        PatientId: family.patient.id,  // PascalCase FK
+        notes: noteText,
+        vitals,
+        assessment,
+        plan,
+        prescriptionIds: prescriptionIds || [],
+        doctorId: req.user.id,  // From JWT token
+        date,
+        time,
+      }, { transaction });
+      if (structured) {
+        await noteSections.saveSections(created.id, structured.rows, family.patient.id, transaction);
+        await writeAllergiesBack(family, structured.rows, transaction);
+      }
+      return created;
     });
 
     // Re-fetch with relationships
     const full = await ConsultationNote.findByPk(consultationNote.id, {
       include: consultationNoteIncludes,
     });
+    await withSections(full);
 
     return success(res, formatConsultationNote(full), 201);
   } catch (err) {
@@ -187,6 +237,7 @@ const list = async (req, res) => {
       distinct: true,
     });
 
+    await withSections(rows);
     const consultationNotes = rows.map(formatConsultationNote);
 
     return success(res, {
@@ -223,6 +274,7 @@ const getById = async (req, res) => {
     if (!consultationNote) {
       return error(res, `Consultation note with ID ${id} not found`, 404);
     }
+    await withSections(consultationNote);
 
     return success(res, formatConsultationNote(consultationNote));
   } catch (err) {
@@ -270,19 +322,33 @@ const update = async (req, res) => {
       return error(res, 'Consultation notes can only be edited on the day they were written', 403);
     }
 
+    const structured = sectionsFromBody(req.body);
+    if (structured && !structured.notes.trim()) {
+      return error(res, 'Nothing to save yet — write the consultation note first', 400);
+    }
+
     // Update only the fields that were provided
-    if (notes !== undefined) consultationNote.notes = notes;
+    if (structured) consultationNote.notes = structured.notes;
+    else if (notes !== undefined) consultationNote.notes = notes;
     if (vitals !== undefined) consultationNote.vitals = vitals;
     if (assessment !== undefined) consultationNote.assessment = assessment;
     if (plan !== undefined) consultationNote.plan = plan;
     if (prescriptionIds !== undefined) consultationNote.prescriptionIds = prescriptionIds;
 
-    await consultationNote.save();
+    await sequelize.transaction(async (transaction) => {
+      await consultationNote.save({ transaction });
+      if (structured) {
+        const family = await resolvePatient(consultationNote.Patient?.uhid);
+        await noteSections.saveSections(consultationNote.id, structured.rows, consultationNote.PatientId, transaction);
+        if (family) await writeAllergiesBack(family, structured.rows, transaction);
+      }
+    });
 
     // Re-fetch with relationships
     const full = await ConsultationNote.findByPk(id, {
       include: consultationNoteIncludes,
     });
+    await withSections(full);
 
     return success(res, formatConsultationNote(full));
   } catch (err) {
@@ -323,6 +389,28 @@ const deleteNote = async (req, res) => {
   }
 };
 
+/**
+ * GET /api/consultation-notes/carry-forward?uhid=
+ * What pre-fills a new note's history sections: the last saved copy of each
+ * carry-forward section, the patient file (allergies — anyone's entry,
+ * nurses included — comorbidities, registration medicines), prescriptions
+ * (current / stopped) and the retired Initial Assessment as a seed.
+ *
+ * Authorization: doctors
+ */
+const carryForward = async (req, res) => {
+  try {
+    const { uhid } = req.query;
+    if (!uhid) return error(res, 'Patient UHID is required', 400);
+    const family = await resolvePatient(uhid);
+    if (!family) return error(res, 'Patient not found', 404);
+    return success(res, await noteSections.carryForward(family));
+  } catch (err) {
+    console.error('ConsultationNote.carryForward error:', err);
+    return error(res, 'Failed to load the patient history', 500);
+  }
+};
+
 // ====================================
 // EXPORTS
 // ====================================
@@ -332,4 +420,5 @@ module.exports = {
   getById,
   update,
   deleteNote,
+  carryForward,
 };

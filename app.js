@@ -21,6 +21,10 @@ app.use(cors({
     // Public booking websites (read-only slots fetch runs from the browser;
     // the booking POST goes via each site's same-origin server proxy).
     'https://thyroidkenya.com', 'https://www.thyroidkenya.com',
+    // Extra origins from the environment, e.g. the Mac's Wi-Fi address while
+    // testing the skin-photo phone hand-off locally (CORS_EXTRA_ORIGINS=
+    // http://192.168.1.20:5173). Empty on the server unless set on purpose.
+    ...String(process.env.CORS_EXTRA_ORIGINS || '').split(',').map((o) => o.trim()).filter(Boolean),
   ],
   credentials: true,
 }));
@@ -113,6 +117,12 @@ app.use('/api/notifications',      require('./routes/notifications'));
 app.use('/api/catalog',            require('./routes/catalog'));
 app.use('/api/stock',              require('./routes/stock'));
 app.use('/api/settings',           require('./routes/settings'));
+app.use('/api/me/preferences',     require('./routes/userPreferences'));  // my own display preferences
+
+// --- Specialist modules (off until switched on in System Settings) ---
+app.use('/api/derm-capture',             require('./routes/dermCapture')); // Skin photos from a phone — no sign-in, one-time QR token (8 Oct 2026)
+app.use('/api/derm',                     require('./routes/derm'));        // Dermatology (7 Oct 2026)
+app.use('/api/histology',                require('./routes/histology'));   // Histology / cytology (7 Oct 2026)
 
 // --- HMIS V3 inpatient ---
 app.use('/api/wards',                    require('./routes/wards'));

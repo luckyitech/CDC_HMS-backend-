@@ -31,9 +31,17 @@ router.post(
     body('uhid')
       .notEmpty()
       .withMessage('Patient UHID is required'),
+    // A note is either plain text (`notes`) or made of history sections
+    // (`sections`, 10 Oct 2026) — the controller renders the plain text
+    // from the sections and refuses an empty note either way.
     body('notes')
-      .notEmpty()
-      .withMessage('Consultation notes are required'),
+      .optional()
+      .isString()
+      .withMessage('Consultation notes must be a string'),
+    body('sections')
+      .optional()
+      .isArray()
+      .withMessage('Sections must be an array'),
     body('assessment')
       .optional()
       .isString()
@@ -70,6 +78,19 @@ router.get(
 );
 
 // ------------------------------------
+// GET /api/consultation-notes/carry-forward?uhid= — what pre-fills a new
+// note's history sections (10 Oct 2026). Before /:id.
+// ------------------------------------
+// Authorization: doctor only (it reads the whole clinical history)
+router.get(
+  '/carry-forward',
+  authenticate,
+  authorize('doctor'),
+  logPatientAccess('consultation-notes'),
+  consultationNoteController.carryForward
+);
+
+// ------------------------------------
 // GET /api/consultation-notes/:id — Get single consultation note
 // ------------------------------------
 // Authorization: every internal role
@@ -95,6 +116,10 @@ router.put(
       .optional()
       .isString()
       .withMessage('Notes must be a string'),
+    body('sections')
+      .optional()
+      .isArray()
+      .withMessage('Sections must be an array'),
     body('assessment')
       .optional()
       .isString()

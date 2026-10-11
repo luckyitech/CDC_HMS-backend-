@@ -1,9 +1,12 @@
 const express = require('express');
+const requireModule = require('../middleware/requireModule');
+const dermProcedures = require('../controllers/dermProcedureController');
 const router = express.Router();
 const { body } = require('express-validator');
 const validate = require('../middleware/validate');
 const { authenticate, authorize } = require('../middleware/auth');
 const settings = require('../controllers/settingsController');
+const { INTERNAL_ROLES } = require('../constants/permissions');
 
 // System-wide settings the admin controls from the System Settings page.
 
@@ -69,5 +72,20 @@ router.put('/email', authenticate, authorize('admin', 'config.write'), [
   body('signature').optional().isObject().withMessage("'signature' must be an object"),
   validate,
 ], settings.updateEmail);
+
+// Specialist modules (Dermatology first) — which ones this clinic has
+// switched on. READ by every internal role (the consultation screen needs to
+// know whether to show a module's tool); WRITE on the normal admin gate,
+// logged in the settings-change trail. Off unless switched on.
+router.get('/modules', authenticate, authorize(...INTERNAL_ROLES), settings.getModules);
+router.put('/modules', authenticate, authorize('admin', 'config.write'), [
+  body('modules').isObject().withMessage("'modules' must be an object, e.g. { dermatology: true }"),
+  validate,
+], settings.updateModules);
+
+// The Dermatology procedure list (Phase 3, H8) — kept by the administrator in
+// Specialist modules; logged like any setting. 404 while Dermatology is off.
+// Doctors read it via GET /api/derm/procedure-list.
+router.put('/derm-procedures', authenticate, authorize('admin', 'config.write'), requireModule('dermatology'), dermProcedures.putList);
 
 module.exports = router;

@@ -36,6 +36,21 @@ const HrChecklistItem     = require('./HrChecklistItem');
 const HrChecklistEvent    = require('./HrChecklistEvent');
 const FormDraft           = require('./FormDraft');
 const RemoteRequest       = require('./RemoteRequest');
+const UserPreference      = require('./UserPreference');
+const DermFinding         = require('./DermFinding');
+const DermFindingRegion   = require('./DermFindingRegion');
+const DermObservation     = require('./DermObservation');
+const DermEdit            = require('./DermEdit');
+const DermConsent         = require('./DermConsent');
+const DermPhoto           = require('./DermPhoto');
+const DermPhotoView       = require('./DermPhotoView');
+const DermPhotoRegion     = require('./DermPhotoRegion');
+const DermCaptureSession  = require('./DermCaptureSession');
+const DermSkinExam        = require('./DermSkinExam');
+const HistologyRequest    = require('./HistologyRequest');
+const HistologyEdit       = require('./HistologyEdit');
+const DermProcedure       = require('./DermProcedure');
+const DermProcedureTarget = require('./DermProcedureTarget');
 const AppraisalCompetency = require('./AppraisalCompetency');
 const AppraisalCycle      = require('./AppraisalCycle');
 const Appraisal           = require('./Appraisal');
@@ -52,6 +67,8 @@ const TreatmentPlan       = require('./TreatmentPlan');
 const PhysicalExamination = require('./PhysicalExamination');
 const InitialAssessment   = require('./InitialAssessment');
 const ConsultationNote    = require('./ConsultationNote');
+const ConsultationNoteSection     = require('./ConsultationNoteSection');
+const ConsultationNoteSectionItem = require('./ConsultationNoteSectionItem');
 const NursingNote         = require('./NursingNote');
 const MedicalDocument     = require('./MedicalDocument');
 const LabInboxItem        = require('./LabInboxItem');
@@ -239,6 +256,82 @@ RemoteRequest.belongsTo(User, { as: 'cancelledBy', foreignKey: 'cancelledById' }
 Prescription.belongsTo(RemoteRequest, { as: 'remoteRequest', foreignKey: 'remoteRequestId' });
 LabTest.belongsTo(RemoteRequest, { as: 'remoteRequest', foreignKey: 'remoteRequestId' });
 
+// Per-user preferences (20260928000021) — first key 'consultation.tools'.
+User.hasMany(UserPreference);
+UserPreference.belongsTo(User);
+
+// Dermatology (20260928000021) — persistent findings, one observation per
+// finding per clinic day, regions on the body map, and the amendment trail.
+// PatientId on DermFinding is the canonical patient at creation; reads go
+// through the merge family.
+Patient.hasMany(DermFinding);
+DermFinding.belongsTo(Patient);
+DermFinding.belongsTo(User, { as: 'createdBy', foreignKey: 'createdById' });
+DermFinding.belongsTo(User, { as: 'errorBy',   foreignKey: 'errorById' });
+DermFinding.hasMany(DermFindingRegion, { as: 'regions' });
+DermFindingRegion.belongsTo(DermFinding);
+DermFinding.hasMany(DermObservation, { as: 'observations' });
+DermObservation.belongsTo(DermFinding);
+DermObservation.belongsTo(User, { as: 'doctor',    foreignKey: 'doctorId' });
+DermObservation.belongsTo(User, { as: 'amendedBy', foreignKey: 'amendedById' });
+DermEdit.belongsTo(User, { as: 'editedBy', foreignKey: 'editedById' });
+
+// Dermatology Phase 2 (20260928000022) — consent (append-only, per patient),
+// photos (one finding each, optional link to that day's look) and the log of
+// every opening of a photo.
+Patient.hasMany(DermConsent);
+DermConsent.belongsTo(Patient);
+DermConsent.belongsTo(User, { as: 'recordedBy', foreignKey: 'recordedById' });
+DermFinding.hasMany(DermPhoto, { as: 'photos' });
+DermPhoto.belongsTo(DermFinding);
+DermPhoto.belongsTo(DermObservation, { as: 'observation', foreignKey: 'DermObservationId' });
+DermPhoto.belongsTo(User, { as: 'uploadedBy', foreignKey: 'uploadedById' });
+DermPhoto.belongsTo(User, { as: 'errorBy', foreignKey: 'errorById' });
+DermPhoto.hasMany(DermPhotoView, { as: 'views' });
+DermPhoto.hasMany(DermPhotoRegion, { as: 'areas' });
+// Area photos (…027): a photo may belong to the patient before any finding.
+Patient.hasMany(DermPhoto, { as: 'dermPhotos' });
+DermPhoto.belongsTo(Patient);
+Patient.hasMany(DermCaptureSession, { as: 'dermCaptureSessions' });
+DermCaptureSession.belongsTo(Patient);
+DermCaptureSession.belongsTo(DermFinding);
+DermCaptureSession.belongsTo(User, { as: 'doctor', foreignKey: 'doctorId' });
+DermPhotoRegion.belongsTo(DermPhoto);
+// Today's whole-skin exam (20260928000028) — one per patient per clinic day.
+Patient.hasMany(DermSkinExam, { as: 'dermSkinExams' });
+DermSkinExam.belongsTo(Patient);
+DermSkinExam.belongsTo(User, { as: 'doctor', foreignKey: 'doctorId' });
+DermSkinExam.belongsTo(User, { as: 'amendedBy', foreignKey: 'amendedById' });
+DermPhotoView.belongsTo(DermPhoto);
+DermPhotoView.belongsTo(User, { as: 'viewedBy', foreignKey: 'viewedById' });
+
+// Dermatology Phase 3 (20260928000023) — histology / cytology requests (a
+// general tool: skin finding, thyroid nodule, lymph node, other site) and
+// skin procedures. PatientId is the canonical patient at creation; reads go
+// across the merge family.
+Patient.hasMany(HistologyRequest);
+HistologyRequest.belongsTo(Patient);
+HistologyRequest.belongsTo(DermFinding, { as: 'finding', foreignKey: 'DermFindingId' });
+DermFinding.hasMany(HistologyRequest, { as: 'histology', foreignKey: 'DermFindingId' });
+HistologyRequest.belongsTo(LabTest, { as: 'labTest', foreignKey: 'LabTestId' });
+HistologyRequest.belongsTo(MedicalDocument, { as: 'reportDocument', foreignKey: 'reportDocumentId' });
+HistologyRequest.belongsTo(User, { as: 'requestedBy', foreignKey: 'requestedById' });
+HistologyRequest.belongsTo(User, { as: 'resultBy', foreignKey: 'resultById' });
+HistologyRequest.belongsTo(User, { as: 'cancelledBy', foreignKey: 'cancelledById' });
+HistologyRequest.hasMany(HistologyEdit, { as: 'edits' });
+HistologyEdit.belongsTo(HistologyRequest);
+HistologyEdit.belongsTo(User, { as: 'editedBy', foreignKey: 'editedById' });
+Patient.hasMany(DermProcedure);
+DermProcedure.belongsTo(Patient);
+DermProcedure.belongsTo(User, { as: 'performedBy', foreignKey: 'performedById' });
+DermProcedure.belongsTo(User, { as: 'errorBy', foreignKey: 'errorById' });
+DermProcedure.belongsTo(User, { as: 'amendedBy', foreignKey: 'amendedById' });
+DermProcedure.belongsTo(HistologyRequest, { as: 'histologyRequest', foreignKey: 'HistologyRequestId' });
+DermProcedure.hasMany(DermProcedureTarget, { as: 'targets' });
+DermProcedureTarget.belongsTo(DermProcedure);
+DermProcedureTarget.belongsTo(DermFinding);
+DermFinding.hasMany(DermProcedureTarget, { as: 'procedureTargets' });
+
 // HR Tier 3 Phase 5 — appraisals (migration 20260928000014).
 User.hasMany(Appraisal);
 Appraisal.belongsTo(User);
@@ -324,6 +417,12 @@ InitialAssessment.belongsTo(User, { as: 'doctor', foreignKey: 'doctorId' });
 Patient.hasMany(ConsultationNote);
 ConsultationNote.belongsTo(Patient);
 ConsultationNote.belongsTo(User, { as: 'doctor', foreignKey: 'doctorId' });
+// History sections of a note (10 Oct 2026) — go with the note; a section's
+// ticks go with the section.
+ConsultationNote.hasMany(ConsultationNoteSection, { as: 'sections', foreignKey: 'ConsultationNoteId', onDelete: 'CASCADE', hooks: true });
+ConsultationNoteSection.belongsTo(ConsultationNote, { foreignKey: 'ConsultationNoteId' });
+ConsultationNoteSection.hasMany(ConsultationNoteSectionItem, { as: 'items', foreignKey: 'ConsultationNoteSectionId', onDelete: 'CASCADE', hooks: true });
+ConsultationNoteSectionItem.belongsTo(ConsultationNoteSection, { foreignKey: 'ConsultationNoteSectionId' });
 
 Patient.hasMany(NursingNote);
 NursingNote.belongsTo(Patient);
@@ -717,6 +816,21 @@ const db = {
   HrChecklistEvent,
   FormDraft,
   RemoteRequest,
+  UserPreference,
+  DermFinding,
+  DermFindingRegion,
+  DermObservation,
+  DermEdit,
+  DermConsent,
+  DermPhoto,
+  DermPhotoView,
+  DermPhotoRegion,
+  DermCaptureSession,
+  DermSkinExam,
+  HistologyRequest,
+  HistologyEdit,
+  DermProcedure,
+  DermProcedureTarget,
   AppraisalCompetency,
   AppraisalCycle,
   Appraisal,
@@ -733,6 +847,8 @@ const db = {
   PhysicalExamination,
   InitialAssessment,
   ConsultationNote,
+  ConsultationNoteSection,
+  ConsultationNoteSectionItem,
   NursingNote,
   MedicalDocument,
   LabInboxItem,
