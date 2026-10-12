@@ -104,6 +104,8 @@ const StockMovement       = require('./StockMovement');
 const StockLevel          = require('./StockLevel');
 const StockParLevel       = require('./StockParLevel');
 const Supplier            = require('./Supplier');
+const StockReceipt        = require('./StockReceipt');
+const StockReceiptDocument = require('./StockReceiptDocument');
 
 // --- HMIS V3 inpatient ---
 const Ward                     = require('./Ward');
@@ -582,6 +584,15 @@ StockBatch.belongsTo(StockItem, { as: 'item',     foreignKey: 'stockItemId' });
 StockItem.hasMany(StockBatch,   { as: 'batches',  foreignKey: 'stockItemId' });
 StockBatch.belongsTo(Supplier,  { as: 'supplier', foreignKey: 'supplierId' });
 StockBatch.belongsTo(User,      { as: 'receivedByUser', foreignKey: 'receivedById' });
+// Supplier invoices / receipts and their scans (12 Oct 2026).
+StockBatch.belongsTo(StockReceipt, { as: 'receipt', foreignKey: 'stockReceiptId' });
+StockReceipt.hasMany(StockBatch,   { as: 'batches', foreignKey: 'stockReceiptId' });
+StockReceipt.belongsTo(Supplier,   { as: 'supplier', foreignKey: 'supplierId' });
+StockReceipt.belongsTo(User,       { as: 'createdByUser', foreignKey: 'createdById' });
+StockReceipt.hasMany(StockReceiptDocument, { as: 'documents', foreignKey: 'stockReceiptId' });
+StockReceiptDocument.belongsTo(StockReceipt, { as: 'receipt', foreignKey: 'stockReceiptId' });
+StockReceiptDocument.belongsTo(User, { as: 'uploadedByUser', foreignKey: 'uploadedById' });
+StockReceiptDocument.belongsTo(User, { as: 'removedByUser', foreignKey: 'removedById' });
 
 StockMovement.belongsTo(StockItem,     { as: 'item',         foreignKey: 'stockItemId' });
 StockItem.hasMany(StockMovement,       { as: 'movements',    foreignKey: 'stockItemId' });
@@ -882,6 +893,8 @@ const db = {
   StockLevel,
   StockParLevel,
   Supplier,
+  StockReceipt,
+  StockReceiptDocument,
   // --- HMIS V3 inpatient ---
   Ward,
   Room,
