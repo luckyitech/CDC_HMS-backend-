@@ -94,6 +94,10 @@ const PERMISSIONS = {
   QUEUE_WRITE:        'queue.write',
   APPOINTMENTS_VIEW:  'appointments.view',
   APPOINTMENTS_WRITE: 'appointments.write',
+  // Block and unblock time in ANY doctor's diary (12 Oct 2026). A doctor
+  // always manages their own diary by role; this lets chosen front-desk staff
+  // do it on a doctor's behalf.
+  CALENDAR_BLOCK:     'calendar.block',
   DOCUMENTS_WRITE:    'documents.write',
 
   // --- Modules ---
@@ -407,6 +411,7 @@ const IMPLIED_BY = {
   [PERMISSIONS.COMMS_WRITE]:        PERMISSIONS.COMMS_VIEW,
   [PERMISSIONS.USERS_WRITE]:        PERMISSIONS.USERS_VIEW,
   [PERMISSIONS.APPOINTMENTS_WRITE]: PERMISSIONS.APPOINTMENTS_VIEW,
+  [PERMISSIONS.CALENDAR_BLOCK]:     PERMISSIONS.APPOINTMENTS_VIEW,
   [PERMISSIONS.CLINICAL_RECORD]:    PERMISSIONS.CLINICAL_VIEW,
   [PERMISSIONS.LEAVE_POLICY]:       PERMISSIONS.LEAVE_MANAGE,
   // HR Tier 3 Phase 0: each acting capability needs the read it acts within.
@@ -715,6 +720,12 @@ const PERMISSION_GROUPS = [
         access: PERMISSIONS.APPOINTMENTS_VIEW, write: PERMISSIONS.APPOINTMENTS_WRITE,
         accessLabel: 'Can view the diary', writeLabel: 'Can book, reschedule and cancel',
         roleDefault: 'Front desk, doctors' },
+      { key: 'calendar-blocks', name: 'Doctors\' availability', appliesIn: 'Staff',
+        description: 'Blocking a slot, a day or a recurring period in a doctor\'s diary, and '
+          + 'unblocking it, so nothing can be booked there. Doctors always manage their own '
+          + 'diary; this lets the person do it for any doctor.',
+        access: null, write: PERMISSIONS.CALENDAR_BLOCK,
+        writeLabel: 'Can block and unblock any doctor\'s time', roleDefault: 'Doctors (own diary only)' },
       { key: 'documents', name: 'Medical documents', appliesIn: 'Staff, Doctor, Admin',
         access: null, write: PERMISSIONS.DOCUMENTS_WRITE,
         writeLabel: 'Can upload and edit documents', roleDefault: 'Front desk, doctors' },

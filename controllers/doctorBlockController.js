@@ -3,9 +3,30 @@ const { success, error } = require('../utils/response');
 const { PERMISSIONS, hasPermission } = require('../constants/permissions');
 const db = require('../models');
 
-const { DoctorBlock } = db;
+const { DoctorBlock, User } = db;
 
 const FULL_DAY = 'ALL_DAY';
+
+/**
+ * Whose diary is being changed? (12 Oct 2026)
+ * A doctor acts on their own diary by role. A holder of calendar.block
+ * (chosen front-desk staff) names the doctor with `doctorId` in the body or
+ * query, and may act on any doctor. Naming someone else without the
+ * capability is refused, never silently redirected to the caller's own diary.
+ * Returns { id } or { error: [message, status] }.
+ */
+const targetDoctor = async (req) => {
+  const asked = req.body?.doctorId ?? req.query?.doctorId;
+  const own = req.user.role === 'doctor' ? req.user.id : null;
+  if (asked === undefined || asked === null || asked === '' || Number(asked) === own) {
+    return own ? { id: own } : { error: ['Choose the doctor whose diary to change', 400] };
+  }
+  if (!hasPermission(req.user, PERMISSIONS.CALENDAR_BLOCK)) {
+    return { error: ['You can only block or unblock your own diary', 403] };
+  }
+  const doctor = await User.findOne({ where: { id: Number(asked), role: 'doctor' }, attributes: ['id'] });
+  return doctor ? { id: doctor.id } : { error: ['Doctor not found', 404] };
+};
 
 /**
  * POST /api/doctor-blocks
@@ -15,11 +36,13 @@ const FULL_DAY = 'ALL_DAY';
  * - date: YYYY-MM-DD (required)
  * - timeSlot: e.g. "9:00 AM" (optional — omit to block the whole day)
  *
- * Authorization: Doctor only (blocks their own schedule)
+ * Authorization: a doctor (own diary) or a calendar.block holder (body.doctorId)
  */
 const block = async (req, res) => {
   const { date, timeSlot, reason } = req.body;
-  const doctorId = req.user.id;
+  const who = await targetDoctor(req);
+  if (who.error) return error(res, ...who.error);
+  const doctorId = who.id;
 
   if (!date) return error(res, 'Date is required', 400);
 
@@ -51,11 +74,13 @@ const block = async (req, res) => {
  * - date: YYYY-MM-DD (required)
  * - timeSlot: e.g. "9:00 AM" (optional — omit to unblock the whole day)
  *
- * Authorization: Doctor only
+ * Authorization: a doctor (own diary) or a calendar.block holder (doctorId)
  */
 const unblock = async (req, res) => {
   const { date, timeSlot } = req.body;
-  const doctorId = req.user.id;
+  const who = await targetDoctor(req);
+  if (who.error) return error(res, ...who.error);
+  const doctorId = who.id;
 
   if (!date) return error(res, 'Date is required', 400);
 
@@ -109,11 +134,13 @@ const getBlocks = async (req, res) => {
  * - date: YYYY-MM-DD (required)
  * - timeSlots: string[] — array of slot strings to block (required, min 2)
  *
- * Authorization: Doctor only
+ * Authorization: a doctor (own diary) or a calendar.block holder (doctorId)
  */
 const blockRange = async (req, res) => {
   const { date, timeSlots, reason } = req.body;
-  const doctorId = req.user.id;
+  const who = await targetDoctor(req);
+  if (who.error) return error(res, ...who.error);
+  const doctorId = who.id;
 
   if (!date) return error(res, 'Date is required', 400);
   if (!Array.isArray(timeSlots) || timeSlots.length < 2) {
@@ -143,11 +170,13 @@ const blockRange = async (req, res) => {
  * - timeSlots: string[]  — slots to block; pass ['ALL_DAY'] to block entire days (required)
  * - weekdays:  number[]  — JS day numbers to apply to (0=Sun … 6=Sat); omit = every day
  *
- * Authorization: Doctor only
+ * Authorization: a doctor (own diary) or a calendar.block holder (doctorId)
  */
 const blockRecurring = async (req, res) => {
   const { fromDate, toDate, timeSlots, weekdays, reason } = req.body;
-  const doctorId = req.user.id;
+  const who = await targetDoctor(req);
+  if (who.error) return error(res, ...who.error);
+  const doctorId = who.id;
 
   if (!fromDate || !toDate)            return error(res, 'fromDate and toDate are required', 400);
   if (!Array.isArray(timeSlots) || !timeSlots.length) return error(res, 'timeSlots array is required', 400);
@@ -191,13 +220,13 @@ const blockRecurring = async (req, res) => {
  * Returns all upcoming (today onwards) blocks for the requesting doctor,
  * grouped by date. Used to power the unblock list on the frontend.
  *
- * Authorization: Doctor only
+ * Authorization: a doctor (own diary) or a calendar.block holder (doctorId)
  */
 const getUpcoming = async (req, res) => {
-  // Admin can query any doctor; doctor always sees their own blocks
-  const doctorId = hasPermission(req.user, PERMISSIONS.ADMIN_ACCESS) && req.query.doctorId
-    ? parseInt(req.query.doctorId)
-    : req.user.id;
+  // A doctor sees their own blocks; a calendar.block holder names the doctor.
+  const who = await targetDoctor(req);
+  if (who.error) return error(res, ...who.error);
+  const doctorId = who.id;
 
   const today = new Date();
   const todayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
@@ -230,11 +259,13 @@ const getUpcoming = async (req, res) => {
  *
  * Body: { date: YYYY-MM-DD }
  *
- * Authorization: Doctor only
+ * Authorization: a doctor (own diary) or a calendar.block holder (doctorId)
  */
 const clearDate = async (req, res) => {
   const { date } = req.body;
-  const doctorId = req.user.id;
+  const who = await targetDoctor(req);
+  if (who.error) return error(res, ...who.error);
+  const doctorId = who.id;
 
   if (!date) return error(res, 'Date is required', 400);
 
@@ -253,11 +284,13 @@ const clearDate = async (req, res) => {
  * - date: YYYY-MM-DD (required)
  * - timeSlots: string[] (required)
  *
- * Authorization: Doctor only
+ * Authorization: a doctor (own diary) or a calendar.block holder (doctorId)
  */
 const unblockRange = async (req, res) => {
   const { date, timeSlots } = req.body;
-  const doctorId = req.user.id;
+  const who = await targetDoctor(req);
+  if (who.error) return error(res, ...who.error);
+  const doctorId = who.id;
 
   if (!date) return error(res, 'Date is required', 400);
   if (!Array.isArray(timeSlots) || !timeSlots.length) return error(res, 'timeSlots array is required', 400);
@@ -279,11 +312,13 @@ const unblockRange = async (req, res) => {
  * - timeSlots: string[]  (required)
  * - weekdays:  number[]  (optional — omit = every day)
  *
- * Authorization: Doctor only
+ * Authorization: a doctor (own diary) or a calendar.block holder (doctorId)
  */
 const unblockRecurring = async (req, res) => {
   const { fromDate, toDate, timeSlots, weekdays } = req.body;
-  const doctorId = req.user.id;
+  const who = await targetDoctor(req);
+  if (who.error) return error(res, ...who.error);
+  const doctorId = who.id;
 
   if (!fromDate || !toDate) return error(res, 'fromDate and toDate are required', 400);
   if (!Array.isArray(timeSlots) || !timeSlots.length) return error(res, 'timeSlots array is required', 400);

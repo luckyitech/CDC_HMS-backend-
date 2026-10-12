@@ -3,6 +3,12 @@ const router  = express.Router();
 const { body } = require('express-validator');
 const validate = require('../middleware/validate');
 const { authenticate, authorize } = require('../middleware/auth');
+const { PERMISSIONS } = require('../constants/permissions');
+
+// Blocking time: a doctor in their own diary (by role), or a holder of
+// calendar.block in any doctor's diary, naming it with doctorId (12 Oct 2026).
+const BLOCKERS = ['doctor', PERMISSIONS.CALENDAR_BLOCK];
+const doctorIdField = () => body('doctorId').optional().isInt({ min: 1 }).withMessage('doctorId must be a doctor id');
 const {
   block, unblock,
   getBlocks,
@@ -15,7 +21,7 @@ const {
 router.get(
   '/upcoming',
   authenticate,
-  authorize('doctor'),
+  authorize(...BLOCKERS),
   getUpcoming
 );
 
@@ -23,9 +29,10 @@ router.get(
 router.delete(
   '/date',
   authenticate,
-  authorize('doctor'),
+  authorize(...BLOCKERS),
   [
     body('date').isDate().withMessage('Valid date is required (YYYY-MM-DD)'),
+    doctorIdField(),
     validate,
   ],
   clearDate
@@ -43,12 +50,13 @@ router.get(
 router.post(
   '/recurring',
   authenticate,
-  authorize('doctor'),
+  authorize(...BLOCKERS),
   [
     body('fromDate').isDate().withMessage('Valid fromDate is required (YYYY-MM-DD)'),
     body('toDate').isDate().withMessage('Valid toDate is required (YYYY-MM-DD)'),
     body('timeSlots').isArray({ min: 1 }).withMessage('At least 1 time slot is required'),
     body('weekdays').optional().isArray(),
+    doctorIdField(),
     validate,
   ],
   blockRecurring
@@ -58,12 +66,13 @@ router.post(
 router.delete(
   '/recurring',
   authenticate,
-  authorize('doctor'),
+  authorize(...BLOCKERS),
   [
     body('fromDate').isDate().withMessage('Valid fromDate is required (YYYY-MM-DD)'),
     body('toDate').isDate().withMessage('Valid toDate is required (YYYY-MM-DD)'),
     body('timeSlots').isArray({ min: 1 }).withMessage('At least 1 time slot is required'),
     body('weekdays').optional().isArray(),
+    doctorIdField(),
     validate,
   ],
   unblockRecurring
@@ -73,10 +82,11 @@ router.delete(
 router.post(
   '/range',
   authenticate,
-  authorize('doctor'),
+  authorize(...BLOCKERS),
   [
     body('date').isDate().withMessage('Valid date is required (YYYY-MM-DD)'),
     body('timeSlots').isArray({ min: 2 }).withMessage('At least 2 time slots are required'),
+    doctorIdField(),
     validate,
   ],
   blockRange
@@ -86,10 +96,11 @@ router.post(
 router.delete(
   '/range',
   authenticate,
-  authorize('doctor'),
+  authorize(...BLOCKERS),
   [
     body('date').isDate().withMessage('Valid date is required (YYYY-MM-DD)'),
     body('timeSlots').isArray({ min: 1 }).withMessage('At least 1 time slot is required'),
+    doctorIdField(),
     validate,
   ],
   unblockRange
@@ -99,10 +110,11 @@ router.delete(
 router.post(
   '/',
   authenticate,
-  authorize('doctor'),
+  authorize(...BLOCKERS),
   [
     body('date').isDate().withMessage('Valid date is required (YYYY-MM-DD)'),
     body('timeSlot').optional().isString(),
+    doctorIdField(),
     validate,
   ],
   block
@@ -112,10 +124,11 @@ router.post(
 router.delete(
   '/',
   authenticate,
-  authorize('doctor'),
+  authorize(...BLOCKERS),
   [
     body('date').isDate().withMessage('Valid date is required (YYYY-MM-DD)'),
     body('timeSlot').optional().isString(),
+    doctorIdField(),
     validate,
   ],
   unblock
