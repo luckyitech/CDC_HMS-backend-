@@ -17,6 +17,15 @@ const catalog = require('../controllers/stockCatalogController');
 const movements = require('../controllers/stockMovementController');
 const rooms = require('../controllers/stockRoomController');
 const reports = require('../controllers/stockReportController');
+const receipts = require('../controllers/stockReceiptController');
+const uploadStockReceipt = require('../middleware/uploadStockReceipt');
+
+const handleReceiptUpload = (req, res, next) =>
+  uploadStockReceipt.single('file')(req, res, (err) => {
+    if (!err) return next();
+    const message = err.code === 'LIMIT_FILE_SIZE' ? 'File is too large. Maximum size is 15MB.' : err.message || 'Upload failed';
+    return res.status(400).json({ success: false, message });
+  });
 
 // ====================================
 // UNDERSTANDING AUTHORIZATION
@@ -52,9 +61,26 @@ router.put('/suppliers/:id', authenticate, stockWrite, catalog.updateSupplier);
 router.post('/intake', authenticate, stockWrite, [
   body('stockItemId').isInt().withMessage('stockItemId is required'),
   body('locationId').isInt().withMessage('locationId is required'),
+  body('receiptNo').optional({ nullable: true }).isString().withMessage('Invoice / receipt number must be text'),
+  body('receiptKind').optional().isIn(receipts.KINDS).withMessage('Choose invoice, receipt or delivery note'),
   qty(),
   validate,
 ], movements.intake);
+
+// ---------- Supplier invoices / receipts + scans (12 Oct 2026) ----------
+router.get('/receipts',        authenticate, stockRead, receipts.list);
+router.get('/receipts/lookup', authenticate, stockRead, receipts.lookup);
+router.get('/receipts/:id',    authenticate, stockRead, receipts.getOne);
+router.post('/receipts', authenticate, stockWrite, [
+  body('number').exists({ checkFalsy: true }).withMessage('Enter the invoice / receipt number').bail()
+    .isString().trim().notEmpty().withMessage('Enter the invoice / receipt number'),
+  body('kind').optional().isIn(receipts.KINDS).withMessage('Choose invoice, receipt or delivery note'),
+  body('supplierId').optional({ nullable: true }).isInt(),
+  validate,
+], receipts.ensure);
+router.post('/receipts/:id/documents', authenticate, stockWrite, handleReceiptUpload, receipts.addDocument);
+router.get('/receipts/:id/documents/:docId', authenticate, stockRead, receipts.getDocument);
+router.delete('/receipts/:id/documents/:docId', authenticate, stockWrite, receipts.removeDocument);
 
 router.post('/dispense', authenticate, stockWrite, [
   body('locationId').isInt().withMessage('locationId is required'),

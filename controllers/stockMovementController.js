@@ -13,6 +13,7 @@ const {
   sequelize, StockItem, StockBatch, StockMovement, StockLevel, StockLocation,
   Supplier, User, Patient,
 } = db;
+const { findOrCreateReceipt, numberKeyOf } = require('./stockReceiptController');
 const { runExpirySweepIfDue } = require('../utils/stockExpirySweep');
 const { itemsBelowReorder } = require('../utils/stockTotals');
 const { clinicToday, clinicDatePlusDays, clinicStartOfDay } = require('../utils/clinicTime');
@@ -159,11 +160,16 @@ const fefoCheck = async (batch, locationId, fefoOverrideReason) => {
 // POST /api/stock/intake
 // One transaction: create the batch, assign its STK- label code from the row
 // id, and post the intake movement. Body: stockItemId, quantity, locationId,
-// batchNo?, expiryDate?, supplierId?, receivedAt?
+// receiptNo, receiptKind?, batchNo?, expiryDate?, supplierId?, receivedAt?
+//
+// 12 Oct 2026 (Emu): the supplier's invoice / receipt number is OPTIONAL
+// (made optional the same afternoon). When given, lines on one document share
+// one StockReceipt (supplier + number); its scan can be attached now or later
+// (stockReceiptController). Without it the batch has no receipt.
 // ------------------------------------
 const intake = async (req, res) => {
   try {
-    const { stockItemId, quantity, locationId, batchNo, expiryDate, supplierId, receivedAt } = req.body;
+    const { stockItemId, quantity, locationId, batchNo, expiryDate, supplierId, receivedAt, receiptNo, receiptKind } = req.body;
 
     const item = await StockItem.findByPk(stockItemId);
     if (!item || item.status !== 'active') return error(res, 'Stock item not found or retired', 404);
@@ -181,8 +187,12 @@ const intake = async (req, res) => {
     }
 
     const result = await sequelize.transaction(async (t) => {
+      const receipt = numberKeyOf(receiptNo)
+        ? await findOrCreateReceipt({ number: receiptNo, kind: receiptKind, supplierId, userId: req.user.id }, t)
+        : null;
       const batch = await StockBatch.create({
         stockItemId: item.id,
+        stockReceiptId: receipt ? receipt.id : null,
         batchNo: batchNo ? String(batchNo).trim() : null,
         expiryDate: expiryDate || null,
         supplierId: supplierId || null,
@@ -206,10 +216,11 @@ const intake = async (req, res) => {
         performedById: req.user.id,
       }, t);
 
-      return { batch, movement };
+      return { batch, movement, receipt };
     });
 
     return success(res, {
+      receipt: result.receipt ? { id: result.receipt.id, number: result.receipt.number, kind: result.receipt.kind } : null,
       batch: result.batch,
       movement: result.movement,
       item: { id: item.id, name: item.name, unit: item.unit },

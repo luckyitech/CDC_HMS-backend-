@@ -3,7 +3,9 @@ const { defineModel, DataTypes } = require('../utils/defineModel');
 // A delivery of one item, with its expiry. The unit of FEFO and of recall —
 // every physical quantity in the system belongs to a batch.
 const StockBatch = defineModel('StockBatch', {
-  // stockItemId / supplierId / receivedById — aliased associations in models/index.js
+  // stockItemId / supplierId / receivedById / stockReceiptId — aliased associations in models/index.js
+  // stockReceiptId: the supplier invoice / receipt it came in on (12 Oct 2026;
+  // empty for batches received before then).
 
   // Manufacturer lot number as printed on the box.
   batchNo: {
