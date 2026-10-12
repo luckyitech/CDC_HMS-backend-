@@ -1,4 +1,5 @@
 const { Op } = require('sequelize');
+const { addCharges, chargesFromVitals } = require('../utils/visitCharges');
 const { success, error } = require('../utils/response');
 const { clinicToday, clinicStartOfDay } = require('../utils/clinicTime');
 const { broadcast } = require('../utils/sseManager');
@@ -730,8 +731,19 @@ const recordVitals = async (req, res) => {
   // Saving vitals IS triage completing for this visit: stamp the live queue row.
   // Fire-and-forget would hide failures; awaited, but a failure here must not
   // undo a saved vitals record, so it's caught and logged rather than surfaced.
-  await stampTriageOnQueue(req).catch((err) =>
-    console.error('PatientVital.recordVitals stampTriageOnQueue error:', err));
+  const liveVisit = await stampTriageOnQueue(req).catch((err) => {
+    console.error('PatientVital.recordVitals stampTriageOnQueue error:', err);
+    return null;
+  });
+
+  // 12 Oct 2026 (Emu): a triage RESULT that is itself a test (HbA1c, RBS,
+  // ketones) puts that test on the visit's bill — the nurse can untick it.
+  const tests = chargesFromVitals(req.body);
+  if (liveVisit && tests.length) {
+    await addCharges(liveVisit, { charges: tests }, req.user, { source: 'vital', stage: 'triage' })
+      .then((added) => { if (added.length) broadcast('queue_updated'); })
+      .catch((err) => console.error('PatientVital.recordVitals addCharges error:', err));
+  }
 
   return success(res, formatVitals(await withRecordedBy(vital)), 201);
 };

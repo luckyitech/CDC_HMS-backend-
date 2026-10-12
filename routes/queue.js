@@ -64,6 +64,12 @@ router.put('/:id', authenticate, authorize('staff', 'doctor', 'nurse', 'queue.wr
 // ------------------------------------
 router.post('/:id/refer', authenticate, authorize('doctor'), queueController.refer);
 
+// The visit's bill with who added each line (12 Oct 2026) — every stage that
+// may bill (nurse, doctor, front desk/cashier) reads, adds and removes here.
+router.get('/:id/charges', authenticate, authorize('staff', 'doctor', 'nurse', 'queue.write'), queueController.getCharges);
+router.post('/:id/charges', authenticate, authorize('staff', 'doctor', 'nurse', 'queue.write'), queueController.addChargeLines);
+router.delete('/:id/charges', authenticate, authorize('staff', 'doctor', 'nurse', 'queue.write'), queueController.removeChargeLine);
+
 // ------------------------------------
 // POST /api/queue/:id/refer-note — Save & Print the referral note (no handoff)
 // Must be before /:id (DELETE) is unaffected; kept beside refer for clarity.

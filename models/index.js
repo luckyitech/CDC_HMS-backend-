@@ -100,6 +100,7 @@ const PatientDiagnosis    = require('./PatientDiagnosis');
 const StockItem           = require('./StockItem');
 const StockLocation       = require('./StockLocation');
 const StockBatch          = require('./StockBatch');
+const QueueCharge         = require('./QueueCharge');
 const StockMovement       = require('./StockMovement');
 const StockLevel          = require('./StockLevel');
 const StockParLevel       = require('./StockParLevel');
@@ -381,6 +382,11 @@ BloodSugarReading.belongsTo(Patient);
 Patient.hasMany(Queue);
 Queue.belongsTo(Patient);
 Queue.belongsTo(User, { as: 'assignedDoctor', foreignKey: 'assignedDoctorId' });
+// The bill's attribution and history (12 Oct 2026) — utils/visitCharges.
+Queue.hasMany(QueueCharge, { as: 'chargeLines', foreignKey: 'QueueId' });
+QueueCharge.belongsTo(Queue, { foreignKey: 'QueueId' });
+QueueCharge.belongsTo(User, { as: 'addedBy', foreignKey: 'addedById' });
+QueueCharge.belongsTo(User, { as: 'removedBy', foreignKey: 'removedById' });
 // The booking this visit came from (null = walk-in). Ordering reads the
 // denormalised Queue.scheduledTime; this link is for traceability/auto check-in.
 Queue.belongsTo(Appointment, { as: 'appointment', foreignKey: 'appointmentId' });
@@ -878,6 +884,7 @@ const db = {
   StockItem,
   StockLocation,
   StockBatch,
+  QueueCharge,
   StockMovement,
   StockLevel,
   StockParLevel,

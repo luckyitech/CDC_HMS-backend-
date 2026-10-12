@@ -1,4 +1,5 @@
 const { Op } = require('sequelize');
+const { addCharges, removeCharge, listCharges } = require('../utils/visitCharges');
 const { success, error } = require('../utils/response');
 const { broadcast } = require('../utils/sseManager');
 const { clinicStartOfDay, clinicToday } = require('../utils/clinicTime');
@@ -298,7 +299,7 @@ const update = async (req, res) => {
     if (!item) return error(res, 'Queue item not found', 404);
 
     // Strip response-only computed fields — not DB columns
-    const { assignedDoctorName, ...updates } = req.body;
+    const { assignedDoctorName, selectedCharges, selectedProcedures, ...updates } = req.body;
 
     // Auto-set timestamps on status transitions
     if (updates.status === 'In Triage') {
@@ -345,6 +346,17 @@ const update = async (req, res) => {
       updates.dischargedAt         = new Date();
     }
 
+    // The bill (12 Oct 2026): charges and procedures sent here are ADDED to the
+    // visit's bill on the server, with who added them — never a replacement.
+    // A screen with stale data (or the old "send for injection" path) used to
+    // overwrite the arrays and wipe another stage's lines. Removing a line is
+    // DELETE /api/queue/:id/charges.
+    if (selectedCharges !== undefined || selectedProcedures !== undefined) {
+      await addCharges(item, { charges: selectedCharges, procedures: selectedProcedures }, req.user, { save: false });
+      // instance.update() saves only the keys it is given — name the bill's.
+      updates.selectedCharges = item.get('selectedCharges');
+      updates.selectedProcedures = item.get('selectedProcedures');
+    }
     await item.update(updates);
 
     // Re-fetch with joins
@@ -478,12 +490,10 @@ const refer = async (req, res) => {
     // --- Merge charges with any already recorded on this queue entry ---
     // This handles multi-doctor visits: Doctor A's charges are preserved when
     // Doctor B later completes their own consultation and adds their own charges.
-    const mergedCharges = [
-      ...new Set([...(item.selectedCharges || []), ...selectedCharges]),
-    ];
-    const mergedProcedures = [
-      ...new Set([...(item.selectedProcedures || []), ...selectedProcedures]),
-    ];
+    // 12 Oct 2026: through utils/visitCharges so each line records who added it.
+    await addCharges(item, { charges: selectedCharges, procedures: selectedProcedures }, req.user, { save: false });
+    const mergedCharges = jsonArray(item.selectedCharges);
+    const mergedProcedures = jsonArray(item.selectedProcedures);
 
     // --- Build the shared audit fields (same for both types) ---
     const auditFields = {
@@ -718,4 +728,50 @@ const patientHistory = async (req, res) => {
   }
 };
 
-module.exports = { add, list, update, remove, stats, callNext, refer, saveReferralNote, listAdvisedReferrals, patientHistory };
+// ------------------------------------
+// The visit's bill with attribution (12 Oct 2026) — every stage sees the same
+// lines and who added each. GET / POST (add) / DELETE (remove one line).
+// ------------------------------------
+const getCharges = async (req, res) => {
+  try {
+    const item = await Queue.findByPk(req.params.id);
+    if (!item) return error(res, 'Queue item not found', 404);
+    return success(res, await listCharges(item));
+  } catch (err) {
+    console.error('Queue.getCharges error:', err);
+    return error(res, 'Failed to load the bill', 500);
+  }
+};
+
+const addChargeLines = async (req, res) => {
+  try {
+    const item = await Queue.findByPk(req.params.id);
+    if (!item) return error(res, 'Queue item not found', 404);
+    if (['Completed', 'Removed'].includes(item.status)) return error(res, 'This visit is closed — its bill can no longer change.', 409);
+    const { charges, procedures, stage } = req.body || {};
+    const added = await addCharges(item, { charges, procedures }, req.user, { stage });
+    if (added.length) broadcast('queue_updated');
+    return success(res, { added, ...(await listCharges(item)) });
+  } catch (err) {
+    console.error('Queue.addChargeLines error:', err);
+    return error(res, 'Failed to add to the bill', 500);
+  }
+};
+
+const removeChargeLine = async (req, res) => {
+  try {
+    const item = await Queue.findByPk(req.params.id);
+    if (!item) return error(res, 'Queue item not found', 404);
+    if (['Completed', 'Removed'].includes(item.status)) return error(res, 'This visit is closed — its bill can no longer change.', 409);
+    const { kind, name, reason } = req.body || {};
+    const done = await removeCharge(item, { kind, name, reason }, req.user);
+    if (!done) return error(res, 'That item is not on the bill', 404);
+    broadcast('queue_updated');
+    return success(res, await listCharges(item));
+  } catch (err) {
+    console.error('Queue.removeChargeLine error:', err);
+    return error(res, 'Failed to remove it from the bill', 500);
+  }
+};
+
+module.exports = { add, list, update, remove, stats, callNext, refer, saveReferralNote, listAdvisedReferrals, patientHistory, getCharges, addChargeLines, removeChargeLine };
