@@ -61,8 +61,7 @@ router.put('/suppliers/:id', authenticate, stockWrite, catalog.updateSupplier);
 router.post('/intake', authenticate, stockWrite, [
   body('stockItemId').isInt().withMessage('stockItemId is required'),
   body('locationId').isInt().withMessage('locationId is required'),
-  body('receiptNo').exists({ checkFalsy: true }).withMessage('Enter the invoice / receipt number for this delivery').bail()
-    .isString().trim().notEmpty().withMessage('Enter the invoice / receipt number for this delivery'),
+  body('receiptNo').optional({ nullable: true }).isString().withMessage('Invoice / receipt number must be text'),
   body('receiptKind').optional().isIn(receipts.KINDS).withMessage('Choose invoice, receipt or delivery note'),
   qty(),
   validate,

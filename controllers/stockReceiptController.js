@@ -1,7 +1,7 @@
 // Stock — supplier invoices / receipts and their scans (12 Oct 2026, Emu).
 //
-// Every intake names an invoice / receipt number (required); several items
-// received on one document share one StockReceipt (supplier + normalised
+// An intake may name an invoice / receipt number (optional since 12 Oct
+// afternoon); several items received on one document share one StockReceipt (supplier + normalised
 // number). The scan can be added at receiving or later — a receipt with no
 // scan is flagged in Movements → Deliveries until one is added, so an audit can
 // compare what was recorded as received with what was actually delivered.
