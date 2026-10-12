@@ -31,6 +31,7 @@ router.post(
     body('uhid').notEmpty().withMessage('Patient UHID is required'),
     body('studyDate').optional().isISO8601().withMessage('studyDate must be YYYY-MM-DD'),
     body('referral').optional().isString().withMessage('referral must be a string'),
+    body('studyId').optional().isInt({ min: 1 }).withMessage('studyId must be a study id'),
     validate,
   ],
   neuropathy.create

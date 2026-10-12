@@ -115,28 +115,39 @@ const computeSummary = (readings) => {
 /**
  * POST /api/neuropathy
  * Create a Draft study for a patient.
- * Body: { uhid, studyDate?, referral? }   Attribution: performedById from JWT.
+ * Body: { uhid, studyDate?, referral?, studyId? }   Attribution: performedById from JWT.
  */
 const create = async (req, res) => {
   try {
-    const { uhid, studyDate, referral } = req.body;
+    const { uhid, studyDate, referral, studyId } = req.body;
 
     const family = await resolvePatient(uhid);
     if (!family) return error(res, `Patient ${uhid} not found`, 404);
     if (family.isDeactivated) return error(res, 'This patient profile is inactive. No new studies can be created.', 403);
 
     // RESUME, don't duplicate (10 Oct 2026): a study left as a Draft — the
-    // doctor navigated away mid-exam — keeps its readings on the server. A
-    // second visit to the exam used to open a NEW Draft, so the old one and
-    // its readings were orphaned, invisible, and the exam could never be
-    // completed. Now the newest Draft for this patient is handed back with
-    // its readings (200, `resumed: true`) and only when there is none is a
-    // new study started (201).
-    const open = await NeuropathyStudy.findOne({
+    // doctor navigated away mid-exam — keeps its readings on the server, so
+    // it is handed back with its readings (200, `resumed: true`) and only
+    // when there is none is a new study started (201).
+    //
+    // 12 Oct 2026: WHICH Draft. A patient can hold more than one (an empty
+    // Draft opened on a later visit, or a StrictMode duplicate), and "newest"
+    // then resumed the EMPTY one while the Draft with the readings sat in the
+    // In-progress list — Continue showed a blank exam. Now:
+    //   • studyId given (Continue / a remarks draft) → exactly that Draft;
+    //   • otherwise → the newest Draft that HAS readings, else the newest.
+    const drafts = await NeuropathyStudy.findAll({
       where: { PatientId: { [Op.in]: family.patientIds }, status: 'Draft' },
       include: [...studyIncludes, { model: NeuropathyReading }],
       order: [['createdAt', 'DESC']],
     });
+    let open = null;
+    if (studyId) {
+      open = drafts.find((d) => String(d.id) === String(studyId));
+      if (!open) return error(res, 'That study is no longer in progress (completed or withdrawn).', 409);
+    } else {
+      open = drafts.find((d) => (d.NeuropathyReadings || []).some((r) => !r.omitted)) || drafts[0] || null;
+    }
     if (open) {
       return success(res, { ...formatStudy(open, { withReadings: true }), resumed: true });
     }
