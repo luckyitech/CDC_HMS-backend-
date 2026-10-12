@@ -41,6 +41,11 @@ const K = {
   // day that isn't a holiday ('auto' PublicHolidays rows). Off = those rows are
   // ignored everywhere (leaveService), not deleted.
   observeSundayHolidays: 'hr.holidays.observeSunday', // 'true' | 'false'
+  // 12 Oct 2026 (Emu): how doctors take leave, clinic-wide. 'apply' — they
+  // apply and someone approves (the default, as before); 'record' — they
+  // record their own leave from Block time, approved at once and charged to
+  // their balance.
+  doctorLeaveMode:      'hr.leave.doctorMode',         // 'apply' | 'record'
 };
 
 // B27 (decision D9): which HR alerts go out on which channel. HR chooses per
@@ -115,7 +120,10 @@ const DEFAULTS = {
   expiryThresholds: DEFAULT_THRESHOLDS,
   calendarVisibleTypes: [],
   observeSundayHolidays: true,
+  doctorLeaveMode: 'apply',
 };
+
+const DOCTOR_LEAVE_MODES = ['apply', 'record'];
 
 const GEO_MODES = ['off', 'log'];
 
@@ -135,6 +143,7 @@ const FIELDS = {
   expiryThresholds:     { key: K.expiryThresholds,     label: 'Expiry reminder days' },
   calendarVisibleTypes: { key: K.calendarVisibleTypes, label: 'Team calendar — visible leave types' },
   observeSundayHolidays: { key: K.observeSundayHolidays, label: 'Holiday on a Sunday also observed on the next day' },
+  doctorLeaveMode:      { key: K.doctorLeaveMode,      label: 'How doctors take leave' },
 };
 
 let cached = { rows: null, at: 0 };
@@ -177,6 +186,7 @@ const getHrConfig = async () => {
     expiryThresholds:  cleanThresholds(safeParse(m[K.expiryThresholds])) || [...DEFAULT_THRESHOLDS],
     calendarVisibleTypes: cleanVisibleTypes(m[K.calendarVisibleTypes]),
     observeSundayHolidays: bool(m[K.observeSundayHolidays], DEFAULTS.observeSundayHolidays),
+    doctorLeaveMode: DOCTOR_LEAVE_MODES.includes(m[K.doctorLeaveMode]) ? m[K.doctorLeaveMode] : DEFAULTS.doctorLeaveMode,
   };
 };
 
@@ -237,6 +247,10 @@ const setHrConfig = async (changes = {}) => {
   if (changes.observeSundayHolidays !== undefined) {
     await write(K.observeSundayHolidays, changes.observeSundayHolidays ? 'true' : 'false');
   }
+  if (changes.doctorLeaveMode !== undefined) {
+    if (!DOCTOR_LEAVE_MODES.includes(changes.doctorLeaveMode)) throw new Error('How doctors take leave must be apply or record.');
+    await write(K.doctorLeaveMode, changes.doctorLeaveMode);
+  }
   if (changes.calendarVisibleTypes !== undefined) {
     const arr = typeof changes.calendarVisibleTypes === 'string' ? safeParse(changes.calendarVisibleTypes) : changes.calendarVisibleTypes;
     if (!Array.isArray(arr)) throw new Error('Team calendar visible types must be a list of leave types.');
@@ -248,6 +262,6 @@ const setHrConfig = async (changes = {}) => {
 };
 
 module.exports = {
-  KEYS: K, DEFAULTS, FIELDS, GEO_MODES, ALERT_EVENTS, ALERT_CHANNELS, normaliseAlerts,
+  KEYS: K, DEFAULTS, FIELDS, GEO_MODES, DOCTOR_LEAVE_MODES, ALERT_EVENTS, ALERT_CHANNELS, normaliseAlerts,
   getHrConfig, setHrConfig, clearHrCache,
 };

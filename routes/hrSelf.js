@@ -53,6 +53,17 @@ router.post('/leave', authenticate, authorize(...SELF), [
   validate,
 ], selfLeave.submit);
 
+// A doctor records their own leave — only where HR chose 'record' (12 Oct 2026;
+// role and setting are checked in the controller).
+router.post('/leave/record', authenticate, authorize(...SELF), [
+  body('leaveType').isString().trim().notEmpty().withMessage('Choose a leave type'),
+  body('startDate').isISO8601({ strict: true }).withMessage('Choose the first day'),
+  body('endDate').isISO8601({ strict: true }).withMessage('Choose the last day'),
+  ...PARTS,
+  body('reason').optional({ nullable: true }).isString(),
+  validate,
+], selfLeave.record);
+
 router.get('/leave/:id', authenticate, authorize(...SELF), [ID, validate], selfLeave.getOne);
 
 router.post('/leave/:id/reply', authenticate, authorize(...SELF), [

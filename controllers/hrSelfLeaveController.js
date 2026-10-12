@@ -33,6 +33,7 @@ const {
 const { PERMISSIONS, passesAdminGate, INTERNAL_ROLES } = require('../constants/permissions');
 const leaveService = require('../services/leaveService');
 const hrNotify = require('../services/hrNotify');
+const { getHrConfig } = require('../utils/hrConfig');
 const db = require('../models');
 const sequelize = require('../config/database');
 
@@ -459,9 +460,11 @@ const overview = async (req, res) => {
   try {
     const today = clinicToday();
     const year = parseInt(req.query.year, 10) || Number(today.slice(0, 4));
-    const data = await buildOverview({ userId: req.user.id, year, today });
+    const [data, cfg] = await Promise.all([buildOverview({ userId: req.user.id, year, today }), getHrConfig()]);
     if (!data) return error(res, 'Account not found', 404);
-    return success(res, data);
+    // A doctor's way of taking leave (clinic-wide, 12 Oct 2026): 'record' puts
+    // "This is leave" on their Block time; null for everyone else.
+    return success(res, { ...data, doctorLeaveMode: req.user.role === 'doctor' ? cfg.doctorLeaveMode : null });
   } catch (err) {
     console.error('SelfLeave.overview error:', err);
     return error(res, 'Failed to load your leave', 500);
@@ -870,8 +873,97 @@ const approvers = async (req, res) => {
   }
 };
 
+/**
+ * POST /api/hr/me/leave/record — a DOCTOR records their own leave (12 Oct 2026).
+ * Only where HR set "How doctors take leave" to 'record'. Judged by the same
+ * evaluate() as an application (type offered, overlap, balance under a
+ * published policy), then approved on the spot: charged to their balance,
+ * event 'recorded', and the diary blocked for every day (always — the doctor
+ * does this from Block time). HR (leave.manage holders) is told. Elsewhere a
+ * doctor applies through My leave like everyone else.
+ */
+const record = async (req, res) => {
+  try {
+    const me = await loadMe(req.user.id);
+    if (!me) return error(res, 'Account not found', 404);
+    if (me.role !== 'doctor') return error(res, 'Only doctors record their own leave — apply through My leave.', 403, { code: 'NOT_DOCTOR' });
+    const cfg = await getHrConfig();
+    if (cfg.doctorLeaveMode !== 'record') {
+      return error(res, 'This clinic asks doctors to apply for leave — use My leave in the HR Suite.', 403, { code: 'APPLY_MODE' });
+    }
+
+    const today = clinicToday();
+    const body = req.body || {};
+    const result = await evaluate({ user: me, body, today });
+    if (!result.ok) {
+      const first = result.errors[0];
+      return error(res, first.message, result.status, { code: first.code, errors: result.errors, balance: result.balance });
+    }
+
+    const now = new Date();
+    const leave = await sequelize.transaction(async (t) => {
+      const row = await StaffLeave.create({
+        UserId:       me.id,
+        leaveType:    result.leaveType,
+        startDate:    result.startDate,
+        endDate:      result.endDate,
+        startPart:    result.startPart,
+        endPart:      result.endPart,
+        days:         result.total,
+        reason:       clip(body.reason, 2000),
+        status:       STATUS.APPROVED,
+        approvedById: me.id,
+        approvedAt:   now,
+        submittedAt:  now,
+        policyYear:   result.policyYear,
+        breakdown:    {
+          ...(result.breakdown || {}),
+          usedPolicy: result.usedPolicy,
+          backdated: result.warnings.some((w) => w.code === 'BACKDATED'),
+          documentNeeded: false,
+          clashNames: [],
+          selfRecorded: true,
+        },
+        returnDate:   result.returnDate,
+        onBehalf:     false,
+        createdBy:    me.id,
+      }, { transaction: t });
+      await leaveService.setCharges(row.id, [{ leaveType: result.leaveType, days: result.total }], me.id, t);
+      await leaveService.recordEvent(row.id, me.id, 'recorded', {
+        data: { status: row.status, days: result.total, leaveType: result.leaveType, self: true },
+      }, t);
+      return row;
+    });
+
+    // Lazy: leaveController requires this file.
+    const { applyApprovalSideEffects } = require('./leaveController');
+    await applyApprovalSideEffects(leave, me, me, { blockDoctorSlots: true });
+
+    const hr = (await hrNotify.holdersOf(PERMISSIONS.LEAVE_MANAGE)).filter((id) => id !== me.id);
+    if (hr.length) {
+      const typeNames = await typeNameMap();
+      await hrNotify.notify('leave_decided', {
+        recipients: hr,
+        title: `${fullName(me)} recorded leave`,
+        body: `${typeForNotice(result.leaveType, typeNames)} · ${rangeText(result.startDate, result.endDate)} · ${daysText(result.total)}.`,
+        link: approverLink(leave.id),
+        actorName: fullName(me),
+      });
+    }
+
+    return success(res, {
+      id: leave.id, leaveType: result.leaveType, startDate: result.startDate, endDate: result.endDate,
+      days: result.total, status: leave.status, balance: result.balance,
+    }, 201);
+  } catch (err) {
+    console.error('StaffLeave.record error:', err);
+    return error(res, 'Failed to record your leave', 500);
+  }
+};
+
 module.exports = {
   overview,
+  record,
   preview,
   submit,
   getOne,

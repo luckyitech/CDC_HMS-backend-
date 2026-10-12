@@ -77,10 +77,13 @@ const policyView = async (year) => {
     LeavePolicy.findOne({ where: { year: year - 1 }, attributes: ['id', 'status'] }),
   ]);
   const edit = rules.editability({ year, today, policy: row ? { status: row.status } : null });
+  const { doctorLeaveMode } = await getHrConfig();
 
   return {
     year,
     today,
+    // Clinic-wide, not part of the year's policy (12 Oct 2026) — changes at once.
+    doctorLeaveMode,
     exists: !!row,
     editability: edit,
     previousYear: prev ? { year: year - 1, status: prev.status } : null,
@@ -556,6 +559,27 @@ const setObserveSunday = async (req, res) => {
   }
 };
 
+/**
+ * PUT /api/leave/doctor-leave-mode { mode } — 12 Oct 2026 (Emu). How doctors
+ * take leave, clinic-wide: 'apply' (they apply; someone approves — as before)
+ * or 'record' (they record their own leave from Block time, approved at once
+ * and charged to their balance). Not tied to a year's policy, so it is never
+ * locked by publishing; logged like every HR setting.
+ */
+const setDoctorLeaveMode = async (req, res) => {
+  const mode = req.body?.mode;
+  if (!['apply', 'record'].includes(mode)) return error(res, 'Choose apply or record.', 400);
+  try {
+    const before = await getHrConfig();
+    const after = await setHrConfig({ doctorLeaveMode: mode });
+    recordSettingChanges({ user: req.user, area: AREA, before, after, fields: { doctorLeaveMode: FIELDS.doctorLeaveMode } });
+    return success(res, { doctorLeaveMode: after.doctorLeaveMode });
+  } catch (err) {
+    console.error('LeaveSettings.doctorLeaveMode error:', err);
+    return error(res, 'Failed to save the setting', 500);
+  }
+};
+
 // ---------------------------------------------------------------------------
 // Entitlements (D1, D3)
 // ---------------------------------------------------------------------------
@@ -760,6 +784,7 @@ module.exports = {
   updateType,
   listHolidays,
   setObserveSunday,
+  setDoctorLeaveMode,
   createHoliday,
   updateHoliday,
   entitlements,

@@ -81,6 +81,8 @@ router.post('/holidays', authenticate, authorize(...HOLIDAYS), [
 router.patch('/holidays/:id', authenticate, authorize(...HOLIDAYS), [param('id').isInt(), validate], leaveSettings.updateHoliday);
 // HR Tier 2 — a holiday on a Sunday is also observed on the next day (switch).
 router.put('/holidays/observe-sunday', authenticate, authorize(...HOLIDAYS), [body('on').isBoolean().withMessage('Say on or off'), validate], leaveSettings.setObserveSunday);
+// 12 Oct 2026 — how doctors take leave: apply (approved by someone) or record their own.
+router.put('/doctor-leave-mode', authenticate, authorize(...POLICY), [body('mode').isIn(['apply', 'record']).withMessage('Choose apply or record'), validate], leaveSettings.setDoctorLeaveMode);
 
 // ---- Entitlements ------------------------------------------------------------
 router.get('/entitlements', authenticate, authorize(...ENTITLEMENTS), [

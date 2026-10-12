@@ -16,6 +16,14 @@
 //
 // Reuses leaveService.holidayMap / PRIVATE_TYPES / listTypes / loadPolicy — no
 // new leave logic here.
+//
+// 12 Oct 2026 (Emu): the team calendar and the doctors' diaries show the same
+// thing. A doctor's DIARY BLOCKS appear too — a whole blocked day as a bar
+// ("Blocked", state 'blocked'), a part day as a half-day marker
+// ("Morning / Afternoon / Part day blocked", state 'blocked-part'). The block's
+// reason is never sent. Blocks that leave created (StaffLeave.doctorBlockIds),
+// and any block on a day the doctor already shows leave, are left out so a day
+// never shows twice. Blocks never count toward the cadre clash warning.
 
 const { Op } = require('sequelize');
 const { success, error } = require('../utils/response');
@@ -29,7 +37,12 @@ const { getHrConfig } = require('../utils/hrConfig');
 const leaveService = require('../services/leaveService');
 const db = require('../models');
 
-const { StaffLeave, User, StaffProfile } = db;
+const { StaffLeave, User, StaffProfile, DoctorBlock } = db;
+const { SLOT_LABELS, FULL_DAY } = require('../utils/appointmentSlots');
+const { parseJsonColumn } = require('../utils/jsonColumn');
+
+const MORNING = new Set(SLOT_LABELS.slice(0, SLOT_LABELS.indexOf('12:00 PM') + 1));
+const AFTERNOON = new Set(SLOT_LABELS.filter((t) => !MORNING.has(t)));
 
 const MAX_DAYS = 92;                 // a quarter at most, to keep the payload small
 const fullName = (u) => (u ? `${u.firstName} ${u.lastName}`.trim() : null);
@@ -78,7 +91,7 @@ const calendar = async (req, res) => {
         startDate: { [Op.lte]: to },
         endDate: { [Op.gte]: from },
       },
-      attributes: ['id', 'UserId', 'leaveType', 'startDate', 'endDate', 'status'],
+      attributes: ['id', 'UserId', 'leaveType', 'startDate', 'endDate', 'status', 'doctorBlockIds'],
       include: [{
         model: User,
         attributes: ['id', 'firstName', 'lastName', 'role'],
@@ -118,6 +131,63 @@ const calendar = async (req, res) => {
         leaveType,
       });
     }
+
+    // Doctors' diary blocks (12 Oct 2026).
+    if (!cadre || cadre === 'doctor') {
+      const fromLeave = new Set(leaves.flatMap((l) => {
+        const ids = parseJsonColumn(l.doctorBlockIds);
+        return Array.isArray(ids) ? ids.map(Number) : [];
+      }));
+      const blocks = await DoctorBlock.findAll({
+        where: { date: { [Op.between]: [from, to] } },
+        attributes: ['id', 'doctorId', 'date', 'timeSlot'],
+      });
+      const mine = blocks.filter((b) => !fromLeave.has(b.id));
+      const doctorIds = [...new Set(mine.map((b) => b.doctorId))];
+      const doctors = doctorIds.length ? await User.findAll({
+        where: { id: { [Op.in]: doctorIds }, role: 'doctor', isActive: true },
+        attributes: ['id', 'firstName', 'lastName', 'role'],
+        include: [{ model: StaffProfile, attributes: ['position'], required: false }],
+      }) : [];
+      for (const doc of doctors) {
+        const row = byUser.get(doc.id) || {
+          userId: doc.id, name: fullName(doc) || 'Doctor', role: 'doctor',
+          position: doc.StaffProfile?.position || null, segments: [],
+        };
+        const onLeave = new Set(row.segments.flatMap((sg) => datesInRange(sg.from, sg.to)));
+        const perDate = new Map();   // date -> Set(timeSlot)
+        for (const b of mine.filter((x) => x.doctorId === doc.id)) {
+          const d = String(b.date).slice(0, 10);
+          if (onLeave.has(d)) continue;
+          if (!perDate.has(d)) perDate.set(d, new Set());
+          perDate.get(d).add(b.timeSlot);
+        }
+        let run = null;   // consecutive whole days → one bar
+        const flush = () => { if (run) { row.segments.push(run); run = null; } };
+        for (const d of [...perDate.keys()].sort()) {
+          const slots = perDate.get(d);
+          const whole = slots.has(FULL_DAY) || SLOT_LABELS.every((t) => slots.has(t));
+          if (whole) {
+            if (run && addDays(run.to, 1) === d) run.to = d;
+            else { flush(); run = { from: d, to: d, state: 'blocked', label: 'Blocked', leaveType: null }; }
+            continue;
+          }
+          flush();
+          const list = [...slots];
+          const part = list.every((t) => MORNING.has(t)) ? 'am' : list.every((t) => AFTERNOON.has(t)) ? 'pm' : 'part';
+          row.segments.push({
+            from: d, to: d, state: 'blocked-part', part, leaveType: null,
+            label: part === 'am' ? 'Morning blocked' : part === 'pm' ? 'Afternoon blocked' : 'Part day blocked',
+          });
+        }
+        flush();
+        if (row.segments.length) {
+          row.segments.sort((a, b) => a.from.localeCompare(b.from));
+          byUser.set(doc.id, row);
+        }
+      }
+    }
+
     const rows = [...byUser.values()].sort((a, b) => a.name.localeCompare(b.name));
 
     // Holidays in the window; the days that are weekend (weight 0).
@@ -137,6 +207,7 @@ const calendar = async (req, res) => {
       const perRoleDay = {};   // role -> date -> Set(userId)
       for (const r of rows) {
         for (const seg of r.segments) {
+          if (String(seg.state).startsWith('blocked')) continue;   // diary blocks are not leave
           for (const d of datesInRange(seg.from, seg.to)) {
             if (holidaySet.has(d) || weekendSet.has(d)) continue;
             (perRoleDay[r.role] ||= {});
