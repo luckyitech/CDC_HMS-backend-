@@ -1,4 +1,5 @@
 const { Op, fn, col } = require('sequelize');
+const { addCharges, jsonArray } = require('../utils/visitCharges');
 const { success, error } = require('../utils/response');
 const { resolvePatient } = require('../utils/patientFamily');
 const { broadcast } = require('../utils/sseManager');
@@ -42,12 +43,10 @@ exports.requestAdmission = async (req, res) => {
 
     // Merge the doctor's billing selections with anything already on the queue
     // entry — same accumulation the referral flow uses for multi-doctor visits.
-    const mergedCharges = [
-      ...new Set([...(queueItem.selectedCharges || []), ...selectedCharges]),
-    ];
-    const mergedProcedures = [
-      ...new Set([...(queueItem.selectedProcedures || []), ...selectedProcedures]),
-    ];
+    // 12 Oct 2026: through utils/visitCharges so each line records who added it.
+    await addCharges(queueItem, { charges: selectedCharges, procedures: selectedProcedures }, req.user, { save: false });
+    const mergedCharges = jsonArray(queueItem.selectedCharges);
+    const mergedProcedures = jsonArray(queueItem.selectedProcedures);
 
     await queueItem.update({
       admissionRequested: true,
