@@ -14,6 +14,7 @@ const {
   Supplier, User, Patient,
 } = db;
 const { findOrCreateReceipt, numberKeyOf } = require('./stockReceiptController');
+const { validateReceiveLine, receiveLine } = require('../utils/stockReceive');
 const { runExpirySweepIfDue } = require('../utils/stockExpirySweep');
 const { itemsBelowReorder } = require('../utils/stockTotals');
 const { clinicToday, clinicDatePlusDays, clinicStartOfDay } = require('../utils/clinicTime');
@@ -36,7 +37,7 @@ const handleErr = (label, action) => (res, err) => {
 const MOVEMENT_INCLUDE = [
   { model: StockItem,     as: 'item',           attributes: ['id', 'name', 'unit', 'category', 'isHighAlert'] },
   // The batch's supplier names where a 'supplier_return' went (13 Oct 2026).
-  { model: StockBatch,    as: 'batch',          attributes: ['id', 'batchNo', 'labelCode', 'expiryDate', 'supplierId', 'qtyReceived'],
+  { model: StockBatch,    as: 'batch',          attributes: ['id', 'batchNo', 'labelCode', 'expiryDate', 'supplierId', 'qtyReceived', 'receiveMethod'],
     include: [{ model: Supplier, as: 'supplier', attributes: ['id', 'name'] }] },
   { model: StockLocation, as: 'fromLocation',   attributes: ['id', 'name'] },
   { model: StockLocation, as: 'toLocation',     attributes: ['id', 'name'] },
@@ -174,51 +175,18 @@ const intake = async (req, res) => {
   try {
     const { stockItemId, quantity, locationId, batchNo, expiryDate, supplierId, receivedAt, receiptNo, receiptKind } = req.body;
 
-    const item = await StockItem.findByPk(stockItemId);
-    if (!item || item.status !== 'active') return error(res, 'Stock item not found or retired', 404);
-
-    const location = await StockLocation.findByPk(locationId);
-    if (!location || location.status !== 'active') return error(res, 'Receiving location not found or retired', 404);
-
-    // Medications must carry an expiry; other categories may be undated.
-    if (item.category === 'medication' && !expiryDate) {
-      return error(res, 'Expiry date is required for medications');
-    }
-    if (supplierId) {
-      const supplier = await Supplier.findByPk(supplierId);
-      if (!supplier || supplier.status !== 'active') return error(res, 'Supplier not found or retired', 404);
-    }
+    // Item, location, expiry-for-medications, cold chain and supplier checks
+    // live in utils/stockReceive — shared with receiving from an invoice.
+    const { item, location } = await validateReceiveLine({ stockItemId, locationId, expiryDate, supplierId });
 
     const result = await sequelize.transaction(async (t) => {
       const receipt = numberKeyOf(receiptNo)
         ? await findOrCreateReceipt({ number: receiptNo, kind: receiptKind, supplierId, userId: req.user.id }, t)
         : null;
-      const batch = await StockBatch.create({
-        stockItemId: item.id,
-        stockReceiptId: receipt ? receipt.id : null,
-        batchNo: batchNo ? String(batchNo).trim() : null,
-        expiryDate: expiryDate || null,
-        supplierId: supplierId || null,
-        qtyReceived: parseInt(quantity, 10),
-        receivedAt: receivedAt || new Date(),
-        receivedById: req.user.id,          // from the JWT, never the client
-      }, { transaction: t });
-
-      // Internal shelf-label barcode — the STK- namespace reserved in
-      // barcodeController. Assigned from the id so it is unique by construction.
-      await batch.update(
-        { labelCode: `STK-${String(batch.id).padStart(6, '0')}` },
-        { transaction: t }
-      );
-
-      const movement = await applyMovement({
-        type: 'intake',
-        stockBatchId: batch.id,
-        quantity,
-        toLocationId: location.id,
-        performedById: req.user.id,
+      const { batch, movement } = await receiveLine({
+        item, location, quantity, batchNo, expiryDate, supplierId,
+        receiptId: receipt?.id, receivedAt, receivedById: req.user.id,
       }, t);
-
       return { batch, movement, receipt };
     });
 

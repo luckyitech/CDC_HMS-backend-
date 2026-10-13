@@ -63,6 +63,7 @@ const receiptOut = (r) => {
   const batches = r.batches || [];
   const docs = (r.documents || []).filter((d) => d.status === 'active');
   const received = batches.map((b) => new Date(b.receivedAt).getTime()).filter((n) => !Number.isNaN(n));
+  const invoiceLines = batches.filter((b) => b.receiveMethod === 'invoice').length;
   return {
     id: r.id,
     number: r.number,
@@ -73,6 +74,8 @@ const receiptOut = (r) => {
     createdByName: fullName(r.createdByUser),
     receivedAt: received.length ? new Date(Math.min(...received)) : r.createdAt,
     itemCount: batches.length,
+    // 'invoice' | 'manual' | 'mixed' — how the lines were entered (13 Oct 2026).
+    method: batches.length === 0 ? null : invoiceLines === 0 ? 'manual' : invoiceLines === batches.length ? 'invoice' : 'mixed',
     unitCount: batches.reduce((n, b) => n + (Number(b.qtyReceived) || 0), 0),
     documentCount: docs.length,
     documents: docs.map(docOut),
@@ -82,7 +85,7 @@ const receiptOut = (r) => {
 const listIncludes = () => [
   { model: Supplier, as: 'supplier', attributes: ['id', 'name'] },
   { model: User, as: 'createdByUser', attributes: ['firstName', 'lastName'] },
-  { model: StockBatch, as: 'batches', attributes: ['id', 'qtyReceived', 'receivedAt'] },
+  { model: StockBatch, as: 'batches', attributes: ['id', 'qtyReceived', 'receivedAt', 'receiveMethod'] },
   {
     model: StockReceiptDocument, as: 'documents', required: false,
     attributes: ['id', 'fileName', 'mimeType', 'fileSize', 'status', 'createdAt'],
@@ -90,7 +93,7 @@ const listIncludes = () => [
   },
 ];
 
-/** GET /api/stock/receipts?q&supplierId&from&to&missing=1&limit */
+/** GET /api/stock/receipts?q&supplierId&from&to&missing=1&method=invoice|manual&limit */
 const list = async (req, res) => {
   try {
     const where = {};
@@ -108,6 +111,7 @@ const list = async (req, res) => {
     const rows = await StockReceipt.findAll({ where, include: listIncludes(), order: [['createdAt', 'DESC']], limit });
     let out = rows.map(receiptOut);
     if (req.query.missing === '1') out = out.filter((r) => r.documentCount === 0);
+    if (['invoice', 'manual'].includes(req.query.method)) out = out.filter((r) => r.method === req.query.method || r.method === 'mixed');
     return success(res, out);
   } catch (err) {
     console.error('StockReceipt.list error:', err);
@@ -205,6 +209,9 @@ const getOne = async (req, res) => {
         receivedAt: b.receivedAt,
         receivedByName: fullName(b.receivedByUser),
         stockItemId: b.stockItemId,
+        receiveMethod: b.receiveMethod,
+        sourceText: b.sourceText,
+        sourceCorrections: b.sourceCorrections ? b.sourceCorrections.split(',') : [],
         edits: editsByBatch[b.id] || [],
       })),
     });

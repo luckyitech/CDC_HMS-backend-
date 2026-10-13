@@ -36,6 +36,7 @@ const ACTIVITY_TYPES = {
   test_taken:        { type: 'stock_test_taken',       label: 'Took Test Stock (Later)',      fn: 'tests' },
   test_settled:      { type: 'stock_test_settled',     label: 'Settled Test Stock',           fn: 'tests' },
   levels_rebuilt:    { type: 'stock_levels_rebuilt',   label: 'Rebuilt Stock Levels',         fn: 'other' },
+  invoice_read:      { type: 'stock_invoice_read',     label: 'Read Invoice',                 fn: 'receiving' },
 };
 
 const MOVEMENT_TYPES = {
@@ -89,6 +90,14 @@ const nameOf = (u) => (u ? `${u.firstName} ${u.lastName}` : 'Unknown');
 const staffName = (u) => (u ? `${u.role === 'doctor' ? 'Dr. ' : ''}${u.firstName} ${u.lastName}` : 'Unknown');
 const USER = ['id', 'firstName', 'lastName', 'role'];
 
+// "from invoice" / "from invoice · batch no., expiry corrected" / "entered manually"
+const CORRECTION_WORDS = { item: 'item', batchNo: 'batch no.', expiryDate: 'expiry', quantity: 'quantity' };
+const receiveMethodText = (batch) => {
+  if (batch?.receiveMethod !== 'invoice') return 'entered manually';
+  const fixed = String(batch.sourceCorrections || '').split(',').filter(Boolean).map((f) => CORRECTION_WORDS[f] || f);
+  return fixed.length ? `from invoice · ${fixed.join(', ')} corrected` : 'from invoice';
+};
+
 const parseJson = (v) => {
   if (typeof v !== 'string') return v;
   try { return JSON.parse(v); } catch { return null; }
@@ -105,7 +114,7 @@ const collectStockRows = async (dateFilter) => {
       where: { createdAt: dateFilter },
       include: [
         { model: StockItem, as: 'item', attributes: ['id', 'name', 'unit'] },
-        { model: StockBatch, as: 'batch', attributes: ['id', 'batchNo', 'stockReceiptId'],
+        { model: StockBatch, as: 'batch', attributes: ['id', 'batchNo', 'stockReceiptId', 'receiveMethod', 'sourceCorrections'],
           include: [
             { model: Supplier, as: 'supplier', attributes: ['name'] },
             { model: StockReceipt, as: 'receipt', attributes: ['id', 'number'] },
@@ -180,8 +189,10 @@ const collectStockRows = async (dateFilter) => {
         where,
         m.batch?.batchNo ? `batch ${m.batch.batchNo}` : null,
         receipt ? `${receipt.number}${m.batch?.supplier?.name ? ` (${m.batch.supplier.name})` : ''}` : null,
+        m.type === 'intake' ? receiveMethodText(m.batch) : null,
         m.reason && key !== 'restock' ? m.reason : null,
       ].filter(Boolean).join(' · '),
+      method: m.type === 'intake' ? (m.batch?.receiveMethod || 'manual') : null,
       patient: m.Patient ? `${m.Patient.firstName} ${m.Patient.lastName}` : null,
       uhid: m.Patient?.uhid || null,
       receiptId: m.type === 'intake' ? (m.batch?.stockReceiptId || null) : null,
@@ -250,5 +261,5 @@ const collectStockRows = async (dateFilter) => {
 
 module.exports = {
   RESTOCK_REASON, ACTIVITY_TYPES, MOVEMENT_TYPES, OTHER_TYPES, STOCK_EVENT_TYPES,
-  logStockActivity, collectStockRows, unitWord, nameOf,
+  logStockActivity, collectStockRows, unitWord, nameOf, receiveMethodText,
 };

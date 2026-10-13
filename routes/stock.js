@@ -31,6 +31,7 @@ const movements = require('../controllers/stockMovementController');
 const rooms = require('../controllers/stockRoomController');
 const reports = require('../controllers/stockReportController');
 const receipts = require('../controllers/stockReceiptController');
+const invoices = require('../controllers/stockInvoiceController');
 const tests = require('../controllers/stockTestController');
 const uploadStockReceipt = require('../middleware/uploadStockReceipt');
 
@@ -80,6 +81,23 @@ router.post('/intake', authenticate, stockGate(P.STOCK_RECEIVE), [
 // ---------- Supplier invoices / receipts + scans (12 Oct 2026) ----------
 router.get('/receipts',        authenticate, stockGate(P.STOCK_RECEIVE, P.STOCK_MOVEMENTS), receipts.list);
 router.get('/receipts/lookup', authenticate, stockGate(P.STOCK_RECEIVE), receipts.lookup);
+// Receiving from an invoice (13 Oct 2026, Emu) — the Receive tab's "From an
+// invoice" mode. Read → confirm every line → save all in one go. Adding an
+// item the catalogue lacks is open to everyone who can receive (same handler
+// and validation as Items → Add); it is logged like any catalogue add.
+router.get('/receipts/reader',          authenticate, stockGate(P.STOCK_RECEIVE), invoices.status);
+router.post('/receipts/read',           authenticate, stockGate(P.STOCK_RECEIVE), handleReceiptUpload, invoices.read);
+router.get('/receipts/pending/:token',  authenticate, stockGate(P.STOCK_RECEIVE), invoices.pendingFile);
+router.delete('/receipts/pending/:token', authenticate, stockGate(P.STOCK_RECEIVE), invoices.discard);
+router.post('/receipts/receive-batch',  authenticate, stockGate(P.STOCK_RECEIVE), [
+  body('receiptNo').optional({ nullable: true }).isString().withMessage('Invoice / receipt number must be text'),
+  body('receiptKind').optional().isIn(receipts.KINDS).withMessage('Choose invoice, receipt or delivery note'),
+  body('supplierId').optional({ nullable: true }).isInt(),
+  body('lines').isArray({ min: 1 }).withMessage('There are no lines to save'),
+  validate,
+], invoices.receiveBatch);
+router.post('/receipts/new-item',       authenticate, stockGate(P.STOCK_RECEIVE, P.STOCK_ITEMS_EDIT), [body('name').notEmpty().withMessage('Name is required'), validate], catalog.createItem);
+
 router.get('/receipts/:id',    authenticate, stockGate(P.STOCK_RECEIVE, P.STOCK_MOVEMENTS), receipts.getOne);
 router.post('/receipts', authenticate, stockGate(P.STOCK_RECEIVE, P.STOCK_MOVEMENTS), [
   body('number').exists({ checkFalsy: true }).withMessage('Enter the invoice / receipt number').bail()

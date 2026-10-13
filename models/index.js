@@ -109,6 +109,7 @@ const StockReceipt        = require('./StockReceipt');
 const StockReceiptDocument = require('./StockReceiptDocument');
 const StockBatchEdit = require('./StockBatchEdit');
 const StockActivity = require('./StockActivity');
+const StockSupplierAlias = require('./StockSupplierAlias');
 
 // --- HMIS V3 inpatient ---
 const Ward                     = require('./Ward');
@@ -611,6 +612,10 @@ StockBatchEdit.belongsTo(User, { as: 'editedByUser', foreignKey: 'editedById' })
 StockActivity.belongsTo(User,          { as: 'user',     foreignKey: 'userId' });
 StockActivity.belongsTo(StockLocation, { as: 'location', foreignKey: 'locationId' });
 StockActivity.belongsTo(StockItem,     { as: 'item',     foreignKey: 'stockItemId' });
+// Supplier invoice wording → item (receiving from an invoice, 13 Oct 2026).
+StockSupplierAlias.belongsTo(Supplier,  { as: 'supplier',      foreignKey: 'supplierId' });
+StockSupplierAlias.belongsTo(StockItem, { as: 'item',          foreignKey: 'stockItemId' });
+StockSupplierAlias.belongsTo(User,      { as: 'createdByUser', foreignKey: 'createdById' });
 // What one attempt of a test uses (13 Oct 2026).
 
 StockMovement.belongsTo(StockItem,     { as: 'item',         foreignKey: 'stockItemId' });
@@ -917,6 +922,7 @@ const db = {
   StockReceiptDocument,
   StockBatchEdit,
   StockActivity,
+  StockSupplierAlias,
   // --- HMIS V3 inpatient ---
   Ward,
   Room,

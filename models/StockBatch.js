@@ -35,6 +35,24 @@ const StockBatch = defineModel('StockBatch', {
     unique: true,
     defaultValue: null,
   },
+  // How the line was entered (13 Oct 2026): 'manual' (typed in Receive) or
+  // 'invoice' (read from a photographed / scanned invoice and confirmed).
+  receiveMethod: {
+    type: DataTypes.STRING(12),
+    allowNull: false,
+    defaultValue: 'manual',
+  },
+  // Receiving from an invoice: the wording read for this line, and the fields
+  // staff corrected before saving ("batchNo,expiryDate") — the audit of what
+  // the reader got wrong. Both null on a manual line.
+  sourceText: {
+    type: DataTypes.STRING(160),
+    defaultValue: null,
+  },
+  sourceCorrections: {
+    type: DataTypes.STRING(120),
+    defaultValue: null,
+  },
   // 'active' | 'depleted' | 'expired' | 'recalled' — STRING, not ENUM.
   status: {
     type: DataTypes.STRING,

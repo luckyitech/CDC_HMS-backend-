@@ -20,13 +20,13 @@ const buildSessions = (rows) => {
   const add = (key, base, row, line) => {
     let g = groups.get(key);
     if (!g) {
-      g = { ...base, at: row.at, endAt: row.at, lines: 0, units: 0, items: new Set() };
+      g = { ...base, at: row.at, endAt: row.at, lines: 0, units: 0, items: new Set(), invoiceLines: 0 };
       groups.set(key, g);
       sessions.push(g);
     }
     if (new Date(row.at) < new Date(g.at)) g.at = row.at;
     if (new Date(row.at) > new Date(g.endAt)) g.endAt = row.at;
-    if (line) { g.lines += 1; g.units += row.quantity || 0; if (row.item) g.items.add(row.item); }
+    if (line) { g.lines += 1; g.units += row.quantity || 0; if (row.item) g.items.add(row.item); if (row.method === 'invoice') g.invoiceLines += 1; }
   };
 
   for (const r of rows) {
@@ -52,8 +52,10 @@ const buildSessions = (rows) => {
       `${s.units} unit${s.units === 1 ? '' : 's'}`,
       items.length ? items.slice(0, 4).join(', ') + (items.length > 4 ? ` +${items.length - 4}` : '') : null,
     ].filter(Boolean).join(' · ');
-    const { items: _drop, ...rest } = s;
-    return { ...rest, summary };
+    const { items: _drop, invoiceLines, ...rest } = s;
+    // How a delivery was entered: read from the invoice, typed by hand, or both.
+    const method = s.fn === 'receiving' ? (invoiceLines === 0 ? 'manual' : invoiceLines === s.lines ? 'invoice' : 'mixed') : null;
+    return { ...rest, method, summary };
   }).sort((a, b) => new Date(b.at) - new Date(a.at));
 };
 
@@ -65,7 +67,7 @@ const buildPeople = (rows, sessions) => {
     if (!map.has(k)) {
       map.set(k, {
         userId: r.userId, staff: r.staff, role: r.role,
-        receiving: 0, stocktakes: 0, restocks: 0, parChanges: 0,
+        receiving: 0, receivingFromInvoice: 0, stocktakes: 0, restocks: 0, parChanges: 0,
         dispensed: 0, transfers: 0, returns: 0, writeOffs: 0, total: 0,
         days: new Set(), firstAt: r.at, lastAt: r.at,
       });
@@ -74,7 +76,7 @@ const buildPeople = (rows, sessions) => {
   };
   for (const s of sessions) {
     const p = get(s);
-    if (s.fn === 'receiving') p.receiving += 1;
+    if (s.fn === 'receiving') { p.receiving += 1; if (s.method && s.method !== 'manual') p.receivingFromInvoice += 1; }
     else if (s.fn === 'stocktake') p.stocktakes += 1;
     else if (s.kind === 'Room restocked') p.restocks += 1;
     else p.parChanges += 1;

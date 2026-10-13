@@ -242,6 +242,9 @@ SMTP_PASSWORD=your_email_password
 FRONTEND_URL=https://cdiabetescentre.com
 
 CARELINK_ENCRYPTION_KEY=generate_with_command_below
+
+# Stocks → Receive → From an invoice (optional; without it that mode shows "Not set up")
+ANTHROPIC_API_KEY=sk-ant-...
 ```
 
 > **Important:** `CARELINK_ENCRYPTION_KEY` must be a random 64-character hex string. Generate it once and never change it — changing it will make existing encrypted CareLink data unreadable. Generate it with:
