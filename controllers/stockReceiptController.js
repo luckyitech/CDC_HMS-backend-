@@ -13,14 +13,19 @@
 //   POST   /api/stock/receipts/:id/documents        attach a scan (multipart 'file')
 //   GET    /api/stock/receipts/:id/documents/:docId the scan itself (authenticated)
 //   DELETE /api/stock/receipts/:id/documents/:docId soft-remove (stays in the audit trail)
+//   PUT    /api/stock/batches/:id/received         correct a received line (13 Oct 2026)
+//   GET    /api/stock/batches/:id/edits            that line's corrections
 
 const { Op } = require('sequelize');
 const { success, error } = require('../utils/response');
 const { resolveStockReceiptFile } = require('../utils/stockReceiptStorage');
 const db = require('../models');
+const { editReceivedLine } = require('../utils/stockLineEdit');
+const { LedgerError } = require('../utils/stockLedger');
 
 const {
   StockReceipt, StockReceiptDocument, StockBatch, StockItem, StockMovement, StockLocation, Supplier, User,
+  StockBatchEdit, sequelize,
 } = db;
 
 const KINDS = ['invoice', 'receipt', 'delivery_note'];
@@ -145,6 +150,27 @@ const ensure = async (req, res) => {
 };
 
 /** GET /api/stock/receipts/:id — the items received on it and its scans, side by side. */
+// Corrections to received lines (13 Oct 2026), newest first, keyed by batch.
+// MySQL 8 returns a JSON column parsed; MariaDB (local copies) as a string.
+const parseChanges = (c) => {
+  if (Array.isArray(c)) return c;
+  try { return JSON.parse(c || '[]'); } catch { return []; }
+};
+const editOut = (e) => ({
+  id: e.id, at: e.createdAt, by: fullName(e.editedByUser), reason: e.reason, changes: parseChanges(e.changes),
+});
+const editsFor = async (batchIds) => {
+  if (!batchIds.length) return {};
+  const rows = await StockBatchEdit.findAll({
+    where: { stockBatchId: { [Op.in]: batchIds } },
+    include: [{ model: User, as: 'editedByUser', attributes: ['firstName', 'lastName'] }],
+    order: [['createdAt', 'DESC'], ['id', 'DESC']],
+  });
+  const out = {};
+  rows.forEach((e) => { (out[e.stockBatchId] = out[e.stockBatchId] || []).push(editOut(e)); });
+  return out;
+};
+
 const getOne = async (req, res) => {
   try {
     const row = await StockReceipt.findByPk(req.params.id, { include: listIncludes() });
@@ -163,6 +189,7 @@ const getOne = async (req, res) => {
       attributes: ['id', 'stockBatchId'],
     }) : [];
     const locByBatch = Object.fromEntries(intakes.map((m) => [m.stockBatchId, m.toLocation?.name || null]));
+    const editsByBatch = await editsFor(batches.map((b) => b.id));
     return success(res, {
       ...receiptOut(row),
       items: batches.map((b) => ({
@@ -177,6 +204,8 @@ const getOne = async (req, res) => {
         location: locByBatch[b.id] || null,
         receivedAt: b.receivedAt,
         receivedByName: fullName(b.receivedByUser),
+        stockItemId: b.stockItemId,
+        edits: editsByBatch[b.id] || [],
       })),
     });
   } catch (err) {
@@ -236,7 +265,41 @@ const removeDocument = async (req, res) => {
   }
 };
 
+/** PUT /api/stock/batches/:id/received — correct a received line. Body: any of
+ * { stockItemId, quantity, batchNo, expiryDate } + reason (required). */
+const editLine = async (req, res) => {
+  try {
+    const { stockItemId, quantity, batchNo, expiryDate, reason } = req.body;
+    await sequelize.transaction((t) => editReceivedLine({
+      stockBatchId: req.params.id,
+      changes: { stockItemId, quantity, batchNo, expiryDate },
+      reason,
+      userId: req.user.id,
+    }, t));
+    const edits = await editsFor([Number(req.params.id)]);
+    const batch = await StockBatch.findByPk(req.params.id, {
+      include: [{ model: StockItem, as: 'item', attributes: ['id', 'name', 'unit'] }],
+    });
+    return success(res, { batch, edits: edits[batch.id] || [] });
+  } catch (err) {
+    if (err instanceof LedgerError) return error(res, err.message, err.statusCode);
+    console.error('StockReceipt.editLine error:', err);
+    return error(res, 'Failed to correct the received line', 500);
+  }
+};
+
+/** GET /api/stock/batches/:id/edits — a received line's corrections, newest first. */
+const lineEdits = async (req, res) => {
+  try {
+    const edits = await editsFor([Number(req.params.id)]);
+    return success(res, edits[Number(req.params.id)] || []);
+  } catch (err) {
+    console.error('StockReceipt.lineEdits error:', err);
+    return error(res, 'Failed to load the corrections', 500);
+  }
+};
+
 module.exports = {
-  list, lookup, ensure, getOne, addDocument, getDocument, removeDocument,
+  list, lookup, ensure, getOne, addDocument, getDocument, removeDocument, editLine, lineEdits,
   findOrCreateReceipt, numberKeyOf, KINDS,
 };

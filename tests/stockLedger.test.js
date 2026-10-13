@@ -103,6 +103,8 @@ after(async () => {
   await db.StockMovement.destroy({ where: { id: ids(made.movements) } });
   await db.StockLevel.destroy({ where: { stockBatchId: ids(made.batches) } });
   await db.StockBatch.destroy({ where: { id: ids(made.batches) } });
+  // Stocktakes and catalogue edits through the controllers are recorded too.
+  await db.StockActivity.destroy({ where: { [Op.or]: [{ locationId: ids(made.locations) }, { stockItemId: ids(made.items) }] } });
   await db.StockItem.destroy({ where: { id: ids(made.items) } });
   await db.StockLocation.destroy({ where: { id: ids(made.locations) } });
 

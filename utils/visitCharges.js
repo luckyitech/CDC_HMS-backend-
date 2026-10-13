@@ -13,8 +13,15 @@
 //   removeCharge  — takes one line off (soft: the row keeps who / when / why).
 //   listCharges   — the bill with attribution; lines from before this existed
 //                   come back as `legacy` (no who/when).
+//   addAttempt    — one MORE attempt of a test (13 Oct 2026): "HbA1c × 2".
+//
+// Tests (HbA1c, RBS, Ketones — utils/testStock) count ATTEMPTS: each is its own
+// QueueCharge row, takes its own supplies out of stock, and the bill shows
+// "× n". Taking one off asks whether it was done: not done → its supplies go
+// back. Every other line is on the bill once, as before.
 
 const { QueueCharge } = require('../models');
+const { isTest, takeForAttempt, returnForAttempt } = require('./testStock');
 
 const KINDS = { charge: 'selectedCharges', procedure: 'selectedProcedures' };
 
@@ -50,6 +57,7 @@ const stageFor = (queue, user, explicit) => {
  */
 const addCharges = async (queue, items, user, { source = 'picked', stage, transaction, save = true } = {}) => {
   const added = [];
+  const testRows = [];
   const st = stageFor(queue, user, stage);
   for (const [kind, field] of Object.entries(KINDS)) {
     const incoming = clean(kind === 'charge' ? items?.charges : items?.procedures);
@@ -59,26 +67,62 @@ const addCharges = async (queue, items, user, { source = 'picked', stage, transa
     if (!fresh.length) continue;
     queue.set(field, [...current, ...fresh]);
     for (const name of fresh) {
-      await QueueCharge.create({
+      const row = await QueueCharge.create({
         QueueId: queue.id, kind, name, stage: st, source,
         addedById: user?.id || null, addedByName: user?.name || null, addedByRole: user?.role || null,
       }, { transaction });
       added.push(name);
+      if (kind === 'charge' && isTest(name)) testRows.push(row);
     }
   }
   if (save && added.length) await queue.save({ transaction });
+  // A test's supplies come out of stock once its line is committed (own transaction).
+  if (testRows.length) {
+    const take = () => Promise.all(testRows.map((r) => takeForAttempt(r, queue, user?.id)));
+    if (transaction) transaction.afterCommit(() => { take().catch(() => {}); });
+    else await take();
+  }
   return added;
 };
 
-/** Take one line off the bill (soft). Returns true when it was on the bill. */
-const removeCharge = async (queue, { kind, name, reason }, user, { transaction } = {}) => {
+/** One more attempt of a test (a repeat). Returns the new line. */
+const addAttempt = async (queue, name, user, { stage } = {}) => {
+  if (!isTest(name)) return null;
+  const st = stageFor(queue, user, stage);
+  const row = await QueueCharge.create({
+    QueueId: queue.id, kind: 'charge', name, stage: st, source: 'picked',
+    addedById: user?.id || null, addedByName: user?.name || null, addedByRole: user?.role || null,
+  });
+  const current = clean(queue.selectedCharges);
+  if (!current.includes(name)) { queue.set('selectedCharges', [...current, name]); await queue.save(); }
+  await takeForAttempt(row, queue, user?.id);
+  return row;
+};
+
+/**
+ * Take one line off the bill (soft). Returns true when it was on the bill.
+ * A test loses ONE attempt (the latest); `done === false` puts that attempt's
+ * supplies back in stock. The name leaves the bill when no attempt is left.
+ */
+const removeCharge = async (queue, { kind, name, reason, done }, user, { transaction } = {}) => {
   const field = KINDS[kind];
   if (!field) return false;
   const current = clean(queue[field]);
   if (!current.includes(name)) return false;
-  queue.set(field, current.filter((n) => n !== name));
-  await queue.save({ transaction });
+  const test = kind === 'charge' && isTest(name);
+  const active = test
+    ? await QueueCharge.count({ where: { QueueId: queue.id, kind, name, status: 'active' }, transaction })
+    : 1;
+  if (active <= 1) {
+    queue.set(field, current.filter((n) => n !== name));
+    await queue.save({ transaction });
+  }
   const row = await QueueCharge.findOne({ where: { QueueId: queue.id, kind, name, status: 'active' }, order: [['id', 'DESC']], transaction });
+  if (row && test && done === false) {
+    await returnForAttempt(row, queue, user?.id, reason ? String(reason).slice(0, 200) : null);
+  } else if (row && test && done === true && row.stockStatus) {
+    await row.update({ stockNote: 'Done — taken off the bill only' }, { transaction });
+  }
   const removal = {
     status: 'removed', removedById: user?.id || null, removedByName: user?.name || null,
     removedAt: new Date(), removedReason: reason ? String(reason).slice(0, 255) : null,
@@ -97,11 +141,19 @@ const listCharges = async (queue) => {
   const out = [];
   for (const [kind, field] of Object.entries(KINDS)) {
     for (const name of clean(queue[field])) {
-      const row = [...rows].reverse().find((r) => r.kind === kind && r.name === name && r.status === 'active');
+      const active = rows.filter((r) => r.kind === kind && r.name === name && r.status === 'active');
+      const row = active[active.length - 1];
+      const test = kind === 'charge' && isTest(name);
       out.push(row ? {
         kind, name, stage: row.stage, source: row.source,
         addedByName: row.addedByName, addedByRole: row.addedByRole, addedAt: row.createdAt, legacy: false,
-      } : { kind, name, legacy: true });
+        // Tests count attempts ("× 2"), each with who / when / whether stock was taken.
+        test, quantity: test ? active.length : 1,
+        attempts: test ? active.map((r) => ({
+          id: r.id, stage: r.stage, source: r.source, addedByName: r.addedByName, addedByRole: r.addedByRole,
+          addedAt: r.createdAt, stockStatus: r.stockStatus, stockNote: r.stockNote,
+        })) : undefined,
+      } : { kind, name, legacy: true, test, quantity: 1 });
     }
   }
   const removed = rows.filter((r) => r.status === 'removed').map((r) => ({
@@ -116,4 +168,4 @@ const chargesFromVitals = (body) => Object.entries(VITAL_CHARGES)
   .filter(([field]) => body?.[field] !== undefined && body[field] !== null && body[field] !== '')
   .map(([, name]) => name);
 
-module.exports = { addCharges, removeCharge, listCharges, chargesFromVitals, stageFor, VITAL_CHARGES, KINDS, jsonArray };
+module.exports = { addCharges, addAttempt, removeCharge, listCharges, chargesFromVitals, stageFor, VITAL_CHARGES, KINDS, jsonArray };

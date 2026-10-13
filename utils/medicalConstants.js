@@ -188,6 +188,7 @@ module.exports = {
   RISK,
   THRESHOLDS,
   // Functions
+  computeAgeFromDob,
   classifyHbA1c,
   calculateRiskLevel,
   getRiskFactors,

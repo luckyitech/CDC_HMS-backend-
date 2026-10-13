@@ -1,5 +1,5 @@
 const { Op } = require('sequelize');
-const { addCharges, removeCharge, listCharges } = require('../utils/visitCharges');
+const { addCharges, addAttempt, removeCharge, listCharges } = require('../utils/visitCharges');
 const { success, error } = require('../utils/response');
 const { broadcast } = require('../utils/sseManager');
 const { clinicStartOfDay, clinicToday } = require('../utils/clinicTime');
@@ -758,13 +758,32 @@ const addChargeLines = async (req, res) => {
   }
 };
 
+// POST /api/queue/:id/charges/attempt { name, stage } — one more attempt of a
+// test (13 Oct 2026): a repeat after an error reading, or a confirmatory test.
+const addTestAttempt = async (req, res) => {
+  try {
+    const item = await Queue.findByPk(req.params.id);
+    if (!item) return error(res, 'Queue item not found', 404);
+    if (['Completed', 'Removed'].includes(item.status)) return error(res, 'This visit is closed — its bill can no longer change.', 409);
+    const row = await addAttempt(item, String(req.body?.name || ''), req.user, { stage: req.body?.stage });
+    if (!row) return error(res, 'Only a test (HbA1c, Random Blood Sugar, Ketones) can be repeated', 400);
+    broadcast('queue_updated');
+    return success(res, await listCharges(item));
+  } catch (err) {
+    console.error('Queue.addTestAttempt error:', err);
+    return error(res, 'Failed to add the repeat', 500);
+  }
+};
+
 const removeChargeLine = async (req, res) => {
   try {
     const item = await Queue.findByPk(req.params.id);
     if (!item) return error(res, 'Queue item not found', 404);
     if (['Completed', 'Removed'].includes(item.status)) return error(res, 'This visit is closed — its bill can no longer change.', 409);
     const { kind, name, reason } = req.body || {};
-    const done = await removeCharge(item, { kind, name, reason }, req.user);
+    // Tests: was the attempt done? (false → its supplies go back to stock)
+    const wasDone = req.body?.done === undefined ? undefined : req.body.done === true || req.body.done === 'true';
+    const done = await removeCharge(item, { kind, name, reason, done: wasDone }, req.user);
     if (!done) return error(res, 'That item is not on the bill', 404);
     broadcast('queue_updated');
     return success(res, await listCharges(item));
@@ -774,4 +793,4 @@ const removeChargeLine = async (req, res) => {
   }
 };
 
-module.exports = { add, list, update, remove, stats, callNext, refer, saveReferralNote, listAdvisedReferrals, patientHistory, getCharges, addChargeLines, removeChargeLine };
+module.exports = { add, list, update, remove, stats, callNext, refer, saveReferralNote, listAdvisedReferrals, patientHistory, getCharges, addChargeLines, addTestAttempt, removeChargeLine };

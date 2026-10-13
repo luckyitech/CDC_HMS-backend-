@@ -2,7 +2,7 @@ const { test, describe } = require('node:test');
 const assert = require('node:assert/strict');
 
 const {
-  PERMISSIONS, hasPermission, canOpenPortal,
+  PERMISSIONS, hasPermission, canOpenPortal, canUseStock,
   sanitizePermissions, sanitizeDeniedPermissions,
 } = require('../constants/permissions');
 const { authorize } = require('../middleware/auth');
@@ -48,7 +48,7 @@ describe('authorize() — roles and capabilities in one list', () => {
 
   test('a capability does not leak across capabilities', async () => {
     // stock.access must not open an inpatient.access gate.
-    const stockOnly = user('staff', [PERMISSIONS.STOCK_ACCESS]);
+    const stockOnly = user('staff', [PERMISSIONS.STOCK_ANALYTICS]);
     assert.equal((await run(authorize(...GATE), stockOnly)).allowed, false);
   });
 
@@ -118,8 +118,8 @@ describe('a withdrawn capability is refused even when the role allows it', () =>
   });
 
   test('withdrawing one capability does not touch another', async () => {
-    const u = denied('staff', [PERMISSIONS.INPATIENT_ACCESS], [PERMISSIONS.STOCK_ACCESS]);
-    assert.equal(hasPermission(u, PERMISSIONS.STOCK_ACCESS), true);
+    const u = denied('staff', [PERMISSIONS.INPATIENT_ACCESS], [PERMISSIONS.STOCK_ANALYTICS]);
+    assert.equal(hasPermission(u, PERMISSIONS.STOCK_ANALYTICS), true);
     assert.equal(hasPermission(u, PERMISSIONS.INPATIENT_ACCESS), false);
   });
 
@@ -137,27 +137,27 @@ describe('a withdrawn capability is refused even when the role allows it', () =>
   });
 });
 
-describe('the stock split keeps every existing holder whole', () => {
-  test("a row still saying 'stock.manage' resolves to both halves", () => {
-    // Rows written before the split, and any environment brought up by
-    // sequelize.sync() rather than the migration.
-    const legacy = user('staff', ['stock.manage']);
-    assert.equal(hasPermission(legacy, PERMISSIONS.STOCK_ACCESS), true);
-    assert.equal(hasPermission(legacy, PERMISSIONS.STOCK_WRITE), true);
+describe('Stocks permissions (per tab since 13 Oct 2026)', () => {
+  test("the retired stock names grant nothing (per-tab Stocks, 13 Oct 2026)", () => {
+    // Emu chose "start from nothing": stock.manage / stock.access / stock.write
+    // rows open no Stocks tab; each tab is granted afresh.
+    const legacy = user('staff', ['stock.manage', 'stock.access', 'stock.write']);
+    assert.equal(canUseStock(legacy), false);
+    assert.equal(hasPermission(legacy, PERMISSIONS.STOCK_ANALYTICS), false);
   });
 
   test('granting the write carries the access it acts within', () => {
     assert.deepEqual(
-      sanitizePermissions([PERMISSIONS.STOCK_WRITE]),
-      [PERMISSIONS.STOCK_ACCESS, PERMISSIONS.STOCK_WRITE],
+      sanitizePermissions([PERMISSIONS.STOCK_WRITEOFF]),
+      [PERMISSIONS.STOCK_ANALYTICS, PERMISSIONS.STOCK_WRITEOFF],
       'a write with no access is a state no screen can show and no gate expects'
     );
   });
 
   test('access alone is a real state — read-only stock', () => {
-    const readOnly = user('staff', [PERMISSIONS.STOCK_ACCESS]);
-    assert.equal(hasPermission(readOnly, PERMISSIONS.STOCK_ACCESS), true);
-    assert.equal(hasPermission(readOnly, PERMISSIONS.STOCK_WRITE), false);
+    const readOnly = user('staff', [PERMISSIONS.STOCK_ANALYTICS]);
+    assert.equal(hasPermission(readOnly, PERMISSIONS.STOCK_ANALYTICS), true);
+    assert.equal(hasPermission(readOnly, PERMISSIONS.STOCK_WRITEOFF), false);
   });
 
   test('withdrawing a section withdraws the ability to act in it', () => {
@@ -382,7 +382,7 @@ describe('a write always carries the read it acts within', () => {
   // "constants/permissions.js enforces the implication"; it only did so at write
   // time, which made that comment false for exactly the rows nobody could debug.
   const PAIRS = [
-    [P.STOCK_WRITE,        P.STOCK_ACCESS],
+    [P.STOCK_WRITEOFF,        P.STOCK_ANALYTICS],
     [P.INPATIENT_WRITE,    P.INPATIENT_ACCESS],
     [P.LAB_WRITE,          P.LAB_VIEW],
     [P.USERS_WRITE,        P.USERS_VIEW],
@@ -397,16 +397,16 @@ describe('a write always carries the read it acts within', () => {
     });
   }
 
-  test('the legacy stock.manage row still resolves to both halves', () => {
-    assert.equal(has(held(['stock.manage']), P.STOCK_ACCESS), true);
-    assert.equal(has(held(['stock.manage']), P.STOCK_WRITE), true);
+  test('the retired stock.manage row resolves to nothing', () => {
+    assert.equal(has(held(['stock.manage']), P.STOCK_ANALYTICS), false);
+    assert.equal(has(held(['stock.manage']), P.STOCK_WRITEOFF), false);
   });
 
   test('a withdrawal still beats the implication', () => {
     // Taking the read away has to take it away — otherwise an admin could not
     // stop someone reading a module they can write to, and the withdrawal would
     // silently do nothing.
-    const u = held([P.STOCK_WRITE], [P.STOCK_ACCESS]);
-    assert.equal(has(u, P.STOCK_ACCESS), false);
+    const u = held([P.STOCK_WRITEOFF], [P.STOCK_ANALYTICS]);
+    assert.equal(has(u, P.STOCK_ANALYTICS), false);
   });
 });

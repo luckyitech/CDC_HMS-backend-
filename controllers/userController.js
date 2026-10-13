@@ -1,6 +1,7 @@
 const { success, error } = require('../utils/response');
 const {
   PERMISSIONS, PERMISSIBLE_ROLES, STAFF_TYPES, canGrantPermissions, sanitizePermissions, hasPermission, toList,
+  canUseStock, STOCK_TAB_PERMISSIONS,
   reconcilePermissionLists, canGrantHrPermissions, SCOPABLE,
 } = require('../constants/permissions');
 const { hrGrantRefusal, loginEmailRefusal } = require('../utils/hrGrant');
@@ -55,7 +56,7 @@ const formatUserResponse = (user, profile) => {
     // show a toggle that disagrees with what the server actually enforces.
     permissions: toList(user.permissions),
     deniedPermissions: toList(user.deniedPermissions),
-    canManageStock: hasPermission(user, PERMISSIONS.STOCK_ACCESS),
+    canManageStock: canUseStock(user),
     hasAdminAccess: hasPermission(user, PERMISSIONS.ADMIN_ACCESS),
   };
 
@@ -733,14 +734,16 @@ const updateUser = async (req, res) => {
       if (!canGrantPermissions(req.user)) {
         return error(res, 'Only a permissions administrator can change permissions', 403);
       }
-      // The screen's single boolean predates the access/write split and still
-      // means what it always meant: full stock management. Setting it grants
-      // both halves; clearing it removes both. Finer control is the Staff
-      // File's Permissions tab.
+      // The screen's single boolean predates per-tab Stocks permissions and
+      // still means what it always meant: full stock management. Setting it
+      // grants every Stocks tab and its acting capability; clearing it removes
+      // them all. Per-tab control is the Staff File's Permissions tab.
       const next = new Set(user.permissions || []);
-      const BOTH = [PERMISSIONS.STOCK_ACCESS, PERMISSIONS.STOCK_WRITE];
-      if (updates.canManageStock) BOTH.forEach((p) => next.add(p));
-      else BOTH.forEach((p) => next.delete(p));
+      const ALL_STOCK = [PERMISSIONS.PORTAL_STOCKS, ...STOCK_TAB_PERMISSIONS, PERMISSIONS.STOCK_ITEMS_EDIT,
+        PERMISSIONS.STOCK_ROOMS_EDIT, PERMISSIONS.STOCK_WRITEOFF,
+        PERMISSIONS.STOCK_DELIVERIES_EDIT];
+      if (updates.canManageStock) ALL_STOCK.forEach((p) => next.add(p));
+      else ALL_STOCK.forEach((p) => next.delete(p));
       userFields.push('permissions');
       userUpdates.permissions = sanitizePermissions([...next]);
     }

@@ -448,7 +448,7 @@ describe('#16 who may change a login email', () => {
     assert.equal(r.extra.code, 'LOGIN_EMAIL_HOLDS_MORE');
     assert.deepEqual(r.extra.capabilities, [P.HR_CONFIDENTIAL]);
     // a plain Manage Users editor can't reset someone granted stock access they lack
-    assert.equal(loginEmailRefusal({ caller: editor(), target: user('staff', [P.STOCK_ACCESS], [], 40) }).extra.code, 'LOGIN_EMAIL_HOLDS_MORE');
+    assert.equal(loginEmailRefusal({ caller: editor(), target: user('staff', [P.STOCK_ANALYTICS], [], 40) }).extra.code, 'LOGIN_EMAIL_HOLDS_MORE');
     // role defaults are not grants: a doctor's clinical access does not block it
     assert.equal(loginEmailRefusal({ caller: editor(), target: user('doctor', [], [], 40, { staffType: 'clinical' }) }), null);
     // only the true admin may change the true admin's
@@ -532,7 +532,7 @@ describe('#22 apply preset', () => {
   const hrGrantor = user('staff', [P.HR_GRANT, P.STAFF_VIEW, P.HR_VIEW, P.LEAVE_APPROVE, P.LEAVE_VIEW], [], 2);
   test('an HR grantor: every control must be an HR control they hold', () => {
     assert.equal(presetApplyRefusal({ caller: hrGrantor, granted: [P.STAFF_VIEW, P.HR_VIEW] }), null);
-    assert.equal(presetApplyRefusal({ caller: hrGrantor, granted: [P.STAFF_VIEW, P.STOCK_ACCESS] }).extra.code, 'PRESET_NOT_DELEGABLE');
+    assert.equal(presetApplyRefusal({ caller: hrGrantor, granted: [P.STAFF_VIEW, P.STOCK_ANALYTICS] }).extra.code, 'PRESET_NOT_DELEGABLE');
     assert.equal(presetApplyRefusal({ caller: hrGrantor, granted: [P.STAFF_VIEW], denied: ['glp1.write'] }).extra.code, 'PRESET_NOT_DELEGABLE');
     assert.equal(presetApplyRefusal({ caller: hrGrantor, granted: [P.STAFF_EDIT] }).extra.code, 'PRESET_NOT_HELD');
     // a withdrawal of an HR control they don't hold is fine (taking away)

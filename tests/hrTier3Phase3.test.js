@@ -117,7 +117,7 @@ describe('the wizard: blank start and HR grantors (O-1)', () => {
     assert.equal(r.extra.code, 'NOT_HELD');
   });
   test('…nor anything outside the HR Suite', () => {
-    const r = resolve({ ...BLANK, permissions: [P.STOCK_ACCESS] }, hrManager);
+    const r = resolve({ ...BLANK, permissions: [P.STOCK_ANALYTICS] }, hrManager);
     assert.equal(r.code, 403);
     assert.equal(r.extra.code, 'NOT_DELEGABLE');
   });
@@ -130,8 +130,8 @@ describe('the wizard: blank start and HR grantors (O-1)', () => {
     assert.equal(resolve({ ...BLANK, permissions: [P.LEAVE_VIEW] }, hrManager, null, 'admin').code, 403);
   });
   test('an HR grantor may add HR controls on top of a preset', () => {
-    const preset = { id: 3, name: 'Nurse', status: 'active', baseRole: 'nurse', staffType: STAFF_TYPES.CLINICAL, permissions: [P.STOCK_ACCESS], deniedPermissions: [] };
-    const r = resolve({ presetId: 3, staffType: STAFF_TYPES.CLINICAL, permissions: [P.STOCK_ACCESS, P.HR_VIEW], deniedPermissions: [] }, hrManager, preset);
+    const preset = { id: 3, name: 'Nurse', status: 'active', baseRole: 'nurse', staffType: STAFF_TYPES.CLINICAL, permissions: [P.STOCK_ANALYTICS], deniedPermissions: [] };
+    const r = resolve({ presetId: 3, staffType: STAFF_TYPES.CLINICAL, permissions: [P.STOCK_ANALYTICS, P.HR_VIEW], deniedPermissions: [] }, hrManager, preset);
     assert.ok(r.access, JSON.stringify(r));
     assert.deepEqual(r.access.hrGiven, [P.HR_VIEW]);
   });

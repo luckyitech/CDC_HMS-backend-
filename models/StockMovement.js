@@ -34,6 +34,23 @@ const StockMovement = defineModel('StockMovement', {
     type: DataTypes.TEXT,
     defaultValue: null,
   },
+  // Walk-in (external) dispensing (13 Oct 2026): who a dispense went to when
+  // they are not a registered patient — PatientId is then empty. Set only on
+  // 'dispense' rows from the Stocks Dispense tab's walk-in mode.
+  recipientName: {
+    type: DataTypes.STRING(120),
+    defaultValue: null,
+  },
+  recipientPhone: {
+    type: DataTypes.STRING(40),
+    defaultValue: null,
+  },
+  // The charge-sheet line (QueueCharge) a test's 'use' / 'use_cancelled' was
+  // for (13 Oct 2026) — ties each attempt's supplies to the bill.
+  queueChargeId: {
+    type: DataTypes.INTEGER,
+    defaultValue: null,
+  },
 }, {
   indexes: [
     { fields: ['stockItemId', 'createdAt'], name: 'idx_stock_movements_item_created' },

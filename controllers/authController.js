@@ -5,7 +5,7 @@ const { Op } = require('sequelize');
 const { success, error } = require('../utils/response');
 const { sendPasswordResetEmail } = require('../utils/emailService');
 const {
-  PERMISSIONS, hasPermission, canOpenPortal, effectivePermissions, deniedPermissions,
+  PERMISSIONS, hasPermission, canOpenPortal, effectivePermissions, deniedPermissions, canUseStock,
 } = require('../constants/permissions');
 const { getRotationStatus } = require('../utils/passwordRotation');
 const db = require('../models');
@@ -39,10 +39,10 @@ const buildUserResponse = async (user) => {
     // Drives which portals and sidebar entries appear; the API is still guarded
     // server-side, so this is UX, never the security boundary.
     permissions: [...effectivePermissions(user)],
-    // Derived, and kept for the stock screens that already read it. The stored
-    // column is superseded by the 'stock.access' permission; nothing should read
-    // user.canManageStock directly any more.
-    canManageStock: hasPermission(user, PERMISSIONS.STOCK_ACCESS),
+    // Derived: may open the Stocks page at all — holds at least one Stocks tab
+    // (per-tab permissions, 13 Oct 2026). The stored column is superseded;
+    // nothing should read user.canManageStock directly any more.
+    canManageStock: canUseStock(user),
     // Which portal shells this account may open, resolved here: their role's own
     // portal, plus anything granted, minus anything withdrawn. Sent as an answer
     // rather than as inputs so ProtectedRoute and the sidebar cannot each derive

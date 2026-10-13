@@ -4,6 +4,7 @@ const { Op } = require('sequelize');
 const { applyMovement, LedgerError } = require('../utils/stockLedger');
 const { itemLocationTotals } = require('../utils/stockTotals');
 const { clinicToday } = require('../utils/clinicTime');
+const { logStockActivity } = require('../utils/stockAudit');
 
 const {
   sequelize, StockItem, StockBatch, StockLevel, StockLocation, StockParLevel, User,
@@ -49,17 +50,29 @@ const listParLevels = async (req, res) => {
 
 // ------------------------------------
 // PUT /api/stock/par-levels — bulk upsert for one location.
-// Body: { locationId, entries: [{ stockItemId, minQty, maxQty }] }
+// Body: { locationId, entries: [{ stockItemId, minQty, maxQty }], assignedDoctorId? }
 // An entry with minQty 0 AND maxQty 0 removes the par level.
+// assignedDoctorId (13 Oct 2026, Emu): the doctor who works in this room — a
+// doctor's HbA1c / RBS / Ketones take their strip from here. Omit to leave it,
+// null to clear.
 // ------------------------------------
 const setParLevels = async (req, res) => {
   try {
-    const { locationId, entries } = req.body;
+    const { locationId, entries, assignedDoctorId } = req.body;
     if (!locationId || !Array.isArray(entries)) {
       return error(res, 'locationId and entries are required');
     }
     const location = await StockLocation.findByPk(locationId);
     if (!location || location.status !== 'active') return error(res, 'Location not found or retired', 404);
+
+    let doctorId;
+    if (assignedDoctorId !== undefined) {
+      doctorId = assignedDoctorId ? Number(assignedDoctorId) : null;
+      if (doctorId) {
+        const doc = await User.findByPk(doctorId, { attributes: ['id', 'role', 'isActive'] });
+        if (!doc || doc.role !== 'doctor' || !doc.isActive) return error(res, 'Choose an active doctor for this room');
+      }
+    }
 
     for (const e of entries) {
       const min = parseInt(e.minQty, 10);
@@ -69,10 +82,17 @@ const setParLevels = async (req, res) => {
       }
     }
 
+    const before = Object.fromEntries((await StockParLevel.findAll({ where: { locationId } }))
+      .map((p) => [p.stockItemId, `${p.minQty}–${p.maxQty}`]));
+    const changed = [];   // [stockItemId, 'old → new']
+
     await sequelize.transaction(async (t) => {
       for (const e of entries) {
         const min = parseInt(e.minQty, 10);
         const max = parseInt(e.maxQty, 10);
+        const was = before[e.stockItemId] || null;
+        const now = min === 0 && max === 0 ? null : `${min}–${max}`;
+        if (was !== now) changed.push([Number(e.stockItemId), `${was || 'none'} → ${now || 'none'}`]);
         if (min === 0 && max === 0) {
           await StockParLevel.destroy({
             where: { stockItemId: e.stockItemId, locationId },
@@ -91,6 +111,24 @@ const setParLevels = async (req, res) => {
         if (!created) {
           await row.update({ minQty: min, maxQty: max, lastUpdatedById: req.user.id }, { transaction: t });
         }
+      }
+      if (changed.length) {
+        const names = Object.fromEntries((await StockItem.findAll({
+          where: { id: changed.map(([id]) => id) }, attributes: ['id', 'name'], transaction: t,
+        })).map((i) => [i.id, i.name]));
+        const list = changed.slice(0, 8).map(([id, d]) => `${names[id] || 'item'} ${d}`).join('; ');
+        await logStockActivity({
+          action: 'pars_changed', userId: req.user.id, locationId,
+          detail: `${changed.length} item${changed.length === 1 ? '' : 's'}: ${list}${changed.length > 8 ? '; …' : ''}`,
+        }, t);
+      }
+      if (doctorId !== undefined && doctorId !== location.assignedDoctorId) {
+        await location.update({ assignedDoctorId: doctorId, lastUpdatedById: req.user.id }, { transaction: t });
+        const doc = doctorId ? await User.findByPk(doctorId, { attributes: ['firstName', 'lastName'], transaction: t }) : null;
+        await logStockActivity({
+          action: 'room_doctor', userId: req.user.id, locationId,
+          detail: doc ? `Dr. ${doc.firstName} ${doc.lastName}` : 'No doctor',
+        }, t);
       }
     });
 
@@ -134,6 +172,11 @@ const copyParLevels = async (req, res) => {
         })),
         { transaction: t }
       );
+      const from = await StockLocation.findByPk(fromLocationId, { attributes: ['name'], transaction: t });
+      await logStockActivity({
+        action: 'pars_copied', userId: req.user.id, locationId: toLocationId,
+        detail: `${source.length} item${source.length === 1 ? '' : 's'} copied from ${from?.name || 'another room'}`,
+      }, t);
     });
 
     return success(res, { message: `Copied ${source.length} par level(s)` });
@@ -153,13 +196,17 @@ const roomBalance = async (req, res) => {
     const pars = await StockParLevel.findAll({
       include: [
         { model: StockItem, as: 'item', attributes: ['id', 'name', 'unit', 'status'] },
-        { model: StockLocation, as: 'location', attributes: ['id', 'name', 'kind', 'status'] },
+        { model: StockLocation, as: 'location', attributes: ['id', 'name', 'kind', 'status', 'assignedDoctorId'],
+          include: [{ model: User, as: 'assignedDoctor', attributes: ['id', 'firstName', 'lastName'] }] },
       ],
     });
     const active = pars.filter((p) => p.item?.status === 'active' && p.location?.status === 'active');
 
     const rooms = [...new Map(active.map((p) => [p.location.id, p.location])).values()]
-      .map((l) => ({ id: l.id, name: l.name, kind: l.kind }))
+      .map((l) => ({
+        id: l.id, name: l.name, kind: l.kind,
+        doctor: l.assignedDoctor ? `Dr ${l.assignedDoctor.firstName} ${l.assignedDoctor.lastName}` : null,
+      }))
       .sort((a, b) => a.name.localeCompare(b.name));
     const items = [...new Map(active.map((p) => [p.item.id, p.item])).values()]
       .map((i) => ({ id: i.id, name: i.name, unit: i.unit }))
@@ -385,6 +432,24 @@ const stocktake = async (req, res) => {
           tally.missing += 1;
         }
       }
+
+      // The stocktake itself is recorded — even when every count matched and
+      // nothing above was written (13 Oct 2026, Emu: audit of when, by whom).
+      await logStockActivity({
+        action: 'stocktake',
+        userId: req.user.id,
+        locationId,
+        startedAt: cutoff,
+        detail: [
+          `${mode === 'full' ? 'Full' : 'Partial'} count`,
+          `${counts.length} batch${counts.length === 1 ? '' : 'es'} counted`,
+          `${tally.unchanged} matched`,
+          `${tally.adjusted} adjusted`,
+          tally.missing ? `${tally.missing} not found` : null,
+          tally.arrivedDuringCount ? `${tally.arrivedDuringCount} arrived mid-count` : null,
+          note ? `note: ${String(note).trim()}` : null,
+        ].filter(Boolean).join(' · '),
+      }, t);
 
       return tally;
     });

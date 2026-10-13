@@ -1,6 +1,7 @@
 const { Op } = require('sequelize');
 const { success } = require('../utils/response');
 const db = require('../models');
+const { collectStockRows, STOCK_EVENT_TYPES } = require('../utils/stockAudit');
 
 const { Queue, Patient, MedicalDocument, MedicalEquipment, EquipmentHistory, User, Prescription, LabTest, TreatmentPlan, ConsultationNote, PhysicalExamination, InitialAssessment, UserLoginLog, StaffMailEvent, StaffMailTraffic, Appointment, DoctorBlock, BarcodeScan, NeuropathyStudy, LabInboxItem, SettingChangeLog, ConversationMessage, Conversation, ConversationEscalation } = db;
 
@@ -649,6 +650,10 @@ const MAIL_TRAFFIC_TYPES = {
 const ACTION_GROUPS = {
   mail_all: [...Object.values(MAIL_EVENT_TYPES), ...Object.values(MAIL_TRAFFIC_TYPES)].map((t) => t.type),
   mail_patient_docs: ['patient_docs_emailed', 'mail_saved_to_patient', 'mail_patient_emailed', 'mail_linked_to_patient'],
+  stock_all: STOCK_EVENT_TYPES,
+  stock_receiving: ['stock_received', 'stock_delivery_recorded', 'stock_delivery_scan', 'stock_delivery_scan_removed', 'stock_delivery_corrected'],
+  stock_stocktake: ['stock_stocktake', 'stock_count_adjusted', 'stock_adjusted'],
+  stock_rooms: ['stock_restocked', 'stock_pars_changed', 'stock_room_doctor'],
 };
 
 const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
@@ -748,6 +753,14 @@ const getMailTrafficEvents = async (dateFilter) => {
   });
 };
 
+// Stocks (13 Oct 2026, Emu): every function in the Stocks tabs — receive,
+// dispense, use, transfer, room restock, returns, stocktakes, write-offs,
+// delivery corrections, par levels, catalogue changes, tests. Same rows as
+// Stocks → Analytics → Audit (utils/stockAudit).
+const getStockEvents = async (dateFilter) => (await collectStockRows(dateFilter)).map((r) => makeEvent(
+  r.type, r.label, r.staff, r.patient, r.uhid, r.at, r.detail, r.role,
+));
+
 // views (the Staff File Activity tab) reuse the exact same derivation instead of
 // duplicating it — one source of truth for "what counts as activity".
 const collectAllEvents = async (dateFilter = resolveDateFilter()) => (
@@ -771,6 +784,7 @@ const collectAllEvents = async (dateFilter = resolveDateFilter()) => (
     getSettingChangeEvents(dateFilter),
     getMailEvents(dateFilter),
     getMailTrafficEvents(dateFilter),
+    getStockEvents(dateFilter),
   ])
 ).flat();
 

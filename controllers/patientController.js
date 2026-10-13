@@ -776,7 +776,25 @@ const recordVitalsDoctor = async (req, res) => {
   });
 
   // No queue stamping here: a doctor completing missed vitals mid-consultation
-  // is not triage.
+  // is not triage. But a test the doctor records (HbA1c, RBS, ketones) goes on
+  // today's open visit if it is not there yet (13 Oct 2026) — and so takes its
+  // supplies from stock. A repeat is added on the bill with "+".
+  const tests = chargesFromVitals(req.body);
+  if (tests.length) {
+    const visit = await Queue.findOne({
+      where: {
+        PatientId: { [Op.in]: req.patientIds },
+        status: { [Op.notIn]: ['Completed', 'Removed'] },
+        createdAt: { [Op.gte]: clinicStartOfDay() },
+      },
+      order: [['createdAt', 'DESC']],
+    }).catch(() => null);
+    if (visit) {
+      await addCharges(visit, { charges: tests }, req.user, { source: 'vital', stage: 'consultation' })
+        .then((added) => { if (added.length) broadcast('queue_updated'); })
+        .catch((err) => console.error('PatientVital.recordVitalsDoctor addCharges error:', err));
+    }
+  }
   return success(res, formatVitals(await withRecordedBy(vital)), 201);
 };
 

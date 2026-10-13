@@ -3,11 +3,11 @@ const db = require('../models');
 const { Op } = require('sequelize');
 const {
   applyMovement,
-  reverseMovement,
   suggestFefoBatch,
   rebuildLevels,
   LedgerError,
 } = require('../utils/stockLedger');
+const { RESTOCK_REASON, logStockActivity } = require('../utils/stockAudit');
 
 const {
   sequelize, StockItem, StockBatch, StockMovement, StockLevel, StockLocation,
@@ -18,6 +18,7 @@ const { runExpirySweepIfDue } = require('../utils/stockExpirySweep');
 const { itemsBelowReorder } = require('../utils/stockTotals');
 const { clinicToday, clinicDatePlusDays, clinicStartOfDay } = require('../utils/clinicTime');
 const { resolvePatient } = require('../utils/patientFamily');
+const { PERMISSIONS, hasPermission } = require('../constants/permissions');
 
 // Every action here writes through utils/stockLedger inside one transaction —
 // the append-only ledger and the materialized levels can never disagree.
@@ -34,7 +35,9 @@ const handleErr = (label, action) => (res, err) => {
 
 const MOVEMENT_INCLUDE = [
   { model: StockItem,     as: 'item',           attributes: ['id', 'name', 'unit', 'category', 'isHighAlert'] },
-  { model: StockBatch,    as: 'batch',          attributes: ['id', 'batchNo', 'labelCode', 'expiryDate'] },
+  // The batch's supplier names where a 'supplier_return' went (13 Oct 2026).
+  { model: StockBatch,    as: 'batch',          attributes: ['id', 'batchNo', 'labelCode', 'expiryDate', 'supplierId', 'qtyReceived'],
+    include: [{ model: Supplier, as: 'supplier', attributes: ['id', 'name'] }] },
   { model: StockLocation, as: 'fromLocation',   attributes: ['id', 'name'] },
   { model: StockLocation, as: 'toLocation',     attributes: ['id', 'name'] },
   { model: User,          as: 'performedByUser', attributes: ['id', 'firstName', 'lastName'] },
@@ -269,7 +272,10 @@ const dispense = async (req, res) => {
       fromLocationId: location.id,
       performedById: req.user.id,
       PatientId,
-      reason: fefo ? `FEFO override: ${fefo.overrideReason}` : null,
+      // Room Balance → restock picklist lines are marked, so the audit can show
+      // when each room was balanced and by whom (13 Oct 2026).
+      reason: [restock ? RESTOCK_REASON : null, fefo ? `FEFO override: ${fefo.overrideReason}` : null]
+        .filter(Boolean).join(' · ') || null,
     }, t));
 
     return success(res, movement, 201);
@@ -325,7 +331,7 @@ const use = async (req, res) => {
 // ------------------------------------
 const transfer = async (req, res) => {
   try {
-    const { fromLocationId, toLocationId, quantity, fefoOverrideReason } = req.body;
+    const { fromLocationId, toLocationId, quantity, fefoOverrideReason, restock } = req.body;
     if (fromLocationId && fromLocationId === toLocationId) {
       return error(res, 'Source and destination are the same location');
     }
@@ -354,7 +360,10 @@ const transfer = async (req, res) => {
       fromLocationId,
       toLocationId,
       performedById: req.user.id,
-      reason: fefo ? `FEFO override: ${fefo.overrideReason}` : null,
+      // Room Balance → restock picklist lines are marked, so the audit can show
+      // when each room was balanced and by whom (13 Oct 2026).
+      reason: [restock ? RESTOCK_REASON : null, fefo ? `FEFO override: ${fefo.overrideReason}` : null]
+        .filter(Boolean).join(' · ') || null,
     }, t));
 
     return success(res, movement, 201);
@@ -431,16 +440,28 @@ const writeoff = async (req, res) => {
 };
 
 // ------------------------------------
-// POST /api/stock/movements/:id/reverse — the only correction mechanism.
-// Ledger rows are immutable; this posts a mirrored 'reversal' row.
+// POST /api/stock/supplier-return — stock going back to the supplier (13 Oct
+// 2026, Emu): excess, faulty, short-dated or recalled stock. Leaves the given
+// location; a reason is required. Allowed for expired and recalled batches —
+// going back is how those usually end. Shows in Movements as "Return to supplier".
 // ------------------------------------
-const reverse = async (req, res) => {
+const supplierReturn = async (req, res) => {
   try {
-    const movement = await sequelize.transaction((t) =>
-      reverseMovement(req.params.id, req.user.id, req.body.reason, t));
+    const { locationId, quantity, reason } = req.body;
+    const batch = await findBatch(req.body.stockBatchId, req.body.labelCode);
+    if (!batch) return error(res, 'Batch not found', 404);
+    await resolveSourceLocation(locationId);
+    const movement = await sequelize.transaction((t) => applyMovement({
+      type: 'supplier_return',
+      stockBatchId: batch.id,
+      quantity,
+      fromLocationId: locationId,
+      performedById: req.user.id,
+      reason,
+    }, t));
     return success(res, movement, 201);
   } catch (err) {
-    return handleErr('reverse', 'reverse the movement')(res, err);
+    return handleErr('supplierReturn', 'record the return to the supplier')(res, err);
   }
 };
 
@@ -453,6 +474,8 @@ const listMovements = async (req, res) => {
   try {
     const { itemId, batchId, locationId, type, performedById, uhid, from, to } = req.query;
     const where = {};
+    // Walk-in (external) dispensing only (13 Oct 2026).
+    if (req.query.walkIn === '1') where.recipientName = { [Op.ne]: null };
     if (itemId) where.stockItemId = itemId;
     if (batchId) where.stockBatchId = batchId;
     if (type) where.type = type;
@@ -646,6 +669,9 @@ const dashboard = async (req, res) => {
     const todaysMovements = await StockMovement.count({
       where: { createdAt: { [Op.gte]: startOfDay } },
     });
+    // The last stocktake actually done — a count where everything matched
+    // writes no adjustment, so it comes from the stocktake record (13 Oct 2026).
+    const lastStocktakeAt = await db.StockActivity.max('createdAt', { where: { action: 'stocktake' } });
 
     return success(res, {
       cards: {
@@ -657,6 +683,7 @@ const dashboard = async (req, res) => {
       itemsBelowReorder: belowReorder,
       expiry: buckets,
       sweep,   // { ran, newlyExpired } — dashboard banner when batches expired
+      lastStocktakeAt: lastStocktakeAt || null,
     });
   } catch (err) {
     console.error('Stock.dashboard error:', err);
@@ -683,7 +710,20 @@ const dashboard = async (req, res) => {
 const checkoutDispense = async (req, res) => {
   try {
     const { uhid, lines, queueId } = req.body;
-    if (!uhid) return error(res, 'Patient UHID is required');
+    // Walk-in (external) dispensing — someone not registered at the clinic who
+    // comes in for supplies (13 Oct 2026). Name and phone both required; no
+    // patient record and no visit. Stocks Dispense tab only.
+    const walkIn = req.body.walkIn && !uhid
+      ? { name: String(req.body.walkIn.name || '').trim(), phone: String(req.body.walkIn.phone || '').trim() }
+      : null;
+    if (walkIn && walkIn.name.length < 2) return error(res, 'Enter the walk-in\'s name');
+    if (walkIn && walkIn.phone.replace(/\D/g, '').length < 7) return error(res, 'Enter the walk-in\'s phone number');
+    if (walkIn && queueId) return error(res, 'A walk-in dispense has no visit');
+    if (!uhid && !walkIn) return error(res, 'Patient UHID is required');
+    // Walk-ins are the Stocks Dispense tab's — not the discharge checkout.
+    if (walkIn && !hasPermission(req.user, PERMISSIONS.STOCK_DISPENSE_TAB)) {
+      return error(res, 'Dispensing to a walk-in needs the Stocks Dispense tab', 403);
+    }
     if (!Array.isArray(lines) || lines.length === 0) return error(res, 'No supplies to dispense');
 
     // Discharging is two steps — dispense the supplies, then save the discharge
@@ -717,9 +757,9 @@ const checkoutDispense = async (req, res) => {
       }
     }
 
-    const family = await resolvePatient(uhid);
-    if (!family) return error(res, 'Patient not found', 404);
-    if (family.isDeactivated) {
+    const family = walkIn ? null : await resolvePatient(uhid);
+    if (!walkIn && !family) return error(res, 'Patient not found', 404);
+    if (family?.isDeactivated) {
       return error(res, 'This patient record was merged into another. Dispense from the current record.', 403);
     }
 
@@ -767,7 +807,9 @@ const checkoutDispense = async (req, res) => {
           quantity: l.quantity,
           fromLocationId: l.locationId,
           performedById: req.user.id,       // from the JWT, never the client
-          PatientId: family.patient.id,     // merge-aware canonical id
+          PatientId: family ? family.patient.id : null,   // merge-aware canonical id
+          recipientName: walkIn?.name || null,             // walk-in: who it went to
+          recipientPhone: walkIn?.phone || null,
           QueueId: queueId || null,         // the visit — makes a retry detectable
           reason,
         }, t));
@@ -1006,6 +1048,7 @@ const batchReturnInfo = async (req, res) => {
 const rebuild = async (req, res) => {
   try {
     const rows = await rebuildLevels();
+    await logStockActivity({ action: 'levels_rebuilt', userId: req.user.id, detail: `${rows} level rows recalculated from the ledger` });
     return success(res, { message: `Levels rebuilt from ledger (${rows} rows)` });
   } catch (err) {
     console.error('Stock.rebuild error:', err);
@@ -1015,12 +1058,12 @@ const rebuild = async (req, res) => {
 
 module.exports = {
   intake,
+  supplierReturn,
   dispense,
   use,
   transfer,
   adjustment,
   writeoff,
-  reverse,
   listMovements,
   listLevels,
   listBatches,

@@ -42,13 +42,13 @@ describe('validatePresetPayload', () => {
   test('a good payload is normalised', () => {
     const r = validatePresetPayload({
       name: '  Pharmacy ', baseRole: 'staff', staffType: STAFF_TYPES.NON_CLINICAL,
-      permissions: [PERMISSIONS.STOCK_WRITE], deniedPermissions: [], department: ' Pharmacy ',
+      permissions: [PERMISSIONS.STOCK_WRITEOFF], deniedPermissions: [], department: ' Pharmacy ',
     });
     assert.equal(r.message, undefined);
     assert.equal(r.fields.name, 'Pharmacy');
     assert.equal(r.fields.department, 'Pharmacy');
     assert.equal(r.fields.position, null);
-    assert.ok(r.fields.permissions.includes(PERMISSIONS.STOCK_ACCESS), 'write implies access');
+    assert.ok(r.fields.permissions.includes(PERMISSIONS.STOCK_ANALYTICS), 'write implies access');
   });
 
   test('needs a name and a known cadre', () => {
@@ -109,12 +109,12 @@ describe('defaultPermissionsFor — one baseline for the Staff File and the wiza
 describe('reconcilePermissionLists', () => {
   test('sanitises both sides and reports the overlap', () => {
     const r = reconcilePermissionLists(
-      [PERMISSIONS.STOCK_WRITE, 'bogus.cap'],
-      [PERMISSIONS.STOCK_WRITE],
+      [PERMISSIONS.STOCK_WRITEOFF, 'bogus.cap'],
+      [PERMISSIONS.STOCK_WRITEOFF],
     );
-    assert.ok(r.granted.includes(PERMISSIONS.STOCK_ACCESS));
-    assert.ok(!r.granted.includes(PERMISSIONS.STOCK_WRITE));
-    assert.deepEqual(r.conflicting, [PERMISSIONS.STOCK_WRITE]);
+    assert.ok(r.granted.includes(PERMISSIONS.STOCK_ANALYTICS));
+    assert.ok(!r.granted.includes(PERMISSIONS.STOCK_WRITEOFF));
+    assert.deepEqual(r.conflicting, [PERMISSIONS.STOCK_WRITEOFF]);
   });
 
   test('non-arrays are treated as empty', () => {

@@ -5,6 +5,7 @@ const { checkLink } = require('../services/remoteRequests');
 const { parseJsonColumn } = require('../utils/jsonColumn');
 const db = require('../models');
 const { generatePrescriptionNumber } = require('../utils/generateId');
+const { computeAgeFromDob } = require('../utils/medicalConstants');
 
 const { Prescription, Patient, User, StaffProfile } = db;
 
@@ -33,6 +34,9 @@ const formatPrescription = (prescription) => {
     patientName: p.Patient
       ? `${p.Patient.firstName} ${p.Patient.lastName}`
       : null,
+    // Age and sex on the printed prescription (13 Oct 2026, Emu).
+    patientAge: p.Patient?.dateOfBirth ? computeAgeFromDob(p.Patient.dateOfBirth) : null,
+    patientGender: p.Patient?.gender || null,
     doctorName: p.doctor
       ? `Dr. ${p.doctor.firstName} ${p.doctor.lastName}`
       : null,
@@ -60,7 +64,7 @@ const formatPrescription = (prescription) => {
 const prescriptionIncludes = [
   {
     model: Patient,
-    attributes: ['uhid', 'firstName', 'lastName'],  // Only fetch what we need
+    attributes: ['uhid', 'firstName', 'lastName', 'gender', 'dateOfBirth'],  // Only fetch what we need
   },
   {
     model: User,

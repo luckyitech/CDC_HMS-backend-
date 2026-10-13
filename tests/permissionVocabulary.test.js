@@ -30,10 +30,21 @@ const ROUTES_DIR = path.join(__dirname, '..', 'routes');
 const CHECKED_ELSEWHERE = {
   [PERMISSIONS.ADMIN_ACCESS]:
     "authorize()'s implicit admin bypass — it is not named in gates by design",
-  [PERMISSIONS.STOCK_ACCESS]:
-    'routes/stock.js via requirePermission(), as the stockRead middleware',
-  [PERMISSIONS.STOCK_WRITE]:
-    'routes/stock.js via requirePermission(), as the stockWrite middleware',
+  // Stocks per tab (13 Oct 2026): routes/stock.js stockGate() / clinicalOrTab(),
+  // not authorize() — see the comment there.
+  [PERMISSIONS.STOCK_DISPENSE_TAB]: 'routes/stock.js via stockGate()',
+  [PERMISSIONS.STOCK_ITEMS]: 'routes/stock.js via stockGate()',
+  [PERMISSIONS.STOCK_ITEMS_EDIT]: 'routes/stock.js via stockGate()',
+  [PERMISSIONS.STOCK_RECEIVE]: 'routes/stock.js via stockGate()',
+  [PERMISSIONS.STOCK_RETURNS]: 'routes/stock.js via stockGate()',
+  [PERMISSIONS.STOCK_TRANSFER]: 'routes/stock.js via stockGate()',
+  [PERMISSIONS.STOCK_ROOMS]: 'routes/stock.js via stockGate()',
+  [PERMISSIONS.STOCK_ROOMS_EDIT]: 'routes/stock.js via stockGate()',
+  [PERMISSIONS.STOCK_STOCKTAKE]: 'routes/stock.js via stockGate()',
+  [PERMISSIONS.STOCK_MOVEMENTS]: 'routes/stock.js via stockGate()',
+  [PERMISSIONS.STOCK_ANALYTICS]: 'routes/stock.js via stockGate()',
+  [PERMISSIONS.STOCK_WRITEOFF]: 'routes/stock.js via stockGate()',
+  [PERMISSIONS.STOCK_DELIVERIES_EDIT]: 'routes/stock.js via stockGate()',
   [PERMISSIONS.PERMISSIONS_GRANT]:
     'middleware/auth.js requireTrueAdmin via canGrantPermissions() — the right to '
     + 'grant capabilities; deliberately not an authorize() argument so admin.access '

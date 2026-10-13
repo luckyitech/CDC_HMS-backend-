@@ -16,7 +16,7 @@ const sequelize = require('../config/database');
 const { STAFF_ROLES } = require('../constants/staffRoles');
 const {
   PERMISSIONS, ALL_PERMISSIONS, PERMISSION_GROUPS, PERMISSIBLE_ROLES, STAFF_TYPES,
-  hasPermission, isTrueAdmin, canGrantPermissions, toList,
+  hasPermission, isTrueAdmin, canGrantPermissions, toList, canUseStock,
   displayedPermissions, ADMIN_ACCESS_COVERS,
   reconcilePermissionLists, defaultPermissionsFor, PRESET_EXCLUDED,
   BUNDLES, IMPLIED_BY, HR_DELEGABLE, HR_NOT_DELEGABLE, passesAdminGate,
@@ -173,7 +173,7 @@ const formatStaff = (profile, user) => {
     // wizard (a person who does not exist yet) and this tab (one who does)
     // cannot disagree about a nurse's baseline.
     defaultPermissions: defaultPermissionsFor(user.role, user.staffType),
-    canManageStock:  hasPermission(user, PERMISSIONS.STOCK_ACCESS),
+    canManageStock:  canUseStock(user),
     hasAdminAccess:  hasPermission(user, PERMISSIONS.ADMIN_ACCESS),
     canHoldPermissions: PERMISSIBLE_ROLES.includes(user.role),
     isTrueAdmin:     isTrueAdmin(user),

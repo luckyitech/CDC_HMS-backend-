@@ -89,7 +89,7 @@ describe('granted admin access reaches admin-only routes', () => {
     // admin.access must not imply stock.write: capabilities are independent,
     // or the whole point of separating them is lost.
     const staff = { role: 'staff', permissions: [PERMISSIONS.ADMIN_ACCESS] };
-    const res = await run(requirePermission(PERMISSIONS.STOCK_WRITE), staff);
+    const res = await run(requirePermission(PERMISSIONS.STOCK_WRITEOFF), staff);
     assert.equal(res.allowed, false, 'admin.access must not imply stock.write');
   });
 

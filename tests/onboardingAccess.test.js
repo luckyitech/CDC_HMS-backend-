@@ -89,7 +89,7 @@ describe('rule 2 — a preset applied unchanged needs only users.write', () => {
 describe('rule 3 — any change from the preset needs permissions.grant', () => {
   const extra = {
     presetId: 7,
-    permissions: [PERMISSIONS.PORTAL_INPATIENT, PERMISSIONS.MAR_ADMINISTER, PERMISSIONS.STOCK_WRITE],
+    permissions: [PERMISSIONS.PORTAL_INPATIENT, PERMISSIONS.MAR_ADMINISTER, PERMISSIONS.STOCK_WRITEOFF],
   };
 
   test('a users.write holder adding a tick is refused with 403', () => {
@@ -111,15 +111,15 @@ describe('rule 3 — any change from the preset needs permissions.grant', () => 
   });
 
   test('a users.write holder setting access with no preset is refused', () => {
-    assert.equal(resolve({ permissions: [PERMISSIONS.STOCK_ACCESS] }, writer).code, 403);
+    assert.equal(resolve({ permissions: [PERMISSIONS.STOCK_ANALYTICS] }, writer).code, 403);
     assert.equal(resolve({ staffType: STAFF_TYPES.NON_CLINICAL }, writer).code, 403);
   });
 
   test('a key-holder may do all of the above', () => {
     const r = resolve(extra, keyHolder, nursePreset);
     assert.equal(r.message, undefined);
-    assert.ok(r.access.permissions.includes(PERMISSIONS.STOCK_WRITE));
-    assert.ok(r.access.permissions.includes(PERMISSIONS.STOCK_ACCESS), 'write implies access');
+    assert.ok(r.access.permissions.includes(PERMISSIONS.STOCK_WRITEOFF));
+    assert.ok(r.access.permissions.includes(PERMISSIONS.STOCK_ANALYTICS), 'write implies access');
     assert.equal(r.access.presetName, 'Nurse — clinic floor');
     assert.equal(resolve({ staffType: STAFF_TYPES.NON_CLINICAL }, keyHolder).access.staffType, STAFF_TYPES.NON_CLINICAL);
   });
@@ -130,11 +130,11 @@ describe('rule 3 — any change from the preset needs permissions.grant', () => 
 
   test('a withdrawal beats a grant, and is reported', () => {
     const r = resolve({
-      permissions: [PERMISSIONS.STOCK_ACCESS], deniedPermissions: [PERMISSIONS.STOCK_ACCESS],
+      permissions: [PERMISSIONS.STOCK_ANALYTICS], deniedPermissions: [PERMISSIONS.STOCK_ANALYTICS],
     }, keyHolder);
-    assert.ok(!r.access.permissions.includes(PERMISSIONS.STOCK_ACCESS));
-    assert.ok(r.access.deniedPermissions.includes(PERMISSIONS.STOCK_ACCESS));
-    assert.deepEqual(r.access.conflicting, [PERMISSIONS.STOCK_ACCESS]);
+    assert.ok(!r.access.permissions.includes(PERMISSIONS.STOCK_ANALYTICS));
+    assert.ok(r.access.deniedPermissions.includes(PERMISSIONS.STOCK_ANALYTICS));
+    assert.deepEqual(r.access.conflicting, [PERMISSIONS.STOCK_ANALYTICS]);
   });
 
   test('an invalid staffType is a 400, not a 403', () => {

@@ -18,7 +18,10 @@ const { StockItem, StockBatch, StockMovement, StockLevel, StockLocation, sequeli
 //   expiry_writeoff | damage_writeoff → from only
 //   transfer          → from + to
 //   adjustment        → from OR to     (count down / count up, reason required)
-//   return            → to only        (stock comes back)
+//   return            → to only        (stock comes back from a patient)
+//   use_cancelled     → to only        (a test's supplies put back — the test was not done)
+//   supplier_return   → from only      (stock goes back to the supplier, reason required)
+//   receipt_correction → from OR to    (a received line's quantity corrected, reason required)
 //   reversal          → mirror of the reversed movement (computed here)
 //
 // New movement types need a row in MOVEMENT_RULES — nothing else changes.
@@ -33,6 +36,9 @@ const MOVEMENT_RULES = {
   expiry_writeoff:  { from: 'required',  to: 'forbidden', reasonRequired: true },
   damage_writeoff:  { from: 'required',  to: 'forbidden', reasonRequired: true },
   return:           { from: 'forbidden', to: 'required'  },
+  supplier_return:  { from: 'required',  to: 'forbidden', reasonRequired: true },
+  receipt_correction: { from: 'either', to: 'either',   reasonRequired: true },
+  use_cancelled:    { from: 'forbidden', to: 'required', reasonRequired: true },
   reversal:         { from: 'either',    to: 'either',    reasonRequired: true },
 };
 
@@ -112,6 +118,9 @@ const applyMovement = async ({
   QueueId = null,
   prescriptionId = null,
   reversesMovementId = null,
+  recipientName = null,
+  recipientPhone = null,
+  queueChargeId = null,
 }, t) => {
   const rules = MOVEMENT_RULES[type];
   if (!rules) throw new LedgerError(`Unknown movement type '${type}'`);
@@ -135,11 +144,13 @@ const applyMovement = async ({
     transaction: t,
   });
   if (!batch) throw new LedgerError('Batch not found', 404);
-  if (batch.status === 'recalled') throw new LedgerError('This batch is recalled — no movements allowed');
+  // A recalled batch is frozen — except going back to the supplier, which is
+  // what a recall usually ends in.
+  if (batch.status === 'recalled' && type !== 'supplier_return') throw new LedgerError('This batch is recalled — no movements allowed');
 
-  // Expired stock may only be written off or reversed — never dispensed,
-  // used or transferred onward.
-  if (isExpired(batch) && !['expiry_writeoff', 'reversal', 'adjustment'].includes(type)) {
+  // Expired stock may only be written off, returned to the supplier, corrected
+  // or reversed — never dispensed, used or transferred onward.
+  if (isExpired(batch) && !['expiry_writeoff', 'reversal', 'adjustment', 'supplier_return', 'receipt_correction', 'use_cancelled'].includes(type)) {
     throw new LedgerError(
       `Batch ${batch.labelCode || batch.id} expired on ${batch.expiryDate} — write it off instead`
     );
@@ -172,6 +183,9 @@ const applyMovement = async ({
     performedById,
     reason: reason ? String(reason).trim() : null,
     reversesMovementId,
+    recipientName: recipientName ? String(recipientName).trim().slice(0, 120) : null,
+    recipientPhone: recipientPhone ? String(recipientPhone).trim().slice(0, 40) : null,
+    queueChargeId,
   }, { transaction: t });
 
   // Keep batch status honest: depleted when nothing remains anywhere,
@@ -187,7 +201,10 @@ const applyMovement = async ({
 };
 
 // ---------------------------------------------------------------------
-// reverseMovement — the ONLY correction mechanism (ledger rows are immutable).
+// reverseMovement — posts a mirrored 'reversal' row (ledger rows are immutable).
+// NOT reachable from the app since 13 Oct 2026 (Emu: nobody reverses a
+// movement; corrections go through dispense / return / transfer, stocktake and
+// write-off). Kept for the ledger tests and older 'reversal' rows.
 // Writes a 'reversal' row with from/to swapped, restoring the levels the
 // original movement changed.
 // ---------------------------------------------------------------------

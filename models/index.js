@@ -107,6 +107,8 @@ const StockParLevel       = require('./StockParLevel');
 const Supplier            = require('./Supplier');
 const StockReceipt        = require('./StockReceipt');
 const StockReceiptDocument = require('./StockReceiptDocument');
+const StockBatchEdit = require('./StockBatchEdit');
+const StockActivity = require('./StockActivity');
 
 // --- HMIS V3 inpatient ---
 const Ward                     = require('./Ward');
@@ -582,6 +584,9 @@ StockItem.belongsTo(User, { as: 'updatedByUser', foreignKey: 'lastUpdatedById' }
 
 StockLocation.belongsTo(User, { as: 'addedByUser',   foreignKey: 'addedById' });
 StockLocation.belongsTo(User, { as: 'updatedByUser', foreignKey: 'lastUpdatedById' });
+// The doctor who works in this room (Room Balance → edit pars) — a doctor's
+// tests (HbA1c / RBS / Ketones) take their strip from here.
+StockLocation.belongsTo(User, { as: 'assignedDoctor', foreignKey: 'assignedDoctorId' });
 
 Supplier.belongsTo(User, { as: 'addedByUser',   foreignKey: 'addedById' });
 Supplier.belongsTo(User, { as: 'updatedByUser', foreignKey: 'lastUpdatedById' });
@@ -599,6 +604,14 @@ StockReceipt.hasMany(StockReceiptDocument, { as: 'documents', foreignKey: 'stock
 StockReceiptDocument.belongsTo(StockReceipt, { as: 'receipt', foreignKey: 'stockReceiptId' });
 StockReceiptDocument.belongsTo(User, { as: 'uploadedByUser', foreignKey: 'uploadedById' });
 StockReceiptDocument.belongsTo(User, { as: 'removedByUser', foreignKey: 'removedById' });
+// Corrections to a received line (13 Oct 2026).
+StockBatch.hasMany(StockBatchEdit, { as: 'edits', foreignKey: 'stockBatchId' });
+StockBatchEdit.belongsTo(StockBatch, { as: 'batch', foreignKey: 'stockBatchId' });
+StockBatchEdit.belongsTo(User, { as: 'editedByUser', foreignKey: 'editedById' });
+StockActivity.belongsTo(User,          { as: 'user',     foreignKey: 'userId' });
+StockActivity.belongsTo(StockLocation, { as: 'location', foreignKey: 'locationId' });
+StockActivity.belongsTo(StockItem,     { as: 'item',     foreignKey: 'stockItemId' });
+// What one attempt of a test uses (13 Oct 2026).
 
 StockMovement.belongsTo(StockItem,     { as: 'item',         foreignKey: 'stockItemId' });
 StockItem.hasMany(StockMovement,       { as: 'movements',    foreignKey: 'stockItemId' });
@@ -902,6 +915,8 @@ const db = {
   Supplier,
   StockReceipt,
   StockReceiptDocument,
+  StockBatchEdit,
+  StockActivity,
   // --- HMIS V3 inpatient ---
   Ward,
   Room,

@@ -68,6 +68,7 @@ router.post('/:id/refer', authenticate, authorize('doctor'), queueController.ref
 // may bill (nurse, doctor, front desk/cashier) reads, adds and removes here.
 router.get('/:id/charges', authenticate, authorize('staff', 'doctor', 'nurse', 'queue.write'), queueController.getCharges);
 router.post('/:id/charges', authenticate, authorize('staff', 'doctor', 'nurse', 'queue.write'), queueController.addChargeLines);
+router.post('/:id/charges/attempt', authenticate, authorize('staff', 'doctor', 'nurse', 'queue.write'), queueController.addTestAttempt);
 router.delete('/:id/charges', authenticate, authorize('staff', 'doctor', 'nurse', 'queue.write'), queueController.removeChargeLine);
 
 // ------------------------------------

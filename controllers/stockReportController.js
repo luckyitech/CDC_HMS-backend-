@@ -4,9 +4,13 @@ const { Op, fn, col } = require('sequelize');
 
 const { itemsBelowReorder } = require('../utils/stockTotals');
 const { clinicToday, clinicMonthStart, clinicMidnight } = require('../utils/clinicTime');
+const { summariseExpiry } = require('../utils/expiryReport');
+const { collectStockRows, RESTOCK_REASON } = require('../utils/stockAudit');
+const { buildSessions, buildPeople } = require('../utils/stockAuditReport');
 
 const {
   StockItem, StockBatch, StockMovement, StockLevel, StockLocation, Supplier, User, Patient,
+  StockActivity, StockParLevel, StockReceipt,
 } = db;
 
 // Reports — all straight reads over the ledger and levels. No money anywhere.
@@ -81,6 +85,8 @@ const consumption = async (req, res) => {
       if (!entry.months[key]) entry.months[key] = { consumed: 0, writtenOff: 0 };
       if (m.type === 'dispense' || m.type === 'use') entry.months[key].consumed += m.quantity;
       else entry.months[key].writtenOff += m.quantity;
+      // Of the consumption, how much went to walk-ins (not registered patients).
+      if (m.type === 'dispense' && m.recipientName) entry.walkIn = (entry.walkIn || 0) + m.quantity;
     });
 
     return success(res, {
@@ -131,7 +137,16 @@ const recall = async (req, res) => {
       // in the room) count as "received it" for a recall.
       const byPatient = {};
       movements.forEach((m) => {
-        if (!['dispense', 'use'].includes(m.type) || !m.Patient) return;
+        if (!['dispense', 'use'].includes(m.type)) return;
+        // Walk-ins (13 Oct 2026) are recipients too — a recall must reach them.
+        if (!m.Patient && m.recipientName) {
+          const k = `walkin:${m.recipientName}|${m.recipientPhone || ''}`;
+          byPatient[k] = byPatient[k]
+            || { uhid: null, walkIn: true, name: m.recipientName, phone: m.recipientPhone || null, quantity: 0 };
+          byPatient[k].quantity += m.quantity;
+          return;
+        }
+        if (!m.Patient) return;
         const p = m.Patient;
         byPatient[p.id] = byPatient[p.id]
           || { uhid: p.uhid, name: `${p.firstName} ${p.lastName}`, quantity: 0 };
@@ -209,6 +224,12 @@ const movementReport = (label, whereBuilder) => async (req, res) => {
 // disposal register an inspector asks for.
 const disposal = movementReport('disposal', () => ({
   type: { [Op.in]: ['expiry_writeoff', 'damage_writeoff'] },
+}));
+
+// GET /api/stock/reports/walk-ins — dispensing to walk-ins: people not
+// registered at the clinic who came in for supplies (13 Oct 2026, Emu).
+const walkIns = movementReport('walkIns', () => ({
+  type: 'dispense', recipientName: { [Op.ne]: null },
 }));
 
 // GET /api/stock/reports/fefo-overrides — who bypassed the suggested batch,
@@ -315,4 +336,164 @@ const inventory = async (req, res) => {
   }
 };
 
-module.exports = { reorder, consumption, recall, disposal, fefoOverrides, variances, inventory };
+// ------------------------------------
+// GET /api/stock/reports/expiry?from=YYYY-MM-DD&to=YYYY-MM-DD
+// Batches whose EXPIRY DATE falls in the range (past or future), what became
+// of each (on shelf / expired on shelf / written off / used up) and a line per
+// expiry month. Default range: this month and the next two. The maths lives in
+// utils/expiryReport (unit-tested).
+// ------------------------------------
+const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
+const MAX_EXPIRY_SPAN_DAYS = 1100;   // ~3 years
+
+const expiry = async (req, res) => {
+  try {
+    const today = clinicToday();
+    // Last day of the month `add` months after today's clinic month.
+    const monthEnd = (add) => {
+      const [y, m] = today.split('-').map(Number);
+      return new Date(Date.UTC(y, m + add, 0, 12)).toISOString().slice(0, 10);
+    };
+    const from = ISO_DATE.test(req.query.from || '') ? req.query.from : clinicMonthStart(0);
+    const to = ISO_DATE.test(req.query.to || '') ? req.query.to : monthEnd(2);
+    if (from > to) return error(res, 'The start date is after the end date', 400);
+    if ((Date.parse(to) - Date.parse(from)) / 86400000 > MAX_EXPIRY_SPAN_DAYS) {
+      return error(res, 'Choose a range of three years or less', 400);
+    }
+
+    const batches = await StockBatch.findAll({
+      where: { expiryDate: { [Op.between]: [from, to] } },
+      attributes: ['id', 'batchNo', 'labelCode', 'expiryDate', 'qtyReceived'],
+      include: [{ model: StockItem, as: 'item', attributes: ['id', 'name', 'unit', 'category'] }],
+      order: [['expiryDate', 'ASC'], ['id', 'ASC']],
+      limit: 2000,
+    });
+    const ids = batches.map((b) => b.id);
+
+    const [levels, writeoffs] = ids.length ? await Promise.all([
+      StockLevel.findAll({
+        where: { stockBatchId: { [Op.in]: ids }, quantity: { [Op.gt]: 0 } },
+        attributes: ['stockBatchId', 'quantity'],
+        include: [{ model: StockLocation, as: 'location', attributes: ['name'] }],
+      }),
+      StockMovement.findAll({
+        where: { stockBatchId: { [Op.in]: ids }, type: { [Op.in]: ['expiry_writeoff', 'damage_writeoff', 'supplier_return'] } },
+        attributes: ['stockBatchId', 'type', [fn('SUM', col('quantity')), 'qty']],
+        group: ['stockBatchId', 'type'],
+        raw: true,
+      }),
+    ]) : [[], []];
+
+    const report = summariseExpiry({
+      today,
+      batches,
+      levels: levels.map((l) => ({ stockBatchId: l.stockBatchId, quantity: l.quantity, locationName: l.location?.name })),
+      writeoffs,
+    });
+    return success(res, { from, to, today, truncated: batches.length === 2000, ...report });
+  } catch (err) {
+    console.error('Stock.reports.expiry error:', err);
+    return error(res, 'Failed to build expiry report', 500);
+  }
+};
+
+// ------------------------------------
+// GET /api/stock/reports/audit?from=&to=&userId=&fn=   (13 Oct 2026, Emu)
+// When receiving, stocktakes and room balancing took place and by whom — for
+// tracking the functions, setting schedules and planning around leave — plus
+// every timestamped stock event in the range. `lastDone` is all-time.
+// fn: receiving | dispense | transfer | rooms | returns | stocktake | writeoff | items | tests | other
+// ------------------------------------
+const MAX_AUDIT_SPAN_DAYS = 366;
+const MAX_AUDIT_EVENTS = 1500;
+const who = (u) => (u ? `${u.role === 'doctor' ? 'Dr. ' : ''}${u.firstName} ${u.lastName}` : null);
+const USER_ATTRS = ['id', 'firstName', 'lastName', 'role'];
+
+const auditLastDone = async () => {
+  const [locations, stocktakes, lastIntake, restocks, parRooms] = await Promise.all([
+    StockLocation.findAll({ where: { status: 'active' }, attributes: ['id', 'name', 'kind'], order: [['name', 'ASC']] }),
+    StockActivity.findAll({
+      where: { action: 'stocktake' },
+      include: [{ model: User, as: 'user', attributes: USER_ATTRS }],
+      order: [['createdAt', 'DESC']], limit: 2000,
+    }),
+    StockMovement.findOne({
+      where: { type: 'intake' },
+      include: [
+        { model: User, as: 'performedByUser', attributes: USER_ATTRS },
+        { model: StockBatch, as: 'batch', attributes: ['id'], include: [
+          { model: StockReceipt, as: 'receipt', attributes: ['number'] },
+          { model: Supplier, as: 'supplier', attributes: ['name'] },
+        ] },
+      ],
+      order: [['createdAt', 'DESC']],
+    }),
+    StockMovement.findAll({
+      where: { type: 'transfer', reason: { [Op.like]: `${RESTOCK_REASON}%` } },
+      include: [{ model: User, as: 'performedByUser', attributes: USER_ATTRS }],
+      order: [['createdAt', 'DESC']], limit: 2000,
+    }),
+    StockParLevel.findAll({ attributes: ['locationId'], group: ['locationId'], raw: true }),
+  ]);
+
+  const lastBy = (rows, key) => {
+    const out = {};
+    for (const r of rows) if (!out[r[key]]) out[r[key]] = r;
+    return out;
+  };
+  const counted = lastBy(stocktakes, 'locationId');
+  const restocked = lastBy(restocks, 'toLocationId');
+  const rooms = new Set(parRooms.map((p) => p.locationId));
+
+  return {
+    stocktake: locations.map((l) => ({
+      locationId: l.id, location: l.name, kind: l.kind,
+      at: counted[l.id]?.createdAt || null, staff: who(counted[l.id]?.user), detail: counted[l.id]?.detail || null,
+    })),
+    receiving: lastIntake ? {
+      at: lastIntake.createdAt, staff: who(lastIntake.performedByUser),
+      receipt: lastIntake.batch?.receipt?.number || null, supplier: lastIntake.batch?.supplier?.name || null,
+    } : null,
+    restock: locations.filter((l) => rooms.has(l.id)).map((l) => ({
+      locationId: l.id, location: l.name, kind: l.kind,
+      at: restocked[l.id]?.createdAt || null, staff: who(restocked[l.id]?.performedByUser),
+    })),
+  };
+};
+
+const audit = async (req, res) => {
+  try {
+    const today = clinicToday();
+    const from = ISO_DATE.test(req.query.from || '') ? req.query.from : clinicToday(new Date(Date.now() - 29 * 86400000));
+    const to = ISO_DATE.test(req.query.to || '') ? req.query.to : today;
+    if (from > to) return error(res, 'The start date is after the end date', 400);
+    if ((Date.parse(to) - Date.parse(from)) / 86400000 > MAX_AUDIT_SPAN_DAYS) {
+      return error(res, 'Choose a range of a year or less', 400);
+    }
+    const end = new Date(clinicMidnight(to).getTime() + 86400000);
+    const dateFilter = { [Op.gte]: clinicMidnight(from), [Op.lt]: end };
+
+    const [rows, lastDone] = await Promise.all([collectStockRows(dateFilter), auditLastDone()]);
+    const sessions = buildSessions(rows);
+    const people = buildPeople(rows, sessions);
+
+    const userId = req.query.userId ? Number(req.query.userId) : null;
+    const fnFilter = req.query.fn || null;
+    const keep = (r) => (!userId || r.userId === userId) && (!fnFilter || r.fn === fnFilter);
+    const events = rows.filter(keep).sort((a, b) => new Date(b.at) - new Date(a.at));
+
+    return success(res, {
+      from, to,
+      lastDone,
+      sessions: sessions.filter(keep),
+      people,
+      events: events.slice(0, MAX_AUDIT_EVENTS),
+      totalEvents: events.length,
+    });
+  } catch (err) {
+    console.error('StockReport.audit error:', err);
+    return error(res, 'Failed to load the stock audit', 500);
+  }
+};
+
+module.exports = { reorder, consumption, recall, disposal, walkIns, fefoOverrides, variances, inventory, expiry, audit };

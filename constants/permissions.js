@@ -51,6 +51,9 @@ const PERMISSIONS = {
   // HR Suite — staff time & attendance (B21). Every internal role opens it by
   // default: the portal is where a member of staff sees their own record.
   PORTAL_HR:        'portal.hr',
+  // Stocks (13 Oct 2026) — the door to the Stocks page; the Stocks group's
+  // per-tab capabilities decide what is inside. Nobody holds it by role.
+  PORTAL_STOCKS:    'portal.stocks',
 
   // --- Administration ---
   // Passes any endpoint gated by authorize('admin'). Kept as the broad grant it
@@ -111,10 +114,28 @@ const PERMISSIONS = {
   // authority, not module access, and stays gated by role.
   INPATIENT_WRITE: 'inpatient.write',
 
-  // Stock / Pharmacy. Split from the old all-or-nothing 'stock.manage' so a
-  // person can be given visibility without the ability to move the ledger.
-  STOCK_ACCESS: 'stock.access',
-  STOCK_WRITE:  'stock.write',
+  // Stocks — one capability per tab of the Stocks page (Emu, 13 Oct 2026), so
+  // each member of staff can hold a different role in stock management. Holding
+  // any of them opens the Stocks page; each opens its own tab and the routes
+  // behind it. Items, Room Balance and Analytics carry a second, acting
+  // capability (implies the tab), and Movements one for editing deliveries.
+  // Nobody can reverse a movement (Emu, same day).
+  // Replaces stock.access / stock.write, which are RETIRED (LEGACY_PERMISSIONS
+  // maps them to nothing — Emu chose "start from nothing": every tab is granted
+  // afresh per person; real admins hold all of them).
+  STOCK_DISPENSE_TAB:  'stock.tab.dispense',
+  STOCK_ITEMS:         'stock.items',
+  STOCK_ITEMS_EDIT:    'stock.items.edit',
+  STOCK_RECEIVE:       'stock.receive',
+  STOCK_RETURNS:       'stock.returns',
+  STOCK_TRANSFER:      'stock.transfer',
+  STOCK_ROOMS:         'stock.rooms',
+  STOCK_ROOMS_EDIT:    'stock.rooms.edit',
+  STOCK_STOCKTAKE:     'stock.stocktake',
+  STOCK_MOVEMENTS:     'stock.movements',
+  STOCK_DELIVERIES_EDIT: 'stock.deliveries.edit',
+  STOCK_ANALYTICS:     'stock.analytics',
+  STOCK_WRITEOFF:      'stock.writeoff',
 
   // Lab results. LAB_WRITE is entering and amending results; ordering a test
   // stays with the doctor role, since ordering is a clinical decision.
@@ -195,8 +216,8 @@ const PERMISSIONS = {
   EQUIPMENT_WRITE: 'equipment.write',
 
   // Handing stock to or taking it back from a patient: point-of-care use,
-  // checkout dispense at discharge, returns. Separate from STOCK_WRITE, which
-  // is running the ledger — intake, transfers, adjustments, write-offs. The
+  // checkout dispense at discharge, returns. Separate from the Stocks tab
+  // capabilities, which run the ledger — intake, transfers, adjustments, write-offs. The
   // route files had already reached for this distinction in comments
   // ("clinical/reception roles, NOT a stock capability") and had to settle for
   // naming roles because there was no capability to name.
@@ -365,7 +386,13 @@ const ALL_PERMISSIONS = Object.values(PERMISSIONS);
 // hr.write holds all four after deploy, and one refused it is refused all four.
 // The next save of their Permissions tab stores the parts instead.
 const LEGACY_PERMISSIONS = {
-  'stock.manage': [PERMISSIONS.STOCK_ACCESS, PERMISSIONS.STOCK_WRITE],
+  // Stocks per-tab (13 Oct 2026): the old all-or-nothing names are RETIRED and
+  // grant nothing — Emu chose to start every person from nothing and grant
+  // tabs one by one. A stored grant or withdrawal of them is inert; the next
+  // save of the Permissions tab drops it.
+  'stock.manage': [],
+  'stock.access': [],
+  'stock.write': [],
   'hr.write': [PERMISSIONS.HR_VIEW, PERMISSIONS.HR_ATTENDANCE_AMEND, PERMISSIONS.HR_WORKHOURS, PERMISSIONS.HR_TAGS],
   'hr.credentials': [PERMISSIONS.CPD_VERIFY, PERMISSIONS.HR_EXPIRY_ALERTS],
 };
@@ -404,7 +431,11 @@ const BUNDLES = {
 // administrator power. Full administrator access is its own toggle now, and
 // granting it is a separate, deliberate act.
 const IMPLIED_BY = {
-  [PERMISSIONS.STOCK_WRITE]:        PERMISSIONS.STOCK_ACCESS,
+  // Stocks: each tab's acting capability needs the tab itself.
+  [PERMISSIONS.STOCK_ITEMS_EDIT]:   PERMISSIONS.STOCK_ITEMS,
+  [PERMISSIONS.STOCK_ROOMS_EDIT]:   PERMISSIONS.STOCK_ROOMS,
+  [PERMISSIONS.STOCK_WRITEOFF]:     PERMISSIONS.STOCK_ANALYTICS,
+  [PERMISSIONS.STOCK_DELIVERIES_EDIT]: PERMISSIONS.STOCK_MOVEMENTS,
   [PERMISSIONS.INPATIENT_WRITE]:    PERMISSIONS.INPATIENT_ACCESS,
   [PERMISSIONS.LAB_WRITE]:          PERMISSIONS.LAB_VIEW,
   [PERMISSIONS.LABINBOX_WRITE]:     PERMISSIONS.LABINBOX_VIEW,
@@ -701,6 +732,8 @@ const PERMISSION_GROUPS = [
       { key: 'p-inpatient', name: 'Inpatient workspace', access: PERMISSIONS.PORTAL_INPATIENT, accessLabel: 'Can open', roleDefault: 'Doctors and nurses' },
       { key: 'p-radiology', name: 'Radiology Suite',    access: PERMISSIONS.PORTAL_RADIOLOGY, accessLabel: 'Can open', roleDefault: 'Doctors and front desk' },
       { key: 'p-hr',        name: 'HR Suite',           access: PERMISSIONS.PORTAL_HR,        accessLabel: 'Can open', roleDefault: 'Everyone' },
+      { key: 'p-stocks',    name: 'Stocks',             access: PERMISSIONS.PORTAL_STOCKS,    accessLabel: 'Can open', roleDefault: 'Nobody by role — must be granted',
+        description: 'Opens the Stocks page (from the Admin, Doctor or Staff portal). Which tabs they see inside is set in the Stocks group below.' },
     ],
   },
   {
@@ -794,6 +827,63 @@ const PERMISSION_GROUPS = [
     ],
   },
   {
+    key: 'stocks',
+    name: 'Stocks',
+    description: 'One switch per tab of the Stocks page, in the order the tabs appear. '
+      + 'The Stocks portal (under Portals) opens the page; each switch here opens its own tab. Nobody holds '
+      + 'them by role except administrators.',
+    areas: [
+      { key: 'stock-dispense', name: 'Dispense', appliesIn: 'Stocks → Dispense',
+        description: 'Dispensing to a patient from the Stocks page. Separate from "Dispensing '
+          + 'to patients" under Clinical, which covers point-of-care use and discharge checkout.',
+        access: PERMISSIONS.STOCK_DISPENSE_TAB, accessLabel: 'Can open and use the Dispense tab',
+        roleDefault: 'Nobody by role — must be granted' },
+      { key: 'stock-items', name: 'Items', appliesIn: 'Stocks → Items',
+        description: 'The stock list with levels per location; adding and editing items, '
+          + 'locations and suppliers.',
+        access: PERMISSIONS.STOCK_ITEMS, write: PERMISSIONS.STOCK_ITEMS_EDIT,
+        accessLabel: 'Can see items and levels', writeLabel: 'Can add and edit items, locations and suppliers',
+        roleDefault: 'Nobody by role — must be granted' },
+      { key: 'stock-receive', name: 'Receive', appliesIn: 'Stocks → Receive',
+        description: 'Receiving deliveries, printing shelf labels, invoice numbers and scans.',
+        access: PERMISSIONS.STOCK_RECEIVE, accessLabel: 'Can open and use the Receive tab',
+        roleDefault: 'Nobody by role — must be granted' },
+      { key: 'stock-returns', name: 'Returns', appliesIn: 'Stocks → Returns',
+        description: 'Taking stock back from a patient into the store, and sending stock back '
+          + 'to the supplier.',
+        access: PERMISSIONS.STOCK_RETURNS, accessLabel: 'Can open and use the Returns tab',
+        roleDefault: 'Nobody by role — must be granted' },
+      { key: 'stock-transfer', name: 'Transfer', appliesIn: 'Stocks → Transfer',
+        description: 'Moving stock between locations.',
+        access: PERMISSIONS.STOCK_TRANSFER, accessLabel: 'Can open and use the Transfer tab',
+        roleDefault: 'Nobody by role — must be granted' },
+      { key: 'stock-rooms', name: 'Room Balance', appliesIn: 'Stocks → Room Balance',
+        description: 'What each room holds against its par level; setting par levels and '
+          + 'restocking a room from its picklist.',
+        access: PERMISSIONS.STOCK_ROOMS, write: PERMISSIONS.STOCK_ROOMS_EDIT,
+        accessLabel: 'Can see room balances', writeLabel: 'Can set par levels and restock rooms',
+        roleDefault: 'Nobody by role — must be granted' },
+      { key: 'stock-stocktake', name: 'Stocktake', appliesIn: 'Stocks → Stocktake',
+        description: 'Counting stock and correcting the levels to the count.',
+        access: PERMISSIONS.STOCK_STOCKTAKE, accessLabel: 'Can open and use the Stocktake tab',
+        roleDefault: 'Nobody by role — must be granted' },
+      { key: 'stock-movements', name: 'Movements', appliesIn: 'Stocks → Movements',
+        description: 'The full history of every stock movement, and Deliveries (invoices and '
+          + 'their scans). Nobody can reverse a movement — mistakes are corrected by dispensing, '
+          + 'returning or moving stock. Editing a delivery corrects a received line (item, '
+          + 'quantity, batch number, expiry) with a reason; the line shows what was edited.',
+        access: PERMISSIONS.STOCK_MOVEMENTS, write: PERMISSIONS.STOCK_DELIVERIES_EDIT,
+        accessLabel: 'Can see movements and deliveries', writeLabel: 'Can edit deliveries',
+        roleDefault: 'Nobody by role — must be granted' },
+      { key: 'stock-analytics', name: 'Analytics', appliesIn: 'Stocks → Analytics',
+        description: 'Today (what needs doing) and Reports — expiry, reorder, consumption, '
+          + 'recall, disposal register, FEFO overrides, variances.',
+        access: PERMISSIONS.STOCK_ANALYTICS, write: PERMISSIONS.STOCK_WRITEOFF,
+        accessLabel: 'Can see Today and Reports', writeLabel: 'Can write off expired stock',
+        roleDefault: 'Nobody by role — must be granted' },
+    ],
+  },
+  {
     key: 'modules',
     name: 'Modules',
     areas: [
@@ -802,11 +892,6 @@ const PERMISSION_GROUPS = [
         access: PERMISSIONS.INPATIENT_ACCESS, write: PERMISSIONS.INPATIENT_WRITE,
         accessLabel: 'Can view', writeLabel: 'Can admit, transfer, discharge and bill',
         roleDefault: 'Clinical and front-desk roles' },
-      { key: 'stock', name: 'Stock / Pharmacy', appliesIn: 'Staff, Doctor, Admin',
-        description: 'Stock levels, batches, movements and reports.',
-        access: PERMISSIONS.STOCK_ACCESS, write: PERMISSIONS.STOCK_WRITE,
-        accessLabel: 'Can view', writeLabel: 'Can receive, dispense, transfer and adjust',
-        roleDefault: 'Nobody by role — must be granted' },
       { key: 'lab', name: 'Lab results', appliesIn: 'Lab, Doctor',
         description: 'Pending tests, results, history and critical alerts. Ordering a test '
           + 'stays with the doctor role.',
@@ -1382,6 +1467,25 @@ const effectivePermissions = (user) => {
 
 const hasPermission = (user, permission) => effectivePermissions(user).has(permission);
 
+// Every Stocks tab capability. Holding any one opens the reference data every
+// tab reads; the Stocks page itself opens with the Stocks PORTAL (canUseStock).
+const STOCK_TAB_PERMISSIONS = [
+  PERMISSIONS.STOCK_DISPENSE_TAB, PERMISSIONS.STOCK_ITEMS, PERMISSIONS.STOCK_RECEIVE,
+  PERMISSIONS.STOCK_RETURNS, PERMISSIONS.STOCK_TRANSFER, PERMISSIONS.STOCK_ROOMS,
+  PERMISSIONS.STOCK_STOCKTAKE, PERMISSIONS.STOCK_MOVEMENTS, PERMISSIONS.STOCK_ANALYTICS,
+];
+/** Holds at least one of these capabilities (withdrawals already applied). */
+const hasAnyPermission = (user, permissions) => {
+  const held = effectivePermissions(user);
+  return permissions.some((p) => held.has(p));
+};
+// May open the Stocks page — the Stocks portal, like every other portal door.
+// Stocks shows (portal switcher, page) only with the portal AND at least one
+// tab — a portal tick with no tab would open an empty page (Emu, 13 Oct 2026:
+// what a staff member cannot use is not shown at all, never greyed out).
+const canUseStock = (user) => canOpenPortal(user, PERMISSIONS.PORTAL_STOCKS)
+  && hasAnyPermission(user, STOCK_TAB_PERMISSIONS);
+
 /** Has this capability been explicitly withdrawn from this user? */
 const isDenied = (user, permission) => deniedPermissions(user).has(permission);
 
@@ -1623,6 +1727,9 @@ module.exports = {
   effectivePermissions,
   deniedPermissions,
   hasPermission,
+  hasAnyPermission,
+  canUseStock,
+  STOCK_TAB_PERMISSIONS,
   isDenied,
   canOpenPortal,
   isTrueAdmin,

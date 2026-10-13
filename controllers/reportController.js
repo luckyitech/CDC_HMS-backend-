@@ -3,6 +3,7 @@ const { success, error } = require('../utils/response');
 const { clinicToday, clinicClockTime, clinicMidnight } = require('../utils/clinicTime');
 const { parseJsonColumn } = require('../utils/jsonColumn');
 const db = require('../models');
+const { TEST_NAMES } = require('../utils/testStock');
 
 // Shared utilities — eliminates duplication across controllers
 const {
@@ -738,6 +739,7 @@ const getPatientVisits = async (req, res) => {
 
     const patientIds = [...new Set(visits.map((v) => v.PatientId).filter((id) => id != null))];
 
+
     // Per patient: their first-ever visit (new vs return) and any non-cancelled
     // appointments in the period (booked vs walk-in)
     const [firstVisits, appointments] = patientIds.length
@@ -883,6 +885,18 @@ const getAttendance = async (req, res) => {
     });
 
     const patientIds = [...new Set(visits.map((v) => v.PatientId).filter((id) => id != null))];
+    // Tests count attempts (13 Oct 2026): "HbA1c ×2" when it was repeated.
+    const attemptRows = visits.length ? await db.QueueCharge.findAll({
+      attributes: ['QueueId', 'name'],
+      where: { QueueId: { [Op.in]: visits.map((v) => v.id) }, status: 'active', kind: 'charge', name: { [Op.in]: TEST_NAMES } },
+      raw: true,
+    }) : [];
+    const attempts = new Map();
+    attemptRows.forEach((r) => { const k = `${r.QueueId}|${r.name}`; attempts.set(k, (attempts.get(k) || 0) + 1); });
+    const withCount = (v) => (name) => {
+      const n = attempts.get(`${v.id}|${name}`) || 0;
+      return n > 1 ? `${name} ×${n}` : name;
+    };
 
     // One appointment fetch covers both needs:
     //  - booked-vs-walk-in: a non-cancelled appointment DATED on the visit day
@@ -943,7 +957,7 @@ const getAttendance = async (req, res) => {
       };
 
       const finalItems = [
-        ...asList(v.finalCharges),
+        ...asList(v.finalCharges).map(withCount(v)),
         ...asList(v.finalProcedures),
         ...asList(v.finalSupplies).map(supplyLabel),
       ].filter((s) => typeof s === 'string' && s.trim());
@@ -951,7 +965,7 @@ const getAttendance = async (req, res) => {
       if (finalItems.length) return { items: finalItems, billed: true };
 
       const selected = [
-        ...asList(v.selectedCharges),
+        ...asList(v.selectedCharges).map(withCount(v)),
         ...asList(v.selectedProcedures),
       ].filter((s) => typeof s === 'string' && s.trim());
 

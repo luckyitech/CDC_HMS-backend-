@@ -47,7 +47,7 @@ describe('listUsers reports real capabilities', () => {
       firstName: 'List', lastName: 'Perms',
       email: `${TAG}.${Date.now()}@cdc.test`,
       password: 'x', role: 'doctor', isActive: true,
-      permissions: [PERMISSIONS.ADMIN_ACCESS, PERMISSIONS.STOCK_ACCESS],
+      permissions: [PERMISSIONS.ADMIN_ACCESS, PERMISSIONS.STOCK_ANALYTICS],
       deniedPermissions: [PERMISSIONS.MONITORING_VIEW],
     });
     made.push(u.id);

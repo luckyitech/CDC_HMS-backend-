@@ -32,7 +32,8 @@ const StockLocation = defineModel('StockLocation', {
     allowNull: false,
     defaultValue: 'active',
   },
-  // addedById / lastUpdatedById — aliased associations in models/index.js
+  // addedById / lastUpdatedById / assignedDoctorId — aliased associations in
+  // models/index.js (assignedDoctorId: the doctor who works in this room).
 });
 
 module.exports = StockLocation;

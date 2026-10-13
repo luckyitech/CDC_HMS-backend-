@@ -3,6 +3,11 @@ const db = require('../models');
 const { Op } = require('sequelize');
 
 const { StockItem, StockLocation, Supplier, StockBatch, StockLevel, CatalogItem, User } = db;
+const { isTestItemName } = require('../utils/testStock');
+const { logStockActivity } = require('../utils/stockAudit');
+
+// Which StockActivity column points at the row (items and locations).
+const activityRef = (label, id) => (label === 'item' ? { stockItemId: id } : label === 'location' ? { locationId: id } : {});
 
 // =====================================================================
 // Stock reference data: items, locations, suppliers.
@@ -87,10 +92,12 @@ const crudFor = (Model, { label, fields, extraInclude = [], validate = null, sto
         if (existing.status === 'active') return error(res, `A ${label} with this name already exists`, 409);
         // Re-adding a retired entry revives it rather than duplicating.
         await existing.update({ ...data, status: 'active', lastUpdatedById: req.user.id });
+        await logStockActivity({ action: 'catalog_reactivated', userId: req.user.id, ...activityRef(label, existing.id), detail: `${label}: ${existing.name}` });
         return success(res, existing);
       }
 
       const row = await Model.create({ ...data, status: 'active', addedById: req.user.id });
+      await logStockActivity({ action: 'catalog_added', userId: req.user.id, ...activityRef(label, row.id), detail: `${label}: ${row.name}` });
       return success(res, row, 201);
     } catch (err) {
       console.error(`Stock.${label}.create error:`, err);
@@ -134,7 +141,21 @@ const crudFor = (Model, { label, fields, extraInclude = [], validate = null, sto
         if (msg) return error(res, msg);
       }
 
+      const was = { ...row.dataValues };
       await row.update({ ...data, lastUpdatedById: req.user.id });
+      const fieldsChanged = Object.keys(data).filter((k) => k !== 'status' && String(was[k] ?? '') !== String(data[k] ?? ''));
+      if (data.status && data.status !== was.status) {
+        await logStockActivity({
+          action: data.status === 'retired' ? 'catalog_retired' : 'catalog_reactivated',
+          userId: req.user.id, ...activityRef(label, row.id), detail: `${label}: ${row.name}`,
+        });
+      }
+      if (fieldsChanged.length) {
+        await logStockActivity({
+          action: 'catalog_edited', userId: req.user.id, ...activityRef(label, row.id),
+          detail: `${label}: ${row.name} · ${fieldsChanged.map((k) => `${k}: ${was[k] ?? '—'} → ${data[k] ?? '—'}`).join(', ')}`,
+        });
+      }
       return success(res, row);
     } catch (err) {
       console.error(`Stock.${label}.update error:`, err);
@@ -230,10 +251,32 @@ const locationsCrud = crudFor(StockLocation, {
 const SUPPLIER_FIELDS = ['name', 'contactPhone', 'contactEmail'];
 const suppliersCrud = crudFor(Supplier, { label: 'supplier', fields: SUPPLIER_FIELDS });
 
+// The HbA1c / glucose / ketone strip items: tests find them BY NAME, so their
+// names cannot change and they cannot be retired (13 Oct 2026, Emu).
+const updateItem = async (req, res) => {
+  try {
+    if (req.body?.name !== undefined || req.body?.status === 'retired') {
+      const row = await StockItem.findByPk(req.params.id, { attributes: ['id', 'name'] });
+      if (row && isTestItemName(row.name)) {
+        if (req.body.name !== undefined && String(req.body.name).trim() !== row.name) {
+          return error(res, `"${row.name}" is matched to its test by name — its name cannot change.`, 409);
+        }
+        if (req.body.status === 'retired') {
+          return error(res, `"${row.name}" is used by its test on the charge sheet — it cannot be retired.`, 409);
+        }
+      }
+    }
+  } catch (err) {
+    console.error('Stock.item.update error:', err);
+    return error(res, 'Failed to update item', 500);
+  }
+  return itemsCrud.update(req, res);
+};
+
 module.exports = {
   listItems,
   createItem: itemsCrud.create,
-  updateItem: itemsCrud.update,
+  updateItem,
   listLocations: locationsCrud.list,
   createLocation: locationsCrud.create,
   updateLocation: locationsCrud.update,
