@@ -11,7 +11,10 @@
 // data. Nothing is sent unless ANTHROPIC_API_KEY is set; without it the
 // "From an invoice" mode shows "Not set up" and manual receiving works as before.
 //
-// .env:  ANTHROPIC_API_KEY=sk-ant-…      (required for this feature)
+// .env:  ANTHROPIC_API_KEY=sk-ant-…      (required for this feature — a key
+//                                        scoped to a workspace, sk-ant-api03-…)
+//        ANTHROPIC_WORKSPACE_ID=wrkspc_… (only for a user-scoped key, sk-ant-usr-…,
+//                                        which the API refuses without a workspace)
 //        INVOICE_READER_MODEL=…          (optional; default below)
 //
 // No new npm package: Node 18+'s built-in fetch.
@@ -107,6 +110,7 @@ const callApi = async (body, attempt = 1) => {
         'content-type': 'application/json',
         'x-api-key': process.env.ANTHROPIC_API_KEY,
         'anthropic-version': API_VERSION,
+        ...(process.env.ANTHROPIC_WORKSPACE_ID ? { 'anthropic-workspace-id': process.env.ANTHROPIC_WORKSPACE_ID } : {}),
       },
       body: JSON.stringify(body),
       signal: controller.signal,
@@ -126,6 +130,7 @@ const callApi = async (body, attempt = 1) => {
     const msg = json?.error?.message || `Invoice reader error (${res.status})`;
     console.error('invoiceReader API error:', res.status, msg);
     if (res.status === 401) throw new InvoiceReadError('The invoice reader\'s API key is not valid — ask the administrator to check ANTHROPIC_API_KEY', 500);
+    if (/workspace/i.test(msg)) throw new InvoiceReadError('The invoice reader\'s API key is not scoped to a workspace — ask the administrator to use a workspace key (sk-ant-api03-…) or set ANTHROPIC_WORKSPACE_ID', 500);
     throw new InvoiceReadError(/too large|exceed/i.test(msg) ? 'The file is too large to read — try a smaller photo or fewer pages' : 'The invoice could not be read', 502);
   }
   return json;
