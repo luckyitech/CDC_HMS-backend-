@@ -45,6 +45,11 @@ const INVOICE_TOOL = {
     type: 'object',
     properties: {
       supplierName: { type: ['string', 'null'], description: 'The supplier / seller as printed, or null' },
+      supplierPhone: { type: ['string', 'null'], description: 'The supplier\'s phone number(s) as printed, or null' },
+      supplierEmail: { type: ['string', 'null'], description: 'The supplier\'s email address as printed, or null' },
+      supplierAddress: { type: ['string', 'null'], description: 'The supplier\'s postal / street address as printed, on one line, or null' },
+      supplierTaxPin: { type: ['string', 'null'], description: 'The supplier\'s tax / KRA PIN as printed, or null' },
+      supplierNotes: { type: ['string', 'null'], description: 'Other supplier details printed: website, contact person, till / paybill number — one line, or null' },
       documentKind: { type: 'string', enum: ['invoice', 'receipt', 'delivery_note'] },
       documentNumber: { type: ['string', 'null'], description: 'Invoice / receipt / delivery note number as printed, or null' },
       documentDate: { type: ['string', 'null'], description: 'YYYY-MM-DD, or null' },
@@ -71,13 +76,14 @@ const INVOICE_TOOL = {
       },
       notes: { type: ['string', 'null'], description: 'Anything staff should know: pages unreadable, totals that do not add up, etc.' },
     },
-    required: ['supplierName', 'documentKind', 'documentNumber', 'documentDate', 'lines', 'notes'],
+    required: ['supplierName', 'supplierPhone', 'supplierEmail', 'supplierAddress', 'supplierTaxPin', 'supplierNotes', 'documentKind', 'documentNumber', 'documentDate', 'lines', 'notes'],
   },
 };
 
 const PROMPT = (supplierNames) => [
   'This is a supplier invoice, receipt or delivery note for a diabetes clinic in Nairobi.',
   'Record every line item with the record_invoice tool. Copy product wording exactly as printed.',
+  'Record the supplier\'s details as printed on the letterhead: phone, email, address, tax / KRA PIN, website or contact person.',
   'Quantities: give the total units delivered — packs × pack size when both are printed or implied',
   '(e.g. "10 x 50S" is 10 packs of 50 = 500). Expiry dates printed as MM/YY or MM/YYYY are the last day of that month.',
   'Mark any field you cannot read with confidence in "uncertain" rather than guessing.',
@@ -146,6 +152,11 @@ const normalise = (input) => {
   const lines = Array.isArray(input?.lines) ? input.lines : [];
   return {
     supplierName: cleanStr(input?.supplierName, 120),
+    supplierPhone: cleanStr(input?.supplierPhone, 80),
+    supplierEmail: cleanStr(input?.supplierEmail, 120),
+    supplierAddress: cleanStr(input?.supplierAddress, 255),
+    supplierTaxPin: cleanStr(input?.supplierTaxPin, 40),
+    supplierNotes: cleanStr(input?.supplierNotes, 255),
     documentKind: ['invoice', 'receipt', 'delivery_note'].includes(input?.documentKind) ? input.documentKind : 'invoice',
     documentNumber: cleanStr(input?.documentNumber, 80),
     documentDate: cleanDate(input?.documentDate),

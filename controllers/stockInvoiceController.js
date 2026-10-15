@@ -143,6 +143,11 @@ const read = async (req, res) => {
         name: chosen?.name || read_?.name || null,
         readAs: result.supplierName,
         matched: Boolean(chosen || read_),
+        // Everything the invoice shows about the supplier — kept when it is added as new.
+        details: {
+          contactPhone: result.supplierPhone, contactEmail: result.supplierEmail,
+          address: result.supplierAddress, taxPin: result.supplierTaxPin, notes: result.supplierNotes,
+        },
       },
       documentKind: result.documentKind,
       documentNumber: result.documentNumber,

@@ -16,6 +16,19 @@ const Supplier = defineModel('Supplier', {
     type: DataTypes.STRING,
     defaultValue: null,
   },
+  // Read from the invoice when a supplier is added while receiving (15 Oct 2026).
+  address: {
+    type: DataTypes.STRING(255),
+    defaultValue: null,
+  },
+  taxPin: {                     // KRA PIN as printed
+    type: DataTypes.STRING(40),
+    defaultValue: null,
+  },
+  notes: {                      // website, contact person, anything else read
+    type: DataTypes.STRING(255),
+    defaultValue: null,
+  },
   // 'active' | 'retired' — soft delete.
   status: {
     type: DataTypes.STRING,

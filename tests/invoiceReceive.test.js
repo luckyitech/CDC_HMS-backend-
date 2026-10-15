@@ -181,7 +181,7 @@ describe('receiving from an invoice', () => {
     const reader = require('../utils/invoiceReader');
     const real = reader.readInvoice;
     reader.readInvoice = async () => ({
-      supplierName: `${TAG} SUPPLIER LTD`, documentKind: 'invoice', documentNumber: 'INV 7001', documentDate: '2026-10-13', notes: null, model: 'stub',
+      supplierName: `${TAG} SUPPLIER LTD`, supplierPhone: '0700', supplierEmail: 's@x.com', supplierAddress: 'PO Box 1', supplierTaxPin: 'P1', supplierNotes: null, documentKind: 'invoice', documentNumber: 'INV 7001', documentDate: '2026-10-13', notes: null, model: 'stub',
       lines: [
         { description: 'GLUCOFIX STRP 50S', isStockItem: true, batchNo: 'GF2', expiryDate: '2027-08-31', packs: 10, packSize: 50, quantity: 500, unit: 'strip', uncertain: [] },
         { description: `${TAG} Glucose strips`, isStockItem: true, batchNo: null, expiryDate: null, packs: null, packSize: null, quantity: 100, unit: null, uncertain: ['batchNo'] },
@@ -200,6 +200,7 @@ describe('receiving from an invoice', () => {
       const d = r.body.data;
       assert.equal(d.uploadToken, token);
       assert.equal(d.supplier.id, supplier.id, 'supplier matched by name');
+      assert.deepEqual(d.supplier.details, { contactPhone: '0700', contactEmail: 's@x.com', address: 'PO Box 1', taxPin: 'P1', notes: null });
       assert.equal(d.lines[0].status, 'remembered');
       assert.equal(d.lines[0].stockItemId, insulin.id, 'the corrected match from the earlier test');
       assert.equal(d.lines[1].status, 'suggested');

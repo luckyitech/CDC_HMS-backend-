@@ -248,7 +248,7 @@ const locationsCrud = crudFor(StockLocation, {
   stockHeld: stockHeldByLocation,
 });
 
-const SUPPLIER_FIELDS = ['name', 'contactPhone', 'contactEmail'];
+const SUPPLIER_FIELDS = ['name', 'contactPhone', 'contactEmail', 'address', 'taxPin', 'notes'];
 const suppliersCrud = crudFor(Supplier, { label: 'supplier', fields: SUPPLIER_FIELDS });
 
 // The HbA1c / glucose / ketone strip items: tests find them BY NAME, so their

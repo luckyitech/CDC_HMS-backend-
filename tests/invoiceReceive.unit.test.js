@@ -56,7 +56,7 @@ test('matchLine: suggested with the two next-closest, remembered beats suggestio
 
 test('normalise: types cleaned, quantity from packs × size, bad expiry flagged uncertain', () => {
   const out = normalise({
-    supplierName: ' Surgipharm Limited ', documentKind: 'bogus', documentNumber: 'INV-20431', documentDate: '2026-10-13',
+    supplierName: ' Surgipharm Limited ', supplierPhone: '+254 700 000000', supplierEmail: 'sales@surgipharm.co.ke', supplierAddress: null, supplierTaxPin: 'P051234567X', supplierNotes: 7, documentKind: 'bogus', documentNumber: 'INV-20431', documentDate: '2026-10-13',
     lines: [
       { description: 'GLUCOFIX STRP 50S', isStockItem: true, batchNo: 'GF24117', expiryDate: '2027-08-31', packs: 10, packSize: 50, quantity: null, unit: 'strip', uncertain: [] },
       { description: 'EMPAGLIFLOZIN 10MG 30S', isStockItem: true, batchNo: null, expiryDate: '08/2027', packs: '6', packSize: 30, quantity: 180, unit: null, uncertain: ['batchNo'] },
@@ -66,6 +66,10 @@ test('normalise: types cleaned, quantity from packs × size, bad expiry flagged 
     notes: null,
   });
   assert.equal(out.supplierName, 'Surgipharm Limited');
+  assert.equal(out.supplierPhone, '+254 700 000000');
+  assert.equal(out.supplierTaxPin, 'P051234567X');
+  assert.equal(out.supplierAddress, null);
+  assert.equal(out.supplierNotes, '7');
   assert.equal(out.documentKind, 'invoice');
   assert.equal(out.lines.length, 4);
   assert.equal(out.lines[0].quantity, 500);
