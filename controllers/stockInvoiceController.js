@@ -23,6 +23,7 @@ const fs = require('fs');
 const path = require('path');
 const { Op } = require('sequelize');
 const { success, error } = require('../utils/response');
+const { PERMISSIONS, hasAnyPermission } = require('../constants/permissions');
 const db = require('../models');
 // Called through the module (reader.readInvoice) so tests can stand in a stub.
 const reader = require('../utils/invoiceReader');
@@ -42,6 +43,9 @@ const {
 const TOKEN = /^[a-f0-9]{32}\.(pdf|jpe?g|png|webp|heic|heif)$/;
 const PENDING_MAX_AGE_MS = 2 * 86400000;
 const LINE_FIELDS = ['item', 'batchNo', 'expiryDate', 'quantity'];
+// How a save was entered: read from an invoice, or the opening stock count
+// (a spreadsheet of what was on the shelves when the Stocks module started).
+const METHODS = ['invoice', 'opening'];
 const MAX_LINES = 100;
 
 /** Pending reads nobody saved (cancelled, browser closed) — swept on the next read. */
@@ -67,6 +71,49 @@ const supplierMatch = (name, suppliers) => {
   return best;
 };
 
+/**
+ * Match read lines to the catalogue and suggest where each goes. Shared by
+ * the invoice reader and the count-sheet reader.
+ *   → { lines: [{ id, …line, status, stockItemId, candidates, suggestedLocationId }], defaultLocationId }
+ */
+const matchLines = async (readLines, items, supplierId = null, locations = null) => {
+  const aliasRows = await StockSupplierAlias.findAll({ where: { supplierId }, attributes: ['aliasKey', 'stockItemId'] });
+  const aliases = new Map(aliasRows.map((a) => [a.aliasKey, a.stockItemId]));
+  const lines = readLines.map((l, i) => ({
+    id: i + 1,
+    ...l,
+    ...(l.isStockItem ? matchLine(l.description, items, aliases) : { status: 'skipped', stockItemId: null, candidates: [] }),
+  }));
+
+  // Where each line goes (15 Oct 2026, Emu): every line is put away in its
+  // own place at receiving, so nothing needs a transfer afterwards. The
+  // suggestion is the sheet's own location column when it names one, else
+  // where that item was last received; otherwise the first store (a fridge
+  // for cold-chain items — the front end enforces that).
+  const matchedIds = [...new Set(lines.map((l) => l.stockItemId).filter(Boolean))];
+  const lastIntakes = matchedIds.length ? await StockMovement.findAll({
+    where: { type: 'intake', stockItemId: { [Op.in]: matchedIds } },
+    attributes: ['stockItemId', 'toLocationId'], order: [['createdAt', 'DESC']],
+  }) : [];
+  const lastLocation = {};
+  for (const m of lastIntakes) if (!lastLocation[m.stockItemId] && m.toLocationId) lastLocation[m.stockItemId] = m.toLocationId;
+  const allLocations = locations || await StockLocation.findAll({ where: { status: 'active' }, attributes: ['id', 'name', 'kind'], order: [['id', 'ASC']] });
+  const store = allLocations.find((l) => l.kind === 'store') || allLocations[0];
+  const byText = (text) => {
+    if (!text) return null;
+    let best = null;
+    for (const l of allLocations) {
+      const score = similarity(text, l.name);
+      if (score >= 0.5 && (!best || score > best.score)) best = { id: l.id, score };
+    }
+    return best?.id || null;
+  };
+  lines.forEach((l) => {
+    l.suggestedLocationId = byText(l.locationText) || (l.stockItemId ? (lastLocation[l.stockItemId] || null) : null);
+  });
+  return { lines, defaultLocationId: store?.id || null };
+};
+
 /** GET /api/stock/receipts/reader — is reading set up on this server? */
 const status = (req, res) => success(res, { configured: reader.isConfigured() });
 
@@ -87,28 +134,7 @@ const read = async (req, res) => {
     const read_ = chosen ? null : supplierMatch(result.supplierName, suppliers);
     const supplierId = chosen?.id || read_?.id || null;
 
-    const aliasRows = await StockSupplierAlias.findAll({ where: { supplierId }, attributes: ['aliasKey', 'stockItemId'] });
-    const aliases = new Map(aliasRows.map((a) => [a.aliasKey, a.stockItemId]));
-
-    const lines = result.lines.map((l, i) => ({
-      id: i + 1,
-      ...l,
-      ...(l.isStockItem ? matchLine(l.description, items, aliases) : { status: 'skipped', stockItemId: null, candidates: [] }),
-    }));
-
-    // Where each line goes (15 Oct 2026, Emu): every line is put away in its
-    // own place at receiving, so nothing needs a transfer afterwards. The
-    // suggestion is where that item was last received; otherwise the first
-    // store (a fridge for cold-chain items — the front end enforces that).
-    const matchedIds = [...new Set(lines.map((l) => l.stockItemId).filter(Boolean))];
-    const lastIntakes = matchedIds.length ? await StockMovement.findAll({
-      where: { type: 'intake', stockItemId: { [Op.in]: matchedIds } },
-      attributes: ['stockItemId', 'toLocationId'], order: [['createdAt', 'DESC']],
-    }) : [];
-    const lastLocation = {};
-    for (const m of lastIntakes) if (!lastLocation[m.stockItemId] && m.toLocationId) lastLocation[m.stockItemId] = m.toLocationId;
-    const store = await StockLocation.findOne({ where: { status: 'active', kind: 'store' }, order: [['id', 'ASC']], attributes: ['id'] });
-    lines.forEach((l) => { l.suggestedLocationId = l.stockItemId ? (lastLocation[l.stockItemId] || null) : null; });
+    const { lines, defaultLocationId } = await matchLines(result.lines, items, supplierId);
 
     // Already on file? (same supplier + number) — so one invoice is never received twice.
     let existing = null;
@@ -153,7 +179,7 @@ const read = async (req, res) => {
       documentNumber: result.documentNumber,
       documentDate: result.documentDate,
       notes: result.notes,
-      defaultLocationId: store?.id || null,
+      defaultLocationId,
       lines,
       existing,
     });
@@ -207,10 +233,20 @@ const rememberAlias = async ({ supplierId, text, stockItemId, userId }, transact
  * POST /api/stock/receipts/receive-batch
  * lines: [{ stockItemId, quantity, batchNo?, expiryDate?, locationId, sourceText?, corrections?: ['batchNo', …] }]
  * Each line names where it is put away (locationId falls back to the body's locationId, if any).
+ * method 'invoice' (the Receive tab) needs stock.receive; 'opening' (Stocktake →
+ * Add counted stock, one row at a time: opening stock or a physical count that
+ * found more than the HMS knows — 15 Oct 2026, Emu) needs receive OR stocktake.
+ * An 'opening' row has no supplier, no invoice and teaches no supplier wording.
  */
 const receiveBatch = async (req, res) => {
   try {
-    const { uploadToken, supplierId, receiptNo, receiptKind, locationId, lines, fileName } = req.body;
+    const { uploadToken, receiptKind, locationId, lines, fileName } = req.body;
+    const method = METHODS.includes(req.body.method) ? req.body.method : 'invoice';
+    if (method === 'invoice' && !hasAnyPermission(req.user, [PERMISSIONS.STOCK_RECEIVE])) {
+      return error(res, 'Receiving a delivery needs the Receive tab — this has not been granted to your account.', 403);
+    }
+    const supplierId = method === 'opening' ? null : req.body.supplierId;
+    const receiptNo = method === 'opening' ? null : req.body.receiptNo;
     if (!Array.isArray(lines) || !lines.length) return error(res, 'There are no lines to save');
     if (lines.length > MAX_LINES) return error(res, `Save at most ${MAX_LINES} lines at once`);
 
@@ -251,9 +287,10 @@ const receiveBatch = async (req, res) => {
         const { batch } = await receiveLine({
           item: c.item, location: c.location, quantity: c.quantity, batchNo: c.batchNo, expiryDate: c.expiryDate,
           supplierId, receiptId: receipt?.id, receivedById: req.user.id,
-          receiveMethod: 'invoice', sourceText: c.sourceText, sourceCorrections: c.corrections.length ? c.corrections.join(',') : null,
+          receiveMethod: method, sourceText: c.sourceText, sourceCorrections: c.corrections.length ? c.corrections.join(',') : null,
         }, t);
-        if (c.sourceText) await rememberAlias({ supplierId, text: c.sourceText, stockItemId: c.item.id, userId: req.user.id }, t);
+        // A supplier's wording is learned from invoices only — a count sheet uses the clinic's own names.
+        if (c.sourceText && method === 'invoice') await rememberAlias({ supplierId, text: c.sourceText, stockItemId: c.item.id, userId: req.user.id }, t);
         saved.push({
           batchId: batch.id, labelCode: batch.labelCode, batchNo: batch.batchNo, expiryDate: batch.expiryDate,
           quantity: batch.qtyReceived, stockItemId: c.item.id, itemName: c.item.name, unit: c.item.unit, packSize: c.item.packSize,
@@ -287,4 +324,4 @@ const receiveBatch = async (req, res) => {
   }
 };
 
-module.exports = { status, read, pendingFile, discard, receiveBatch, rememberAlias, supplierMatch };
+module.exports = { status, read, pendingFile, discard, receiveBatch, rememberAlias, supplierMatch, matchLines };

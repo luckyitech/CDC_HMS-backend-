@@ -93,6 +93,7 @@ const USER = ['id', 'firstName', 'lastName', 'role'];
 // "from invoice" / "from invoice · batch no., expiry corrected" / "entered manually"
 const CORRECTION_WORDS = { item: 'item', batchNo: 'batch no.', expiryDate: 'expiry', quantity: 'quantity' };
 const receiveMethodText = (batch) => {
+  if (batch?.receiveMethod === 'opening') return 'opening stock count';
   if (batch?.receiveMethod !== 'invoice') return 'entered manually';
   const fixed = String(batch.sourceCorrections || '').split(',').filter(Boolean).map((f) => CORRECTION_WORDS[f] || f);
   return fixed.length ? `from invoice · ${fixed.join(', ')} corrected` : 'from invoice';

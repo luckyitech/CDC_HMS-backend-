@@ -33,7 +33,8 @@ const res = () => {
   r.json = (b) => { r.body = b; return r; };
   return r;
 };
-const call = async (fn, body) => { const r = res(); await fn({ body, user: { id: admin.id }, params: {} }, r); return r; };
+const asUser = (u) => ({ id: u.id, role: u.role, permissions: u.permissions || [], deniedPermissions: u.deniedPermissions || [] });
+const call = async (fn, body, user = admin) => { const r = res(); await fn({ body, user: asUser(user), params: {} }, r); return r; };
 const pendingFile = () => {
   const name = `${crypto.randomBytes(16).toString('hex')}.jpg`;
   fs.writeFileSync(path.join(ensureStockReceiptDir(), name), 'not really a jpeg');
@@ -184,7 +185,7 @@ describe('receiving from an invoice', () => {
       supplierName: `${TAG} SUPPLIER LTD`, supplierPhone: '0700', supplierEmail: 's@x.com', supplierAddress: 'PO Box 1', supplierTaxPin: 'P1', supplierNotes: null, documentKind: 'invoice', documentNumber: 'INV 7001', documentDate: '2026-10-13', notes: null, model: 'stub',
       lines: [
         { description: 'GLUCOFIX STRP 50S', isStockItem: true, batchNo: 'GF2', expiryDate: '2027-08-31', packs: 10, packSize: 50, quantity: 500, unit: 'strip', uncertain: [] },
-        { description: `${TAG} Glucose strips`, isStockItem: true, batchNo: null, expiryDate: null, packs: null, packSize: null, quantity: 100, unit: null, uncertain: ['batchNo'] },
+        { description: `${TAG} Glucose strips blue`, isStockItem: true, batchNo: null, expiryDate: null, packs: null, packSize: null, quantity: 100, unit: null, uncertain: ['batchNo'] },
         { description: 'SOMETHING NOBODY STOCKS 9000', isStockItem: true, batchNo: null, expiryDate: null, packs: null, packSize: null, quantity: 1, unit: null, uncertain: [] },
         { description: 'DELIVERY CHARGE', isStockItem: false, batchNo: null, expiryDate: null, packs: null, packSize: null, quantity: null, unit: null, uncertain: [] },
       ],
@@ -216,6 +217,33 @@ describe('receiving from an invoice', () => {
     } finally {
       reader.readInvoice = real;
     }
+  });
+
+  test('counted stock: saved one row at a time as opening — no supplier, no receipt, nothing learned', async () => {
+    const before = await db.StockSupplierAlias.count();
+    const save = await call(invoices.receiveBatch, {
+      method: 'opening', supplierId: supplier.id, receiptNo: 'IGNORED-1',
+      lines: [{ stockItemId: strips.id, quantity: 120, batchNo: 'OS1', expiryDate: '2027-01-31', locationId: store.id, sourceText: `${TAG} Glucose strip` }],
+    });
+    assert.equal(save.statusCode, 201, JSON.stringify(save.body));
+    made.batches.push(...save.body.data.items.map((i) => i.batchId));
+    const b = await db.StockBatch.findByPk(save.body.data.items[0].batchId);
+    assert.equal(b.receiveMethod, 'opening');
+    assert.equal(b.supplierId, null, 'a count has no supplier even if one is sent');
+    assert.equal(await held(b.id, store.id), 120);
+    assert.equal(await db.StockSupplierAlias.count(), before, 'a count teaches no supplier wording');
+    assert.equal(b.stockReceiptId, null, 'a count is never filed as a delivery');
+    assert.equal(save.body.data.receipt, null);
+  });
+
+  test('gate: the Stocktake tab may save counted stock but not a delivery from an invoice', async () => {
+    const counter = { id: admin.id, role: 'staff', permissions: ['stock.stocktake'], deniedPermissions: [] };
+    const line = { stockItemId: strips.id, quantity: 1, locationId: store.id };
+    const refused = await call(invoices.receiveBatch, { method: 'invoice', lines: [line] }, counter);
+    assert.equal(refused.statusCode, 403);
+    const ok = await call(invoices.receiveBatch, { method: 'opening', lines: [line] }, counter);
+    assert.equal(ok.statusCode, 201, JSON.stringify(ok.body));
+    made.batches.push(...ok.body.data.items.map((i) => i.batchId));
   });
 
   test('deliveries list and detail say how a delivery was entered', async () => {

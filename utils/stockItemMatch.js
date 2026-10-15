@@ -96,6 +96,12 @@ const matchLine = (text, items, aliases = new Map()) => {
     .sort((a, b) => b.score - a.score)
     .slice(0, 3);
 
+  // The clinic's own name for the item (a count sheet, or an invoice that
+  // happens to use it) — certain, like a remembered wording.
+  const exact = key && live.find((i) => aliasKeyOf(i.name) === key);
+  if (exact) {
+    return { status: 'remembered', stockItemId: exact.id, candidates: scored.filter((c) => c.stockItemId !== exact.id).slice(0, 2) };
+  }
   const remembered = key && aliases.get(key);
   if (remembered && byId.has(remembered)) {
     return {

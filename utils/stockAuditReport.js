@@ -20,13 +20,13 @@ const buildSessions = (rows) => {
   const add = (key, base, row, line) => {
     let g = groups.get(key);
     if (!g) {
-      g = { ...base, at: row.at, endAt: row.at, lines: 0, units: 0, items: new Set(), invoiceLines: 0 };
+      g = { ...base, at: row.at, endAt: row.at, lines: 0, units: 0, items: new Set(), invoiceLines: 0, openingLines: 0 };
       groups.set(key, g);
       sessions.push(g);
     }
     if (new Date(row.at) < new Date(g.at)) g.at = row.at;
     if (new Date(row.at) > new Date(g.endAt)) g.endAt = row.at;
-    if (line) { g.lines += 1; g.units += row.quantity || 0; if (row.item) g.items.add(row.item); if (row.method === 'invoice') g.invoiceLines += 1; }
+    if (line) { g.lines += 1; g.units += row.quantity || 0; if (row.item) g.items.add(row.item); if (row.method === 'invoice') g.invoiceLines += 1; if (row.method === 'opening') g.openingLines += 1; }
   };
 
   for (const r of rows) {
@@ -52,9 +52,11 @@ const buildSessions = (rows) => {
       `${s.units} unit${s.units === 1 ? '' : 's'}`,
       items.length ? items.slice(0, 4).join(', ') + (items.length > 4 ? ` +${items.length - 4}` : '') : null,
     ].filter(Boolean).join(' · ');
-    const { items: _drop, invoiceLines, ...rest } = s;
-    // How a delivery was entered: read from the invoice, typed by hand, or both.
-    const method = s.fn === 'receiving' ? (invoiceLines === 0 ? 'manual' : invoiceLines === s.lines ? 'invoice' : 'mixed') : null;
+    const { items: _drop, invoiceLines, openingLines, ...rest } = s;
+    // How a delivery was entered: read from the invoice, typed by hand, both — or the opening stock count.
+    const method = s.fn !== 'receiving' ? null
+      : openingLines === s.lines ? 'opening'
+        : invoiceLines === 0 ? 'manual' : invoiceLines === s.lines ? 'invoice' : 'mixed';
     return { ...rest, method, summary };
   }).sort((a, b) => new Date(b.at) - new Date(a.at));
 };

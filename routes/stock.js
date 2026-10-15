@@ -89,14 +89,18 @@ router.get('/receipts/reader',          authenticate, stockGate(P.STOCK_RECEIVE)
 router.post('/receipts/read',           authenticate, stockGate(P.STOCK_RECEIVE), handleReceiptUpload, invoices.read);
 router.get('/receipts/pending/:token',  authenticate, stockGate(P.STOCK_RECEIVE), invoices.pendingFile);
 router.delete('/receipts/pending/:token', authenticate, stockGate(P.STOCK_RECEIVE), invoices.discard);
-router.post('/receipts/receive-batch',  authenticate, stockGate(P.STOCK_RECEIVE), [
+// receive-batch and new-item are also open to the Stocktake tab (15 Oct 2026):
+// Stocktake → Add counted stock saves one row at a time as method 'opening';
+// the controller still insists on stock.receive for method 'invoice'.
+router.post('/receipts/receive-batch',  authenticate, stockGate(P.STOCK_RECEIVE, P.STOCK_STOCKTAKE), [
   body('receiptNo').optional({ nullable: true }).isString().withMessage('Invoice / receipt number must be text'),
   body('receiptKind').optional().isIn(receipts.KINDS).withMessage('Choose invoice, receipt or delivery note'),
   body('supplierId').optional({ nullable: true }).isInt(),
   body('lines').isArray({ min: 1 }).withMessage('There are no lines to save'),
+  body('method').optional().isIn(['invoice', 'opening']),
   validate,
 ], invoices.receiveBatch);
-router.post('/receipts/new-item',       authenticate, stockGate(P.STOCK_RECEIVE, P.STOCK_ITEMS_EDIT), [body('name').notEmpty().withMessage('Name is required'), validate], catalog.createItem);
+router.post('/receipts/new-item',       authenticate, stockGate(P.STOCK_RECEIVE, P.STOCK_STOCKTAKE, P.STOCK_ITEMS_EDIT), [body('name').notEmpty().withMessage('Name is required'), validate], catalog.createItem);
 // A supplier read from the invoice that is not on the list yet (15 Oct 2026, Emu) — added and remembered.
 router.post('/receipts/new-supplier',   authenticate, stockGate(P.STOCK_RECEIVE, P.STOCK_ITEMS_EDIT), [body('name').notEmpty().withMessage('Name is required'), validate], catalog.createSupplier);
 

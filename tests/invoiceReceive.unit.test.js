@@ -33,8 +33,14 @@ test('similarity: the right strength wins', () => {
   assert.equal(similarity('', 'x'), 0);
 });
 
+test('matchLine: the clinic\'s own item name is certain', () => {
+  const m = matchLine('blood glucose test strip', ITEMS);
+  assert.equal(m.status, 'remembered');
+  assert.equal(m.stockItemId, 1);
+});
+
 test('matchLine: suggested with the two next-closest, remembered beats suggestion, unmatched below the bar', () => {
-  const m = matchLine('METFORMIN 500MG TABS 10X10', ITEMS);
+  const m = matchLine('METFORMIN HCL 500MG TABS 10X10', ITEMS);
   assert.equal(m.status, 'suggested');
   assert.equal(m.stockItemId, 2);
   assert.equal(m.candidates.length, 3);
@@ -89,6 +95,7 @@ test('parseResult: the tool call, else JSON in the text, else null', () => {
 
 test('receiveMethodText and the audit sessions carry the method', () => {
   assert.equal(receiveMethodText({ receiveMethod: 'manual' }), 'entered manually');
+  assert.equal(receiveMethodText({ receiveMethod: 'opening' }), 'opening stock count');
   assert.equal(receiveMethodText({ receiveMethod: 'invoice', sourceCorrections: null }), 'from invoice');
   assert.equal(receiveMethodText({ receiveMethod: 'invoice', sourceCorrections: 'item,quantity' }), 'from invoice · item, quantity corrected');
 
@@ -99,6 +106,7 @@ test('receiveMethodText and the audit sessions carry the method', () => {
   assert.equal(sessions[0].method, 'invoice');
   const mixed = buildSessions([{ ...base, method: 'invoice' }, { ...base, method: 'manual' }]);
   assert.equal(mixed[0].method, 'mixed');
+  assert.equal(buildSessions([{ ...base, method: 'opening', receiptId: null, receipt: null }])[0].method, 'opening');
   const people = buildPeople([{ ...base, method: 'invoice' }], sessions);
   assert.equal(people[0].receiving, 1);
   assert.equal(people[0].receivingFromInvoice, 1);
