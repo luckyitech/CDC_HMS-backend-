@@ -82,7 +82,7 @@ const INVOICE_TOOL = {
 
 const PROMPT = (supplierNames) => [
   'This is a supplier invoice, receipt or delivery note for a diabetes clinic in Nairobi.',
-  'Record every line item with the record_invoice tool. Copy product wording exactly as printed.',
+  'You MUST answer by calling the record_invoice tool exactly once — no prose. Record every line item; copy product wording exactly as printed.',
   'Record the supplier\'s details as printed on the letterhead: phone, email, address, tax / KRA PIN, website or contact person.',
   'Quantities: give the total units delivered — packs × pack size when both are printed or implied',
   '(e.g. "10 x 50S" is 10 packs of 50 = 500). Expiry dates printed as MM/YY or MM/YYYY are the last day of that month.',
@@ -185,6 +185,17 @@ const normalise = (input) => {
   };
 };
 
+/** The tool call's input, else a JSON object found in the text reply, else null. */
+const parseResult = (json) => {
+  const content = Array.isArray(json?.content) ? json.content : [];
+  const tool = content.find((c) => c.type === 'tool_use' && c.name === INVOICE_TOOL.name);
+  if (tool && tool.input && typeof tool.input === 'object') return tool.input;
+  const text = content.filter((c) => c.type === 'text').map((c) => c.text).join('\n');
+  const start = text.indexOf('{'); const end = text.lastIndexOf('}');
+  if (start < 0 || end <= start) return null;
+  try { return JSON.parse(text.slice(start, end + 1)); } catch { return null; }
+};
+
 /**
  * Read one invoice. { buffer, mimeType, supplierNames: string[] }
  * → { supplierName, documentKind, documentNumber, documentDate, lines, notes, model }
@@ -200,12 +211,18 @@ const readInvoice = async ({ buffer, mimeType, supplierNames = [] }) => {
     model,
     max_tokens: 4096,
     tools: [INVOICE_TOOL],
-    tool_choice: { type: 'tool', name: INVOICE_TOOL.name },
+    // This model does not accept a forced tool_choice ("tool" / "any"); the
+    // prompt insists on the tool, and parseResult reads a JSON answer if the
+    // model replied in text instead.
+    tool_choice: { type: 'auto' },
     messages: [{ role: 'user', content: [fileBlock(buffer, mimeType), { type: 'text', text: PROMPT(supplierNames) }] }],
   });
-  const tool = (json.content || []).find((c) => c.type === 'tool_use' && c.name === INVOICE_TOOL.name);
-  if (!tool) throw new InvoiceReadError('The invoice could not be read — try a clearer photo', 502);
-  return { ...normalise(tool.input), model };
+  const input = parseResult(json);
+  if (!input) {
+    console.error('invoiceReader: no tool call or JSON in the reply', JSON.stringify(json.content || []).slice(0, 500));
+    throw new InvoiceReadError('The invoice could not be read — try a clearer photo', 502);
+  }
+  return { ...normalise(input), model };
 };
 
-module.exports = { readInvoice, isConfigured, normalise, InvoiceReadError, INVOICE_TOOL, DEFAULT_MODEL };
+module.exports = { readInvoice, isConfigured, normalise, parseResult, InvoiceReadError, INVOICE_TOOL, DEFAULT_MODEL };

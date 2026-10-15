@@ -6,7 +6,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 
 const { tokens, aliasKeyOf, similarity, matchLine } = require('../utils/stockItemMatch');
-const { normalise } = require('../utils/invoiceReader');
+const { normalise, parseResult } = require('../utils/invoiceReader');
 const { receiveMethodText } = require('../utils/stockAudit');
 const { buildSessions, buildPeople } = require('../utils/stockAuditReport');
 
@@ -78,6 +78,13 @@ test('normalise: types cleaned, quantity from packs × size, bad expiry flagged 
   assert.deepEqual(out.lines[1].uncertain, ['batchNo', 'expiryDate']);
   assert.equal(out.lines[2].isStockItem, false);
   assert.equal(out.lines[3].description, '(unreadable line)');
+});
+
+test('parseResult: the tool call, else JSON in the text, else null', () => {
+  assert.deepEqual(parseResult({ content: [{ type: 'tool_use', name: 'record_invoice', input: { lines: [] } }] }), { lines: [] });
+  assert.deepEqual(parseResult({ content: [{ type: 'text', text: 'Here it is:\n{"documentNumber":"INV-1","lines":[]}\nDone.' }] }), { documentNumber: 'INV-1', lines: [] });
+  assert.equal(parseResult({ content: [{ type: 'text', text: 'I cannot read this.' }] }), null);
+  assert.equal(parseResult({}), null);
 });
 
 test('receiveMethodText and the audit sessions carry the method', () => {
