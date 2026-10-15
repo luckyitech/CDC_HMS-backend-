@@ -21,7 +21,7 @@ if (process.env.NODE_ENV === 'production') {
 
 const TAG = '__TEST_TEST_STOCK__';
 const TEST = 'Ketones';
-let admin; let nurse; let doctor; let triage; let drRoom; let strip; let createdStrip = false;
+let admin; let nurse; let doctor; let triage; let drRoom; let store; let strip; let createdStrip = false;
 let patient; let visit; const batches = []; let otherPars = [];
 
 const held = async (room) => (await db.StockLevel.sum('quantity', {
@@ -51,8 +51,10 @@ before(async () => {
   await db.StockParLevel.destroy({ where: { stockItemId: strip.id } });
   triage = await db.StockLocation.create({ name: `${TAG} Triage`, kind: 'triage', isColdChain: false, isDispensing: true, status: 'active' });
   drRoom = await db.StockLocation.create({ name: `${TAG} Dr room`, kind: 'doctor_room', isColdChain: false, isDispensing: true, status: 'active' });
+  store = await db.StockLocation.create({ name: `${TAG} Store`, kind: 'store', isColdChain: false, isDispensing: false, status: 'active' });
   await receiveInto(triage, 3);
   await receiveInto(drRoom, 2);
+  await receiveInto(store, 1);
   patient = await db.Patient.create({ uhid: 'TST-STOCK-1', firstName: TAG, lastName: 'Patient' });
   visit = await db.Queue.create({ PatientId: patient.id, status: 'In Triage' });
 });
@@ -62,8 +64,8 @@ after(async () => {
   await db.StockMovement.destroy({ where: { stockBatchId: ids } });
   await db.StockLevel.destroy({ where: { stockBatchId: ids } });
   await db.StockBatch.destroy({ where: { id: ids } });
-  await db.StockParLevel.destroy({ where: { locationId: { [Op.in]: [triage.id, drRoom.id] } } });
-  await db.StockLocation.destroy({ where: { id: { [Op.in]: [triage.id, drRoom.id] } } });
+  await db.StockParLevel.destroy({ where: { locationId: { [Op.in]: [triage.id, drRoom.id, store.id] } } });
+  await db.StockLocation.destroy({ where: { id: { [Op.in]: [triage.id, drRoom.id, store.id] } } });
   if (otherPars.length) await db.StockParLevel.bulkCreate(otherPars);
   if (createdStrip) await db.StockItem.destroy({ where: { id: strip.id } });
   await db.QueueCharge.destroy({ where: { QueueId: visit.id } });
@@ -73,13 +75,27 @@ after(async () => {
   await db.sequelize.close();
 });
 
-test('no triage room has a par for the strip: billed, marked not taken', async () => {
+test('no triage room has a par for the strip: taken from the store instead, and the note says so', async () => {
   await addCharges(visit, { charges: [TEST] }, nurse, { source: 'vital', stage: 'triage' });
   const l = await line();
   assert.equal(l.quantity, 1);
-  assert.equal(l.attempts[0].stockStatus, 'not_taken');
-  assert.match(l.attempts[0].stockNote, /No triage room has a par/);
+  assert.equal(l.attempts[0].stockStatus, 'taken');
+  assert.match(l.attempts[0].stockNote, /from the store — No triage room has a par/);
   assert.equal(await held(triage), 3);
+  assert.equal(await held(store), 0);
+  const use = await db.StockMovement.findOne({ where: { stockBatchId: { [Op.in]: batches }, type: 'use' } });
+  assert.equal(use.fromLocationId, store.id);
+  assert.match(use.reason, /from the store/);
+});
+
+test('no room AND the store is empty: billed, marked not taken', async () => {
+  await addAttempt(visit, TEST, nurse, { stage: 'triage' });
+  const l = await line();
+  assert.equal(l.quantity, 2);
+  assert.equal(l.attempts[1].stockStatus, 'not_taken');
+  assert.match(l.attempts[1].stockNote, /No triage room has a par.*None in the store either/);
+  await removeCharge(visit, { kind: 'charge', name: TEST, done: false, reason: 'test' }, nurse);
+  assert.equal((await line()).quantity, 1);
 });
 
 test('with a par in the triage room, a repeat takes another strip from it', async () => {
@@ -126,13 +142,19 @@ test('once the room is matched to the doctor, Take now takes it from the doctor\
   assert.equal(await held(triage), 2);
 });
 
-test('the room has none left: billed, marked not taken', async () => {
+test('the room has none left: from the store when it has some, else marked not taken', async () => {
   await addAttempt(visit, TEST, doctor, { stage: 'consultation' });
-  await addAttempt(visit, TEST, doctor, { stage: 'consultation' });
-  const last = (await line()).attempts.at(-1);
-  assert.equal(last.stockStatus, 'not_taken');
-  assert.match(last.stockNote, /No Ketone test strip in/);
   assert.equal(await held(drRoom), 0);
+  await receiveInto(store, 1);
+  await addAttempt(visit, TEST, doctor, { stage: 'consultation' });
+  let last = (await line()).attempts.at(-1);
+  assert.equal(last.stockStatus, 'taken');
+  assert.match(last.stockNote, /from the store — No Ketone test strip in/);
+  assert.equal(await held(store), 0);
+  await addAttempt(visit, TEST, doctor, { stage: 'consultation' });
+  last = (await line()).attempts.at(-1);
+  assert.equal(last.stockStatus, 'not_taken');
+  assert.match(last.stockNote, /No Ketone test strip in .* None in the store either/);
 });
 
 test('only tests can be repeated', async () => {

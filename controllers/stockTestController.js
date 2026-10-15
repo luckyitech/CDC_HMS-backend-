@@ -8,6 +8,8 @@ const { QueueCharge, Queue, Patient } = db;
 // Stocks — tests that use stock (13 Oct 2026, Emu). See utils/testStock.
 //   GET  /api/stock/tests/not-taken           test attempts whose strip was not taken
 //   POST /api/stock/tests/not-taken/:id/retry try again (after moving stock / matching a room)
+//   POST /api/stock/tests/not-taken/retry-all every pending attempt, oldest first (15 Oct 2026:
+//                                             a strip now comes from the store when no room has it)
 //   POST /api/stock/tests/not-taken/:id/resolve { note } — settled another way
 
 const notTaken = async (req, res) => {
@@ -52,6 +54,29 @@ const retry = async (req, res) => {
   }
 };
 
+const retryAll = async (req, res) => {
+  try {
+    const rows = await QueueCharge.findAll({
+      where: { stockStatus: 'not_taken', status: 'active' },
+      include: [{ model: Queue, include: [{ model: Patient, attributes: ['uhid', 'firstName', 'lastName'] }] }],
+      order: [['createdAt', 'ASC']],
+      limit: 500,
+    });
+    let taken = 0;
+    for (const row of rows) {
+      await takeForAttempt(row, row.Queue, req.user.id);
+      if (row.stockStatus === 'taken') {
+        taken += 1;
+        await logStockActivity({ action: 'test_taken', userId: req.user.id, detail: whose(row) });
+      }
+    }
+    return success(res, { tried: rows.length, taken, remaining: rows.length - taken });
+  } catch (err) {
+    console.error('StockTests.retryAll error:', err);
+    return error(res, 'Failed to take the supplies', 500);
+  }
+};
+
 const resolve = async (req, res) => {
   try {
     const note = String(req.body?.note || '').trim();
@@ -67,4 +92,4 @@ const resolve = async (req, res) => {
   }
 };
 
-module.exports = { notTaken, retry, resolve };
+module.exports = { notTaken, retry, retryAll, resolve };

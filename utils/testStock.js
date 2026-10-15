@@ -17,9 +17,16 @@ const { sequelize, StockMovement, StockItem, StockLocation, StockParLevel, User 
 //   • the ROOM — at triage: a triage room with a par for that item; entered
 //     by a doctor: the room matched to that doctor in Room Balance → edit pars.
 //
-// Never blocks the clinical work: if the room can't be told or holds none, the
-// attempt stays on the bill with stockStatus 'not_taken' and the reason, and
-// shows in Stocks → Analytics → Today.
+// GENERAL STOCK FALLBACK (15 Oct 2026, Emu: "the tests should come from
+// general stock numbers if they haven't been logged to come from a specific
+// area"): when no room can be told, or the room holds none, the strip comes
+// out of the store(s) instead — earliest-expiring batch across every active
+// location of kind 'store'. The movement's reason says so, so Movements shows
+// which tests were not taken from a room.
+//
+// Never blocks the clinical work: if the store holds none either, the attempt
+// stays on the bill with stockStatus 'not_taken' and the reason, and shows in
+// Stocks → Analytics → Today.
 // =====================================================================
 
 /** Charge-sheet test → the stock item it uses (one per attempt). */
@@ -71,17 +78,25 @@ const takeForAttempt = async (row, queue, userId) => {
     const item = await StockItem.findOne({ where: { name: TEST_ITEMS[row.name] || '', status: 'active' } });
     if (!item) throw new LedgerError(`There is no active "${TEST_ITEMS[row.name]}" item in Stocks → Items.`);
     const { rooms, why } = await roomsFor(row, queue, item);
-    if (!rooms) throw new LedgerError(why);
 
     await sequelize.transaction(async (t) => {
-      // Earliest-expiring batch across the candidate rooms.
-      const picks = (await Promise.all(rooms.map(async (r) => {
+      // Earliest-expiring batch across the given locations, or null.
+      const fefoAcross = async (locs) => (await Promise.all(locs.map(async (r) => {
         const p = await suggestFefoBatch(item.id, r.id, t);
         return p && p.available >= 1 ? { ...p, room: r } : null;
       }))).filter(Boolean)
-        .sort((a, b) => ((a.batch.expiryDate || '9999-12-31') < (b.batch.expiryDate || '9999-12-31') ? -1 : 1));
-      if (!picks.length) throw new LedgerError(`No ${item.name} in ${rooms.map((r) => r.name).join(' / ')}.`);
-      const pick = picks[0];
+        .sort((a, b) => ((a.batch.expiryDate || '9999-12-31') < (b.batch.expiryDate || '9999-12-31') ? -1 : 1))[0] || null;
+
+      let pick = rooms ? await fefoAcross(rooms) : null;
+      let note = null;
+      if (!pick) {
+        // Not from a room — from the general stock (the store) instead.
+        const roomsWhy = rooms ? `No ${item.name} in ${rooms.map((r) => r.name).join(' / ')}.` : why;
+        const stores = await StockLocation.findAll({ where: { kind: 'store', status: 'active' }, transaction: t });
+        pick = await fefoAcross(stores);
+        if (!pick) throw new LedgerError(`${roomsWhy} None in the store either.`);
+        note = `from the store — ${roomsWhy}`;
+      }
       await applyMovement({
         type: 'use',
         stockBatchId: pick.batch.id,
@@ -90,11 +105,12 @@ const takeForAttempt = async (row, queue, userId) => {
         performedById: userId,
         PatientId: queue.PatientId || null,
         QueueId: queue.id,
-        reason: `${row.name} test`,
+        reason: note ? `${row.name} test (${note})` : `${row.name} test`,
         queueChargeId: row.id,
       }, t);
+      row.set({ stockStatus: 'taken', stockNote: note ? note.slice(0, 255) : null });
     });
-    await row.update({ stockStatus: 'taken', stockNote: null });
+    await row.save();
   } catch (err) {
     const note = err instanceof LedgerError ? err.message : 'Could not take the strip from stock.';
     if (!(err instanceof LedgerError)) console.error('testStock.takeForAttempt error:', err);

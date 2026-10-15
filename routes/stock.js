@@ -206,6 +206,7 @@ router.post('/writeoff', authenticate, stockGate(P.STOCK_WRITEOFF), [
 // Set up in Items → Tests ("add and edit items"); not-taken attempts settle from
 // Analytics → Today ("write off expired stock" holders run that list).
 router.get('/tests/not-taken',             authenticate, stockGate(P.STOCK_ANALYTICS), tests.notTaken);
+router.post('/tests/not-taken/retry-all',  authenticate, stockGate(P.STOCK_ANALYTICS), tests.retryAll);
 router.post('/tests/not-taken/:id/retry',  authenticate, stockGate(P.STOCK_ANALYTICS), tests.retry);
 router.post('/tests/not-taken/:id/resolve', authenticate, stockGate(P.STOCK_WRITEOFF), tests.resolve);
 
