@@ -153,6 +153,16 @@ describe('receiving from an invoice', () => {
     assert.equal(await db.StockReceipt.count({ where: { supplierId: supplier.id, numberKey: 'INV 7003' } }), 0, 'no receipt left behind');
   });
 
+  test('a line with no location is refused before anything is saved', async () => {
+    const r = await call(invoices.receiveBatch, {
+      supplierId: supplier.id, receiptNo: 'INV 7004',
+      lines: [{ stockItemId: strips.id, quantity: 5, locationId: store.id }, { stockItemId: strips.id, quantity: 5 }],
+    });
+    assert.equal(r.statusCode, 400);
+    assert.match(r.body.message, /Line 2: choose where/);
+    assert.equal(await db.StockReceipt.count({ where: { supplierId: supplier.id, numberKey: 'INV 7004' } }), 0);
+  });
+
   test('a cancelled read discards its file; an attached scan cannot be discarded', async () => {
     const token = pendingFile();
     const r = res();
@@ -196,6 +206,9 @@ describe('receiving from an invoice', () => {
       assert.equal(d.lines[1].stockItemId, strips.id);
       assert.equal(d.lines[2].status, 'unmatched');
       assert.equal(d.lines[3].status, 'skipped');
+      assert.equal(d.lines[0].suggestedLocationId, fridge.id, 'where that item was last received');
+      assert.equal(d.lines[2].suggestedLocationId, null);
+      assert.ok(d.defaultLocationId, 'a store to fall back on');
       assert.ok(d.existing, 'INV 7001 from this supplier is already on file');
       assert.equal(d.existing.itemCount, 2);
       assert.equal(await db.StockActivity.count({ where: { action: 'invoice_read', userId: admin.id, detail: { [Op.like]: `%${TAG}%` } } }), 1);

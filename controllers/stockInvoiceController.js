@@ -35,7 +35,7 @@ const { STOCK_RECEIPT_DIR, resolveStockReceiptFile } = require('../utils/stockRe
 const { findOrCreateReceipt, numberKeyOf, KINDS } = require('./stockReceiptController');
 
 const {
-  sequelize, StockItem, Supplier, StockReceipt, StockReceiptDocument, StockSupplierAlias, StockBatch, User,
+  sequelize, StockItem, StockLocation, StockMovement, Supplier, StockReceipt, StockReceiptDocument, StockSupplierAlias, StockBatch, User,
 } = db;
 
 // The stored name the uploader gives a file: 32 hex + a known extension.
@@ -96,6 +96,20 @@ const read = async (req, res) => {
       ...(l.isStockItem ? matchLine(l.description, items, aliases) : { status: 'skipped', stockItemId: null, candidates: [] }),
     }));
 
+    // Where each line goes (15 Oct 2026, Emu): every line is put away in its
+    // own place at receiving, so nothing needs a transfer afterwards. The
+    // suggestion is where that item was last received; otherwise the first
+    // store (a fridge for cold-chain items — the front end enforces that).
+    const matchedIds = [...new Set(lines.map((l) => l.stockItemId).filter(Boolean))];
+    const lastIntakes = matchedIds.length ? await StockMovement.findAll({
+      where: { type: 'intake', stockItemId: { [Op.in]: matchedIds } },
+      attributes: ['stockItemId', 'toLocationId'], order: [['createdAt', 'DESC']],
+    }) : [];
+    const lastLocation = {};
+    for (const m of lastIntakes) if (!lastLocation[m.stockItemId] && m.toLocationId) lastLocation[m.stockItemId] = m.toLocationId;
+    const store = await StockLocation.findOne({ where: { status: 'active', kind: 'store' }, order: [['id', 'ASC']], attributes: ['id'] });
+    lines.forEach((l) => { l.suggestedLocationId = l.stockItemId ? (lastLocation[l.stockItemId] || null) : null; });
+
     // Already on file? (same supplier + number) — so one invoice is never received twice.
     let existing = null;
     if (numberKeyOf(result.documentNumber)) {
@@ -134,6 +148,7 @@ const read = async (req, res) => {
       documentNumber: result.documentNumber,
       documentDate: result.documentDate,
       notes: result.notes,
+      defaultLocationId: store?.id || null,
       lines,
       existing,
     });
@@ -185,7 +200,8 @@ const rememberAlias = async ({ supplierId, text, stockItemId, userId }, transact
 
 /**
  * POST /api/stock/receipts/receive-batch
- * lines: [{ stockItemId, quantity, batchNo?, expiryDate?, locationId?, sourceText?, corrections?: ['batchNo', …] }]
+ * lines: [{ stockItemId, quantity, batchNo?, expiryDate?, locationId, sourceText?, corrections?: ['batchNo', …] }]
+ * Each line names where it is put away (locationId falls back to the body's locationId, if any).
  */
 const receiveBatch = async (req, res) => {
   try {
@@ -208,6 +224,7 @@ const receiveBatch = async (req, res) => {
       if (!Number.isInteger(qty) || qty < 1) return error(res, `Line ${i + 1}: quantity must be a whole number of at least 1`);
       if (l.expiryDate && !/^\d{4}-\d{2}-\d{2}$/.test(l.expiryDate)) return error(res, `Line ${i + 1}: expiry must be a date`);
       try {
+        if (!l.locationId && !locationId) return error(res, `Line ${i + 1}: choose where it is put away`);
         const { item, location } = await validateReceiveLine({
           stockItemId: l.stockItemId, locationId: l.locationId || locationId, expiryDate: l.expiryDate, supplierId,
         });

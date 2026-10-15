@@ -97,6 +97,8 @@ router.post('/receipts/receive-batch',  authenticate, stockGate(P.STOCK_RECEIVE)
   validate,
 ], invoices.receiveBatch);
 router.post('/receipts/new-item',       authenticate, stockGate(P.STOCK_RECEIVE, P.STOCK_ITEMS_EDIT), [body('name').notEmpty().withMessage('Name is required'), validate], catalog.createItem);
+// A supplier read from the invoice that is not on the list yet (15 Oct 2026, Emu) — added and remembered.
+router.post('/receipts/new-supplier',   authenticate, stockGate(P.STOCK_RECEIVE, P.STOCK_ITEMS_EDIT), [body('name').notEmpty().withMessage('Name is required'), validate], catalog.createSupplier);
 
 router.get('/receipts/:id',    authenticate, stockGate(P.STOCK_RECEIVE, P.STOCK_MOVEMENTS), receipts.getOne);
 router.post('/receipts', authenticate, stockGate(P.STOCK_RECEIVE, P.STOCK_MOVEMENTS), [
