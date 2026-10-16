@@ -2,6 +2,12 @@ const db = require('../models');
 const { applyMovement, suggestFefoBatch, LedgerError } = require('./stockLedger');
 
 const { sequelize, StockMovement, StockItem, StockLocation, StockParLevel, User } = db;
+const { Op } = require('sequelize');
+
+// General stock = the store(s) and the fridge(s): where stock sits before it is
+// moved to a room (16 Oct 2026, Emu: "if no pars / rooms set it should get it
+// from general stock" — HbA1c cartridges may sit in the fridge, not the store).
+const GENERAL_STOCK_KINDS = ['store', 'fridge'];
 
 // =====================================================================
 // Tests use stock (13 Oct 2026, Emu). Each ATTEMPT of a test on the charge
@@ -21,7 +27,7 @@ const { sequelize, StockMovement, StockItem, StockLocation, StockParLevel, User 
 // general stock numbers if they haven't been logged to come from a specific
 // area"): when no room can be told, or the room holds none, the strip comes
 // out of the store(s) instead — earliest-expiring batch across every active
-// location of kind 'store'. The movement's reason says so, so Movements shows
+// location of kind 'store' or 'fridge' (GENERAL_STOCK_KINDS). The movement's reason says so, so Movements shows
 // which tests were not taken from a room.
 //
 // Never blocks the clinical work: if the store holds none either, the attempt
@@ -92,7 +98,7 @@ const takeForAttempt = async (row, queue, userId) => {
       if (!pick) {
         // Not from a room — from the general stock (the store) instead.
         const roomsWhy = rooms ? `No ${item.name} in ${rooms.map((r) => r.name).join(' / ')}.` : why;
-        const stores = await StockLocation.findAll({ where: { kind: 'store', status: 'active' }, transaction: t });
+        const stores = await StockLocation.findAll({ where: { kind: { [Op.in]: GENERAL_STOCK_KINDS }, status: 'active' }, transaction: t });
         pick = await fefoAcross(stores);
         if (!pick) throw new LedgerError(`${roomsWhy} None in the store either.`);
         note = `from the store — ${roomsWhy}`;
