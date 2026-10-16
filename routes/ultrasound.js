@@ -7,7 +7,11 @@ const uploadUltrasound = require('../middleware/uploadUltrasound');
 const us = require('../controllers/ultrasoundController');
 
 // HMIS V4 — ultrasound imaging (HS70A → DICOM bridge → here).
-const READ = ['doctor', 'nurse', 'admin'];
+// Reads follow the clinical record (16 Oct 2026): anyone who may read it may
+// see the patient's scans, as neuropathy and glucose already allowed.
+const READ = ['doctor', 'nurse', 'admin', PERMISSIONS.CLINICAL_VIEW];
+// Acting on the inbox (dismiss, assign) stays with the roles.
+const ACT = ['doctor', 'nurse', 'admin'];
 
 // ------------------------------------
 // POST /api/ultrasound/ingest — bridge upload (machine auth, no JWT)
@@ -42,7 +46,7 @@ router.get('/file/:filename', authenticate, authorize(...READ), us.serveFile);
 // ------------------------------------
 // PUT /api/ultrasound/inbox-dismiss — explicitly remove images from the inbox list
 // ------------------------------------
-router.put('/inbox-dismiss', authenticate, authorize(...READ), us.dismissInbox);
+router.put('/inbox-dismiss', authenticate, authorize(...ACT), us.dismissInbox);
 
 // ------------------------------------
 // POST /api/ultrasound/edited — save a clinician-edited still into a patient's
@@ -58,7 +62,7 @@ router.post('/edited', authenticate, authorize('doctor', 'nurse', 'admin', PERMI
 // ------------------------------------
 // PUT /api/ultrasound/:id/assign — link image to a patient
 // ------------------------------------
-router.put('/:id/assign', authenticate, authorize(...READ), us.assign);
+router.put('/:id/assign', authenticate, authorize(...ACT), us.assign);
 
 // ------------------------------------
 // PUT /api/ultrasound/:id/archive — admin soft-delete (never hard-delete)

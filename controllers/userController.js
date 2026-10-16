@@ -2,7 +2,7 @@ const { success, error } = require('../utils/response');
 const {
   PERMISSIONS, PERMISSIBLE_ROLES, STAFF_TYPES, canGrantPermissions, sanitizePermissions, hasPermission, toList,
   canUseStock, STOCK_TAB_PERMISSIONS,
-  reconcilePermissionLists, canGrantHrPermissions, SCOPABLE,
+  reconcilePermissionLists, canGrantHrPermissions, SCOPABLE, defaultStaffType,
 } = require('../constants/permissions');
 const { hrGrantRefusal, loginEmailRefusal } = require('../utils/hrGrant');
 const { resolveReportsTo, ReportsToError } = require('../services/reportsTo');
@@ -169,7 +169,8 @@ const sameSet = (a, b) => a.length === b.length && a.every((p) => b.includes(p))
  *
  * Who may set what — decision of record, 24 Sep 2026
  * (claude/onboarding-wizard-build-spec.md §1.2):
- *   1. No access section     -> unchanged behaviour: clinical, no grants.
+ *   1. No access section     -> the role's default type (defaultStaffType:
+ *      front desk non-clinical, everyone else clinical), no grants.
  *   2. A preset, applied UNCHANGED -> allowed for anyone who passed the route's
  *      users.write gate. The bundle was approved by a key-holder when it was
  *      defined, so applying it is not a grant decision.
@@ -189,7 +190,7 @@ const resolveAccessAtCreation = ({ body, role, caller, preset }) => {
   const { staffType, permissions, deniedPermissions, presetId } = body;
   const sent = [staffType, permissions, deniedPermissions, presetId].some((v) => v !== undefined && v !== null && v !== '');
 
-  const unchanged = { staffType: STAFF_TYPES.CLINICAL, permissions: [], deniedPermissions: [] };
+  const unchanged = { staffType: defaultStaffType(role), permissions: [], deniedPermissions: [] };
   if (!sent) return { access: { ...unchanged, presetName: null, applied: false } };
 
   if (presetId !== undefined && presetId !== null && presetId !== '') {
@@ -221,7 +222,7 @@ const resolveAccessAtCreation = ({ body, role, caller, preset }) => {
   // same as sending no access section at all, so anyone who may onboard may do
   // it. (Before this, the wizard always sent a staff type, and a blank start by
   // a non-key-holder was refused "without a preset".)
-  const isBlank = !preset && wantType === STAFF_TYPES.CLINICAL && !granted.length && !denied.length;
+  const isBlank = !preset && wantType === defaultStaffType(role) && !granted.length && !denied.length;
 
   // O-1: a "Grant HR permissions" holder may tick, while onboarding, the HR
   // Suite controls they hold themselves — the same rule as on the Permissions

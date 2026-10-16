@@ -5,6 +5,7 @@ const validate = require('../middleware/validate');
 const { authenticate, authorize, requireTrueAdmin } = require('../middleware/auth');
 const logPatientAccess = require('../middleware/logPatientAccess');
 const findPatient = require('../middleware/findPatient');
+const { error } = require('../utils/response');
 const { INTERNAL_ROLES, PERMISSIONS } = require('../constants/permissions');
 // Every internal role, for the patient's identity and administration — who they
 // are, where they are, what they owe. Reception needs all of it. The clinical
@@ -96,9 +97,17 @@ router.patch('/:uhid/reactivate', authenticate, authorize('admin', PERMISSIONS.P
 router.get('/', authenticate, authorize(...CLINICAL_READ_ROLES), patientController.list);
 
 // ------------------------------------
-// GET /api/patients/:uhid — single patient (all authenticated roles)
+// GET /api/patients/:uhid — single patient. Every internal role, and a patient
+// for THEIR OWN record only. Permissions audit, 16 Oct 2026: this route had no
+// role gate at all, so any signed-in account — a patient included — could read
+// any patient's identity (name, phone, ID number, address, diagnosis) by UHID.
 // ------------------------------------
-router.get('/:uhid', authenticate, findPatient, patientController.getOne);
+const ownRecordOrInternal = (req, res, next) => {
+  if (req.user.role !== 'patient') return next();
+  if (req.patient.UserId && req.patient.UserId === req.user.id) return next();
+  return error(res, 'You can only view your own record.', 403);
+};
+router.get('/:uhid', authenticate, authorize(...CLINICAL_READ_ROLES, 'patient'), findPatient, ownRecordOrInternal, patientController.getOne);
 
 // ------------------------------------
 // POST /api/patients/:uhid/complete-registration

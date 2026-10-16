@@ -683,6 +683,17 @@ const ADMIN_ACCESS_COVERS = [
 const isClinical = (user) => isInternal(user) && user.staffType !== STAFF_TYPES.NON_CLINICAL;
 
 /**
+ * The staff type a NEW account starts with when nobody chooses one.
+ *
+ * Permissions audit, 16 Oct 2026 (Emu): every new account used to start
+ * clinical, so a receptionist created without a second thought held the
+ * clinical bundle (vitals, sugars, GLP-1, equipment) of every patient. Front
+ * desk now starts non-clinical; doctors, nurses and the lab start clinical.
+ * Mirrored in cdc-hms/src/utils/permissions.js (the wizard's starting value).
+ */
+const defaultStaffType = (role) => (role === 'staff' ? STAFF_TYPES.NON_CLINICAL : STAFF_TYPES.CLINICAL);
+
+/**
  * The capabilities a person holds by virtue of their staff type alone.
  *
  * A PATIENT never gets any of this, whatever their row says. The check is not
@@ -729,7 +740,7 @@ const PERMISSION_GROUPS = [
       { key: 'p-doctor',    name: 'Doctor portal',       access: PERMISSIONS.PORTAL_DOCTOR,    accessLabel: 'Can open', roleDefault: 'Doctors' },
       { key: 'p-staff',     name: 'Staff portal',        access: PERMISSIONS.PORTAL_STAFF,     accessLabel: 'Can open', roleDefault: 'Front desk' },
       { key: 'p-lab',       name: 'Lab portal',          access: PERMISSIONS.PORTAL_LAB,       accessLabel: 'Can open', roleDefault: 'Lab technicians' },
-      { key: 'p-inpatient', name: 'Inpatient workspace', access: PERMISSIONS.PORTAL_INPATIENT, accessLabel: 'Can open', roleDefault: 'Doctors and nurses' },
+      { key: 'p-inpatient', name: 'Inpatient workspace', access: PERMISSIONS.PORTAL_INPATIENT, accessLabel: 'Can open', roleDefault: 'Doctors and nurses — front desk must be granted it to see the ward board and admissions' },
       { key: 'p-radiology', name: 'Radiology Suite',    access: PERMISSIONS.PORTAL_RADIOLOGY, accessLabel: 'Can open', roleDefault: 'Doctors and front desk' },
       { key: 'p-hr',        name: 'HR Suite',           access: PERMISSIONS.PORTAL_HR,        accessLabel: 'Can open', roleDefault: 'Everyone' },
       { key: 'p-stocks',    name: 'Stocks',             access: PERMISSIONS.PORTAL_STOCKS,    accessLabel: 'Can open', roleDefault: 'Nobody by role — must be granted',
@@ -891,7 +902,7 @@ const PERMISSION_GROUPS = [
         description: 'Ward board, admissions and the inpatient record.',
         access: PERMISSIONS.INPATIENT_ACCESS, write: PERMISSIONS.INPATIENT_WRITE,
         accessLabel: 'Can view', writeLabel: 'Can admit, transfer, discharge and bill',
-        roleDefault: 'Clinical and front-desk roles' },
+        roleDefault: 'Doctors and nurses. Front desk needs the Inpatient workspace (Portals) to see it, and "Can admit…" to act' },
       { key: 'lab', name: 'Lab results', appliesIn: 'Lab, Doctor',
         description: 'Pending tests, results, history and critical alerts. Ordering a test '
           + 'stays with the doctor role.',
@@ -1722,6 +1733,7 @@ module.exports = {
   TYPE_DEFAULT_PERMISSIONS,
   isClinical,
   typeDefaultPermissions,
+  defaultStaffType,
   ADMIN_ACCESS_COVERS,
   displayedPermissions,
   effectivePermissions,
