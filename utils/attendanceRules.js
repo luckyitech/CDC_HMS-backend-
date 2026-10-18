@@ -38,41 +38,8 @@ const minutesToHHMM = (mins) => {
   return `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
 };
 
-// ---------------------------------------------------------------------
-// The decision table (build spec §5.3)
-// ---------------------------------------------------------------------
-
-/**
- * What a tap does, given the person's most recent session today.
- *
- * @param {object} p
- * @param {Date}   p.now
- * @param {object|null} p.lastSession  the latest non-refused, non-voided row
- *                                     for this person today (any status)
- * @param {boolean} p.confirm  the person pressed "Check out"
- * @param {object} p.cfg  { debounceSeconds, minSessionMinutes, confirmCheckout }
- * @returns {'checkin'|'offer_checkout'|'checkout'|'duplicate'}
- */
-const decide = ({ now, lastSession, confirm = false, cfg }) => {
-  const debounceMs = (cfg.debounceSeconds ?? 120) * 1000;
-  const minSessionMs = (cfg.minSessionMinutes ?? 10) * MINUTE;
-  const t = new Date(now).getTime();
-
-  if (!lastSession) return 'checkin';
-
-  if (lastSession.status !== 'open') {
-    // A closed session: a second tap right after checking out is the same
-    // brush past the tag, not a new day.
-    if (lastSession.checkOutAt && t - new Date(lastSession.checkOutAt).getTime() < debounceMs) return 'duplicate';
-    return 'checkin';
-  }
-
-  const sinceIn = t - new Date(lastSession.checkInAt).getTime();
-  if (sinceIn < debounceMs) return 'duplicate';
-  if (sinceIn < minSessionMs) return 'duplicate';
-  if (cfg.confirmCheckout !== false && !confirm) return 'offer_checkout';
-  return 'checkout';
-};
+// The tap decision table now lives in utils/punchDay.js (decideTap): one
+// session per day, every punch kept (17 Oct 2026).
 
 // ---------------------------------------------------------------------
 // Punctuality and stars (decision 10)
@@ -301,7 +268,6 @@ module.exports = {
   clinicHHMM,
   clinicMinuteOfDay,
   minutesToHHMM,
-  decide,
   punctuality,
   starFor,
   dayCell,

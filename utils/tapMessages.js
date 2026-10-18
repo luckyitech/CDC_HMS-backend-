@@ -31,9 +31,11 @@ const hoursAndMinutes = (minutes) => {
  * @param {Date}   p.now
  * @param {boolean} p.positiveFeedback
  * @param {'in'|'out'} [p.duplicateSide]
+ * @param {boolean} [p.reentry]  back in after going out the same day
+ * @param {Date} [p.lastAt]  the punch a duplicate repeats
  * @returns {{ headline:string, mood:string|null, sub:string|null, facts:Array<[string,string]> }}
  */
-const buildTapMessages = ({ action, user, session, punct, month = {}, now, positiveFeedback = true, duplicateSide }) => {
+const buildTapMessages = ({ action, user, session, punct, month = {}, now, positiveFeedback = true, duplicateSide, reentry = false, lastAt = null }) => {
   const name = user?.firstName || '';
   const greet = greetName(user);
   const hhmm = clinicHHMM(now);
@@ -44,7 +46,11 @@ const buildTapMessages = ({ action, user, session, punct, month = {}, now, posit
   let headline = '', mood = null, sub = null;
   const facts = [];
 
-  if (action === 'checked_in') {
+  if (action === 'checked_in' && reentry) {
+    // Back in after going out (one session per day, 17 Oct 2026): no star.
+    headline = `Back in, ${hhmm}`;
+    if (session?.checkInAt) facts.push(['Checked in today at', clinicHHMM(session.checkInAt)]);
+  } else if (action === 'checked_in') {
     headline = `Checked in, ${hhmm}`;
     const state = punct?.state || 'none';
     if (state === 'on_time') {
@@ -90,7 +96,7 @@ const buildTapMessages = ({ action, user, session, punct, month = {}, now, posit
   } else if (action === 'duplicate') {
     headline = 'Already recorded';
     const side = duplicateSide || 'in';
-    const when = side === 'out' ? session?.checkOutAt : session?.checkInAt;
+    const when = lastAt || (side === 'out' ? session?.checkOutAt : session?.checkInAt);
     sub = `You checked ${side} a minute ago at ${when ? clinicHHMM(when) : hhmm}.`;
   } else if (action === 'refused') {
     headline = 'This tap can\'t be verified';

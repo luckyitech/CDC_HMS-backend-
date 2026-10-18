@@ -38,12 +38,13 @@ const StaffAttendance = defineModel('StaffAttendance', {
 
   // How each end of the session was recorded. 'code' is reserved for a typed
   // reception fallback code (not built in phase 1 — every phone has NFC).
+  // 'fingerprint' / 'card': a punch on the scanner (17 Oct 2026).
   checkInMethod: {
-    type: DataTypes.ENUM('nfc', 'code', 'manual'),
+    type: DataTypes.ENUM('nfc', 'code', 'manual', 'fingerprint', 'card'),
     allowNull: false,
   },
   checkOutMethod: {
-    type: DataTypes.ENUM('nfc', 'code', 'manual'),
+    type: DataTypes.ENUM('nfc', 'code', 'manual', 'fingerprint', 'card'),
     allowNull: true,
     defaultValue: null,
   },
@@ -103,6 +104,13 @@ const StaffAttendance = defineModel('StaffAttendance', {
     allowNull: false,
     defaultValue: 'open',
   },
+
+  // One session per person per day (17 Oct 2026): built from every punch
+  // (models/StaffPunch.js, utils/punchDay.js). The punches between the first
+  // in and the last out give these counters. NULL on sessions from before.
+  inCount:     { type: DataTypes.INTEGER, allowNull: true, defaultValue: null },
+  outCount:    { type: DataTypes.INTEGER, allowNull: true, defaultValue: null },
+  awayMinutes: { type: DataTypes.INTEGER, allowNull: true, defaultValue: null },
 
   amendedAt:   { type: DataTypes.DATE, allowNull: true, defaultValue: null },
   amendReason: { type: DataTypes.TEXT, allowNull: true, defaultValue: null },

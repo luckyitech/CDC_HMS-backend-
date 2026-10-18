@@ -192,7 +192,11 @@ describe('night shifts in attendance (RO-12)', () => {
     assert.equal(isStale({ clinicDate: '2026-11-11', expectedOutAt: null }, '2026-11-11'), false);
   });
   test('the tap looks for last night\'s session when there is none today', () => {
-    assert.match(src('controllers/hrAttendanceController.js'), /\|\| \(await svc\.overnightSession\(me\.id, clinicDate, now, transaction\)\)/);
+    // 17 Oct 2026: every punch (tap or scanner) finds its day through punchService.clinicDateFor.
+    assert.match(src('controllers/hrAttendanceController.js'), /punchSvc\.clinicDateFor\(me\.id, now, transaction\)/);
+    // A night shift's punches stay on it until its end + the overnight grace, whatever its status (review fix #4).
+    assert.match(src('services/punchService.js'), /expectedOutAt: \{ \[Op\.gte\]: midnight \}/);
+    assert.match(src('services/punchService.js'), /svc\.OVERNIGHT_GRACE_HOURS \* 3600 \* 1000\) return yesterday/);
   });
 });
 

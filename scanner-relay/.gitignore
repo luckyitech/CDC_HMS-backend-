@@ -1,0 +1,7 @@
+build/
+dist/
+config.json
+state.json
+state.json.tmp
+scanner-relay.log*
+node_modules/

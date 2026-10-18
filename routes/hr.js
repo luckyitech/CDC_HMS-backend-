@@ -9,6 +9,7 @@ const hrAttendance = require('../controllers/hrAttendanceController');
 const hrDevices = require('../controllers/hrDevicesController');
 const hrWorkHours = require('../controllers/hrWorkHoursController');
 const hrTags = require('../controllers/hrTagsController');
+const hrScanner = require('../controllers/hrScannerController');
 const hrSettings = require('../controllers/hrSettingsController');
 const hrProfile = require('../controllers/hrProfileController');
 const cpd = require('../controllers/cpdController');
@@ -139,6 +140,38 @@ router.post('/tags',         authenticate, strictLimiter, authorize(...SETTINGS)
 ], hrTags.create);
 router.patch('/tags/:id',     authenticate, authorize(...TAGS), [param('id').isInt(), validate], hrTags.update);
 router.post('/tags/:id/test', authenticate, authorize(...TAGS), [param('id').isInt(), body('url').isString().notEmpty(), validate], hrTags.test);
+
+// Fingerprint scanner (17 Oct 2026). Status: the Online / Offline pill on
+// Time & Attendance — anyone who checks in. Setting the scanner up and its
+// relay key: hr.settings, like registering a tag's key. Linking scanner IDs to
+// staff: hr.tags, like managing the entrance tags. The relay itself posts to
+// /api/hr/scanner-relay (routes/scannerRelay.js, machine auth).
+router.get('/scanners/status', authenticate, authorize(...CHECKIN), hrScanner.status);
+router.get('/scanners',        authenticate, authorize(...TAGS, 'hr.settings'), hrScanner.list);
+router.post('/scanners', authenticate, authorize(...SETTINGS), [
+  body('serial').isString().trim().matches(/^[A-Za-z0-9-]{4,32}$/),
+  body('label').isString().trim().notEmpty().isLength({ max: 120 }),
+  body('location').optional({ values: 'null' }).isString().isLength({ max: 120 }),
+  body('goLiveAt').optional().isISO8601(),
+  validate,
+], hrScanner.create);
+router.patch('/scanners/:id', authenticate, authorize(...SETTINGS), [
+  param('id').isInt(),
+  body('label').optional().isString().trim().notEmpty().isLength({ max: 120 }),
+  body('location').optional({ values: 'null' }).isString().isLength({ max: 120 }),
+  body('status').optional().isIn(['active', 'stopped']),
+  body('goLiveAt').optional().isISO8601(),
+  validate,
+], hrScanner.update);
+router.post('/scanners/:id/key', authenticate, authorize(...SETTINGS), [param('id').isInt(), validate], hrScanner.replaceKey);
+router.get('/scanners/:id/users', authenticate, authorize(...TAGS), [param('id').isInt(), validate], hrScanner.users);
+router.post('/scanners/:id/users/confirm-matches', authenticate, authorize(...TAGS), [param('id').isInt(), validate], hrScanner.confirmMatches);
+router.patch('/scanners/:id/users/:userId', authenticate, authorize(...TAGS), [
+  param('id').isInt(), param('userId').isInt(),
+  body('action').isIn(['link', 'unlink', 'ignore']),
+  body('staffId').if(body('action').equals('link')).isInt(),
+  validate,
+], hrScanner.setLink);
 
 // ---- Settings ----------------------------------------------------------------
 router.get('/settings', authenticate, authorize(...SETTINGS_READ), hrSettings.get);

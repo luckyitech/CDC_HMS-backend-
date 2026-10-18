@@ -1,0 +1,13 @@
+{
+  "name": "cdc-scanner-relay",
+  "version": "1.1.0",
+  "private": true,
+  "description": "CDC HMS — sends punches from the clinic's ZKTeco K40 fingerprint scanner to the HMS. Node built-ins only.",
+  "main": "relay.js",
+  "scripts": {
+    "start": "node relay.js",
+    "check": "node relay.js --check",
+    "build": "node build-installer.js"
+  },
+  "license": "UNLICENSED"
+}

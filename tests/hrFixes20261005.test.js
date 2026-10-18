@@ -331,10 +331,15 @@ describe('#8 check-out stars use the person\'s own grace', () => {
     assert.equal(await svc.graceOf({ diagnostics: JSON.stringify({ grace: 0 }) }, cfg), 0);
   });
   test('the tap never passes the clinic grace for a check-out', () => {
+    // 17 Oct 2026: the tap is a punch; the day is rebuilt in services/punchService.
     const s = src('controllers/hrAttendanceController.js');
     assert.doesNotMatch(s, /graceMinutes: cfg\.graceMinutes, kind: 'out'/);
-    assert.match(s, /grace: expected\.grace \}/);
-    assert.equal((s.match(/graceMinutes: await svc\.graceOf\(last, cfg\), kind: 'out'/g) || []).length, 2);
+    assert.match(s, /graceMinutes: await svc\.graceOf\(session, cfg\), kind: 'out'/);
+    assert.match(s, /const grace = await svc\.graceOf\(session, cfg\);/);
+    const p = src('services/punchService.js');
+    assert.doesNotMatch(p, /graceMinutes: cfg\.graceMinutes/);
+    assert.match(p, /grace: await svc\.graceOf\(session, cfg\)/);
+    assert.match(p, /grace: expected\.grace/);
   });
 });
 

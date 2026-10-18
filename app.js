@@ -52,6 +52,11 @@ app.use('/api/comms/webhook', require('./routes/commsWebhook'));
 // router parses its own JSON and has its own per-USER limiter instead.
 app.use('/api/drafts', require('./routes/formDrafts'));
 
+// Fingerprint-scanner relay (HR Suite, 17 Oct 2026) — also before the general
+// limiter: one heartbeat a minute from the clinic's shared public IP. Machine
+// auth, its own JSON parser and limiter.
+app.use('/api/hr/scanner-relay', require('./routes/scannerRelay'));
+
 // Rate limiting — Prevent brute force and DoS attacks
 // Applied to ALL endpoints: 1000 requests per 15 minutes per IP
 // (matches generalLimiter in middleware/rateLimiter.js and the README)

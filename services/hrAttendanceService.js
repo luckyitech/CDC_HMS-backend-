@@ -9,10 +9,8 @@
 
 const { Op } = require('sequelize');
 const db = require('../models');
-const { clinicToday, clinicMidnight, clinicDatePlusDays } = require('../utils/clinicTime');
+const { clinicToday } = require('../utils/clinicTime');
 
-// An instant inside the clinic date (noon), for date arithmetic on it.
-const clinicMidnightAfter = (clinicDate) => new Date(clinicMidnight(clinicDate).getTime() + 12 * 3600 * 1000);
 const { resolveExpected, datesOfMonth, previousMonth } = require('../utils/workHours');
 const { monthSummary, streakNoRed, clinicHHMM } = require('../utils/attendanceRules');
 const { parseJsonColumn } = require('../utils/jsonColumn');
@@ -137,46 +135,10 @@ const monthSummaryFor = async (userId, month, cfg, { now = new Date(), rows } = 
   return monthSummary({ month, days, rows: sessions, today });
 };
 
-/** The most recent countable session today (any status but refused/voided). */
-const lastSessionToday = async (userId, clinicDate, transaction) =>
-  StaffAttendance.findOne({
-    where: { UserId: userId, clinicDate, status: { [Op.in]: ['open', 'closed', 'missed_checkout'] } },
-    order: [['checkInAt', 'DESC']],
-    transaction,
-    lock: transaction ? transaction.LOCK.UPDATE : undefined,
-  });
-
-// A rostered night shift (HR Tier 3 Phase 4): the session belongs to the
-// evening it started on, but the check-out tap comes after midnight. While
-// that session is open (or was closed moments ago — so a double brush on the
-// tag stays a duplicate), it is the person's "last session" today.
+// A rostered night shift (HR Tier 3 Phase 4) belongs to the evening it began:
+// punches up to its end + this grace stay on it (services/punchService
+// clinicDateFor, 17 Oct 2026); the sweep waits as long before marking it missed.
 const OVERNIGHT_GRACE_HOURS = 6;
-const OVERNIGHT_RECENT_MINUTES = 15;
-
-/** Yesterday's night session that ends today, if it is still the one to close. */
-const overnightSession = async (userId, clinicDate, now = new Date(), transaction) => {
-  const yesterday = clinicDatePlusDays(-1, clinicMidnightAfter(clinicDate));
-  const row = await StaffAttendance.findOne({
-    where: {
-      UserId: userId, clinicDate: yesterday,
-      status: { [Op.in]: ['open', 'closed'] },
-      expectedOutAt: { [Op.gte]: clinicMidnight(clinicDate) },
-    },
-    order: [['checkInAt', 'DESC']],
-    transaction,
-    lock: transaction ? transaction.LOCK.UPDATE : undefined,
-  });
-  if (!row) return null;
-  const t = new Date(now).getTime();
-  if (row.status === 'open') {
-    return t <= new Date(row.expectedOutAt).getTime() + OVERNIGHT_GRACE_HOURS * 3600 * 1000 ? row : null;
-  }
-  return row.checkOutAt && t - new Date(row.checkOutAt).getTime() < OVERNIGHT_RECENT_MINUTES * 60 * 1000 ? row : null;
-};
-
-/** Has this person already earned an in-star today? (second check-in → none) */
-const hasEarlierSessionToday = async (userId, clinicDate, transaction) =>
-  (await StaffAttendance.count({ where: { UserId: userId, clinicDate, status: { [Op.in]: ['open', 'closed', 'missed_checkout'] } }, transaction })) > 0;
 
 /** Internal (non-patient) active accounts with their profile bits. */
 const internalUsers = async () =>
@@ -234,6 +196,11 @@ const serializeSession = (row) => {
     expectedInHHMM: r.expectedInAt ? clinicHHMM(r.expectedInAt) : null,
     expectedOutHHMM: r.expectedOutAt ? clinicHHMM(r.expectedOutAt) : null,
     status: r.status,
+    // One session per day (17 Oct 2026): the ins and outs between the first in
+    // and the last out. null on sessions from before punches were kept.
+    inCount: r.inCount ?? null,
+    outCount: r.outCount ?? null,
+    awayMinutes: r.awayMinutes ?? null,
     checkInIp: r.checkInIp,
     checkOutIp: r.checkOutIp,
     door: r.checkInTag ? r.checkInTag.label : null,
@@ -269,10 +236,7 @@ module.exports = {
   daysForMonth,
   monthDataFor,
   monthSummaryFor,
-  lastSessionToday,
-  overnightSession,
   OVERNIGHT_GRACE_HOURS,
-  hasEarlierSessionToday,
   internalUsers,
   graceOf,
   personOf,

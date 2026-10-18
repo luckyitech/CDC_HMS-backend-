@@ -120,6 +120,19 @@ const clinicMidnight = (clinicDate) => {
   return new Date(midnightAsUtc - offsetMsAt(first));
 };
 
+// The instant a clinic wall-clock time ('YYYY-MM-DD HH:MM:SS', no zone) was.
+// The fingerprint scanner keeps local time with no zone (17 Oct 2026). Same
+// one-refinement offset as clinicMidnight. null for anything unparseable.
+const clinicLocalToInstant = (local) => {
+  const m = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})(?::(\d{2}))?$/.exec(String(local || '').trim());
+  if (!m) return null;
+  const [, y, mo, d, h, mi, se] = m.map(Number);
+  const asUtc = Date.UTC(y, mo - 1, d, h, mi, se || 0);
+  if (Number.isNaN(asUtc)) return null;
+  const first = new Date(asUtc - offsetMsAt(new Date(asUtc)));
+  return new Date(asUtc - offsetMsAt(first));
+};
+
 // The instant today began at the clinic. The common case of clinicMidnight —
 // "today's" queue, "today's" registrations, "today's" movements.
 const clinicStartOfDay = (now = new Date()) => clinicMidnight(clinicToday(now));
@@ -138,6 +151,7 @@ module.exports = {
   clinicClockTime,
   clinicDateTime,
   clinicMidnight,
+  clinicLocalToInstant,
   clinicStartOfDay,
   CLINIC_TZ,
 };

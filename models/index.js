@@ -157,6 +157,9 @@ const MessageTemplate             = require('./MessageTemplate');
 const StaffAttendance             = require('./StaffAttendance');
 const HrNfcTag                    = require('./HrNfcTag');
 const UserDevice                  = require('./UserDevice');
+const HrScanner                   = require('./HrScanner');
+const HrScannerUser               = require('./HrScannerUser');
+const StaffPunch                  = require('./StaffPunch');
 const StaffWorkHours              = require('./StaffWorkHours');
 
 // --- Onboarding wizard: permission presets (a template, not a link) ---
@@ -808,6 +811,20 @@ User.hasMany(UserDevice);
 UserDevice.belongsTo(User);
 UserDevice.belongsTo(User, { as: 'revokedBy', foreignKey: 'revokedById' });
 
+// Fingerprint scanner (17 Oct 2026): every punch, the scanner, its users.
+HrScanner.belongsTo(User, { as: 'createdBy', foreignKey: 'createdById' });
+HrScanner.hasMany(HrScannerUser, { foreignKey: 'scannerId' });
+HrScannerUser.belongsTo(HrScanner, { foreignKey: 'scannerId', onDelete: 'CASCADE' });
+HrScannerUser.belongsTo(User, { foreignKey: 'UserId', onDelete: 'SET NULL' });
+HrScannerUser.belongsTo(User, { as: 'linkedBy', foreignKey: 'linkedById', onDelete: 'SET NULL' });
+StaffPunch.belongsTo(User, { foreignKey: 'UserId', onDelete: 'SET NULL' });
+StaffPunch.belongsTo(StaffAttendance, { as: 'session', foreignKey: 'attendanceId', onDelete: 'SET NULL' });
+StaffAttendance.hasMany(StaffPunch, { as: 'punches', foreignKey: 'attendanceId' });
+StaffPunch.belongsTo(HrScanner, { foreignKey: 'scannerId', onDelete: 'SET NULL' });
+StaffPunch.belongsTo(HrNfcTag, { as: 'tag', foreignKey: 'tagId', onDelete: 'SET NULL' });
+StaffPunch.belongsTo(UserDevice, { as: 'device', foreignKey: 'deviceId', onDelete: 'SET NULL' });
+StaffPunch.belongsTo(User, { as: 'createdBy', foreignKey: 'createdById', onDelete: 'SET NULL' });
+
 User.hasMany(StaffWorkHours);
 StaffWorkHours.belongsTo(User);
 
@@ -960,6 +977,9 @@ const db = {
   StaffAttendance,
   HrNfcTag,
   UserDevice,
+  HrScanner,
+  HrScannerUser,
+  StaffPunch,
   StaffWorkHours,
   // --- Onboarding wizard ---
   PermissionPreset,

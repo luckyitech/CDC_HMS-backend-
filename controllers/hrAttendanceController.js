@@ -22,7 +22,8 @@ const { clinicToday } = require('../utils/clinicTime');
 const { getHrConfig } = require('../utils/hrConfig');
 const { verifySun } = require('../utils/ntag424');
 const { decrypt } = require('../utils/crypto');
-const { decide, punctuality, starFor, clinicHHMM, minutesBetween, expectedAtWork } = require('../utils/attendanceRules');
+const { punctuality, starFor, clinicHHMM, minutesBetween, expectedAtWork } = require('../utils/attendanceRules');
+const { decideTap } = require('../utils/punchDay');
 const { TAKEN_STATUSES } = require('../utils/leaveWorkflow');
 const { buildTapMessages, titleFor } = require('../utils/tapMessages');
 const { buildChanges } = require('../utils/auditChanges');
@@ -32,8 +33,9 @@ const hrScope = require('../services/hrScope');
 const { PERMISSIONS } = require('../constants/permissions');
 const leaveService = require('../services/leaveService');
 const svc = require('../services/hrAttendanceService');
+const punchSvc = require('../services/punchService');
 
-const { sequelize, StaffAttendance, HrNfcTag, User, StaffProfile, StaffLeave, StaffWorkHours } = db;
+const { sequelize, StaffAttendance, StaffPunch, HrNfcTag, User, StaffProfile, StaffLeave, StaffWorkHours } = db;
 
 const CONFIRM_TTL = '10m';
 
@@ -89,6 +91,7 @@ const tap = async (req, res) => {
     let counter = null;
     let ctrHex = null;
     let confirm = false;
+    let confirmIssuedAt = null;
     if (req.body.confirmToken) {
       let claim;
       try { claim = jwt.verify(String(req.body.confirmToken), process.env.JWT_SECRET); } catch { claim = null; }
@@ -98,6 +101,7 @@ const tap = async (req, res) => {
       tag = await HrNfcTag.findByPk(claim.tagId, { attributes: { exclude: ['keyEncrypted'] } });
       ctrHex = claim.ctr;
       confirm = true;
+      confirmIssuedAt = claim.iat ? claim.iat * 1000 : null;
     } else {
       const uid = String(req.body.uid || '').toUpperCase();
       ctrHex = String(req.body.ctr || '').toUpperCase();
@@ -132,51 +136,55 @@ const tap = async (req, res) => {
       await locked.update({ lastCounter: counter, lastTapAt: now }, { transaction });
     }
 
-    // A night shift's check-out tap lands after midnight (HR Tier 3 Phase 4).
-    const last = (await svc.lastSessionToday(me.id, clinicDate, transaction))
-      || (await svc.overnightSession(me.id, clinicDate, now, transaction));
-    const action = decide({ now, lastSession: last, confirm, cfg });
-    // Phase 1: IP/geo are logged, never enforced, so every verified tap is 'verified'.
-    const verification = 'verified';
-    let session = last;
+    // One session per day (17 Oct 2026, Emu): the tap is a punch. The first
+    // of the day checks in; then out, in, out… on the same session. A night
+    // shift's check-out after midnight still belongs to the evening it began.
+    const clinicDay = await punchSvc.clinicDateFor(me.id, now, transaction);
+    const counted = await punchSvc.countedFor(me.id, clinicDay, cfg, transaction);
+    // A confirmation is good once: any punch counted after it was issued
+    // (this check-out, or another device's) makes it stale.
+    const lastCountedAt = counted.length ? new Date(counted[counted.length - 1].at).getTime() : null;
+    const staleConfirm = confirm && confirmIssuedAt && lastCountedAt && lastCountedAt > confirmIssuedAt;
+    const action = staleConfirm ? 'duplicate' : decideTap({ now, counted, confirm, cfg });
+    const todaysSession = () => StaffAttendance.findOne({
+      where: { UserId: me.id, clinicDate: clinicDay, status: { [Op.in]: ['open', 'closed', 'missed_checkout'] } },
+      order: [['checkInAt', 'ASC']], transaction,
+    });
+    let session = null;
     let punct = null;
     let star = null;
     let outAction = action;
     let confirmToken = null;
 
-    if (action === 'checkin') {
-      const expected = await svc.expectedFor(me.id, clinicDate, cfg);
-      const earlier = await svc.hasEarlierSessionToday(me.id, clinicDate, transaction);
-      punct = earlier ? { state: 'none', minutes: null } : punctuality({ at: now, expectedAt: expected.startAt, graceMinutes: expected.grace, kind: 'in' });
-      session = await StaffAttendance.create({
-        UserId: me.id, clinicDate, checkInAt: now,
-        checkInMethod: 'nfc', checkInVerification: verification, checkInTagId: tag.id,
-        checkInIp: ip, checkInLat: geo.lat, checkInLng: geo.lng, deviceId,
-        expectedInAt: expected.startAt, expectedOutAt: expected.endAt,
-        checkInPunctuality: punct.state, lateMinutes: punct.state === 'late' ? punct.minutes : (expected.startAt ? 0 : null),
-        checkOutPunctuality: 'none', status: 'open', createdById: me.id,
-        // grace: the person's own grace for this day, so the check-out star
-        // uses the same one (#8) — the tap, a manual entry and an amend agree.
-        diagnostics: { ua, ctr: ctrHex, geoAccuracy: geo.accuracy, hoursSource: expected.source, grace: expected.grace },
-      }, { transaction });
-      star = { side: 'in', colour: starFor('in', punct.state) };
-      outAction = 'checked_in';
+    if (action === 'duplicate') {
+      session = await todaysSession();
     } else if (action === 'offer_checkout') {
-      punct = punctuality({ at: now, expectedAt: last.expectedOutAt, graceMinutes: await svc.graceOf(last, cfg), kind: 'out' });
+      // Punches but no session should not happen; rebuild the day if it does.
+      session = (await todaysSession())
+        || (await punchSvc.rebuildDay({ userId: me.id, clinicDate: clinicDay, cfg, transaction, now })).session;
+      punct = punctuality({ at: now, expectedAt: session.expectedOutAt, graceMinutes: await svc.graceOf(session, cfg), kind: 'out' });
       confirmToken = jwt.sign({ t: 'hr-confirm', u: me.id, tagId: tag.id, ctr: ctrHex }, process.env.JWT_SECRET, { expiresIn: CONFIRM_TTL });
-    } else if (action === 'checkout') {
-      punct = punctuality({ at: now, expectedAt: last.expectedOutAt, graceMinutes: await svc.graceOf(last, cfg), kind: 'out' });
-      const diag = parseJsonColumn(last.diagnostics) || {};
-      await last.update({
-        checkOutAt: now, checkOutMethod: 'nfc', checkOutVerification: verification, checkOutTagId: tag.id,
-        checkOutIp: ip, checkOutLat: geo.lat, checkOutLng: geo.lng,
-        checkOutPunctuality: punct.state, earlyOutMinutes: punct.state === 'early' ? punct.minutes : (last.expectedOutAt ? 0 : null),
-        status: 'closed',
-        diagnostics: { ...diag, outUa: ua, outCtr: ctrHex, outGeoAccuracy: geo.accuracy },
+    } else {
+      await StaffPunch.create({
+        UserId: me.id, at: now, clinicDate: clinicDay, source: 'nfc', outcome: 'applied',
+        tagId: tag.id, deviceId, ip, lat: geo.lat, lng: geo.lng, createdById: me.id,
+        diagnostics: { ua, ctr: ctrHex, geoAccuracy: geo.accuracy },
       }, { transaction });
-      session = last;
-      star = { side: 'out', colour: starFor('out', punct.state) };
-      outAction = 'checked_out';
+      ({ session } = await punchSvc.rebuildDay({ userId: me.id, clinicDate: clinicDay, cfg, transaction, now }));
+      const grace = await svc.graceOf(session, cfg);
+      if (action === 'checkin') {
+        punct = punctuality({ at: now, expectedAt: session.expectedInAt, graceMinutes: grace, kind: 'in' });
+        star = { side: 'in', colour: starFor('in', punct.state) };
+        outAction = 'checked_in';
+      } else if (action === 'back_in') {
+        // Back in after going out: the same session, no star of its own.
+        punct = { state: 'none', minutes: null };
+        outAction = 'checked_in';
+      } else {
+        punct = punctuality({ at: now, expectedAt: session.expectedOutAt, graceMinutes: grace, kind: 'out' });
+        star = { side: 'out', colour: starFor('out', punct.state) };
+        outAction = 'checked_out';
+      }
     }
     // 'duplicate' → nothing written
 
@@ -184,10 +192,11 @@ const tap = async (req, res) => {
 
     const needsMonth = outAction === 'checked_in' || outAction === 'checked_out' || outAction === 'offer_checkout';
     const month = needsMonth ? await monthBlock(me.id, cfg, now) : null;
-    const duplicateSide = outAction === 'duplicate' && last && last.status !== 'open' ? 'out' : 'in';
+    const duplicateSide = outAction === 'duplicate' && counted.length % 2 === 0 ? 'out' : 'in';
     const messages = buildTapMessages({
       action: outAction, user: me, session: session ? session.get({ plain: true }) : null, punct, month,
       now, positiveFeedback: cfg.positiveFeedback, duplicateSide,
+      reentry: action === 'back_in', lastAt: action === 'duplicate' && counted.length ? counted[counted.length - 1].at : null,
     });
     console.log(`[HR] tap user=${me.id} tag=${tag.uid} action=${outAction}`);
 
@@ -363,10 +372,11 @@ const STATUS_FILTERS = {
 
 // CSV through the shared utils/csv (HR Tier 2 — also used by the leave register).
 const sendRegisterCsv = (res, rows, filename) => {
-  const headers = ['Date', 'Person', 'Employee ID', 'Role', 'In', 'Out', 'Hours', 'In star', 'Out star', 'Late min', 'Early-out min', 'Method', 'Verification', 'Door', 'Status', 'Amended by'];
+  const headers = ['Date', 'Person', 'Employee ID', 'Role', 'In', 'Out', 'Hours', 'Ins', 'Outs', 'Away min', 'In star', 'Out star', 'Late min', 'Early-out min', 'Method', 'Verification', 'Door', 'Status', 'Amended by'];
   const lines = rows.map(svc.serializeSession).map((s) => [
     s.clinicDate, s.person?.name, s.person?.employeeId, s.person?.role, s.checkInHHMM, s.checkOutHHMM,
     s.minutesWorked == null ? '' : `${Math.floor(s.minutesWorked / 60)}:${String(s.minutesWorked % 60).padStart(2, '0')}`,
+    s.inCount ?? '', s.outCount ?? '', s.awayMinutes ?? '',
     starFor('in', s.checkInPunctuality) || '', starFor('out', s.checkOutPunctuality) || '',
     s.lateMinutes ?? '', s.earlyOutMinutes ?? '', s.checkInMethod, s.checkInVerification, s.door || '', s.status, s.amendedBy || '',
   ]);
@@ -420,22 +430,23 @@ const manual = async (req, res) => {
 
     const cfg = await getHrConfig();
     const clinicDate = clinicToday(checkInAt);
-    const expected = await svc.expectedFor(target.id, clinicDate, cfg);
-    const pIn = punctuality({ at: checkInAt, expectedAt: expected.startAt, graceMinutes: expected.grace, kind: 'in' });
-    const pOut = checkOutAt ? punctuality({ at: checkOutAt, expectedAt: expected.endAt, graceMinutes: expected.grace, kind: 'out' }) : { state: 'none', minutes: null };
+    // One session per day (17 Oct 2026): a day that already has one is amended,
+    // not given a second.
+    const existing = await StaffAttendance.findOne({
+      where: { UserId: target.id, clinicDate, status: { [Op.in]: ['open', 'closed', 'missed_checkout'] } },
+    });
+    if (existing) return error(res, 'This person already has a session that day — amend it instead.', 409);
 
+    // HR's times are punches like any other, so a fingerprint or NFC punch
+    // later that day joins the same session.
     transaction = await sequelize.transaction();
-    const row = await StaffAttendance.create({
-      UserId: target.id, clinicDate, checkInAt, checkOutAt,
-      checkInMethod: 'manual', checkOutMethod: checkOutAt ? 'manual' : null,
-      checkInVerification: 'manual', checkOutVerification: checkOutAt ? 'manual' : null,
-      expectedInAt: expected.startAt, expectedOutAt: expected.endAt,
-      checkInPunctuality: pIn.state, lateMinutes: pIn.state === 'late' ? pIn.minutes : (expected.startAt ? 0 : null),
-      checkOutPunctuality: pOut.state, earlyOutMinutes: pOut.state === 'early' ? pOut.minutes : (checkOutAt && expected.endAt ? 0 : null),
-      status: checkOutAt ? 'closed' : 'open',
-      amendedById: req.user.id, amendedAt: new Date(), amendReason: reason,
-      createdById: req.user.id,
-      diagnostics: { manual: true },
+    const punch = { UserId: target.id, clinicDate, source: 'manual', outcome: 'applied', createdById: req.user.id, diagnostics: { manual: true } };
+    await StaffPunch.create({ ...punch, at: checkInAt }, { transaction });
+    if (checkOutAt) await StaffPunch.create({ ...punch, at: checkOutAt }, { transaction });
+    const { session: built } = await punchSvc.rebuildDay({ userId: target.id, clinicDate, cfg, transaction });
+    const row = await built.update({
+      amendedById: req.user.id, amendedAt: new Date(), amendReason: reason, createdById: req.user.id,
+      diagnostics: { ...(parseJsonColumn(built.diagnostics) || {}), manual: true },
     }, { transaction });
     await svc.writeUserEditLog({
       targetUserId: target.id, actor: req.user, transaction,
@@ -501,7 +512,19 @@ const amend = async (req, res) => {
       lateMinutes: pIn.state === 'late' ? pIn.minutes : (expected.startAt ? 0 : null),
       checkOutPunctuality: pOut.state, earlyOutMinutes: pOut.state === 'early' ? pOut.minutes : (after.checkOutAt && expected.endAt ? 0 : null),
       amendedById: req.user.id, amendedAt: new Date(), amendReason: reason,
+      // HR has the last word on what HR set (17 Oct 2026): the check-in, and
+      // the check-out when HR gave one. A session HR leaves open still closes
+      // at the person's next "out". Later punches always count in the ins and outs.
+      diagnostics: { ...(parseJsonColumn(row.diagnostics) || {}), hrLocked: { in: true, out: !!after.checkOutAt } },
     }, { transaction });
+    // Voiding takes the day's punches with it, so the next punch starts afresh;
+    // un-voiding brings them back (and merges the day if it has a newer session).
+    if (after.status === 'voided' && before.status !== 'voided') {
+      await punchSvc.setSessionPunchesVoided(row.id, true, transaction);
+    } else if (before.status === 'voided' && after.status !== 'voided') {
+      await punchSvc.setSessionPunchesVoided(row.id, false, transaction);
+      await punchSvc.rebuildDay({ userId: row.UserId, clinicDate, cfg, transaction });
+    }
     await svc.writeUserEditLog({ targetUserId: row.UserId, actor: req.user, transaction, changes: { ...changes, reason: { from: null, to: reason } } });
     await transaction.commit(); transaction = null;
     const full = await StaffAttendance.findByPk(row.id, { include: svc.SESSION_INCLUDE });
@@ -522,7 +545,8 @@ const getOne = async (req, res) => {
     if (row.UserId !== req.user.id && !(await hrScope.canActOn(req.user, PERMISSIONS.HR_VIEW, row.UserId))) {
       return error(res, 'Session not found', 404);
     }
-    return success(res, svc.serializeSession(row));
+    // Every punch of the day: the in-and-out trail (17 Oct 2026).
+    return success(res, { ...svc.serializeSession(row), punches: await punchSvc.punchesForSession(row.id) });
   } catch (err) {
     console.error('StaffAttendance.getOne error:', err);
     return error(res, 'Failed to load the session', 500);

@@ -2,11 +2,11 @@ const { test, describe } = require('node:test');
 const assert = require('node:assert/strict');
 
 const {
-  decide, punctuality, starFor, dayCell, streakNoRed, monthSummary, minutesBetween, clinicHHMM,
+  punctuality, starFor, dayCell, streakNoRed, monthSummary, minutesBetween, clinicHHMM,
 } = require('../utils/attendanceRules');
 
 // =====================================================================
-// Every branch of the tap decision table, both kinds of punctuality, the
+// Both kinds of punctuality, the
 // star mapping, and the month arithmetic — pure, no database. Nairobi has no
 // DST, so instants are built at UTC+3 directly.
 // =====================================================================
@@ -14,55 +14,9 @@ const {
 // A clinic-wall-clock instant: '2026-09-23 08:04' at UTC+3.
 const at = (ymd, hhmm) => new Date(`${ymd}T${hhmm}:00+03:00`);
 
-const CFG = { debounceSeconds: 120, minSessionMinutes: 10, confirmCheckout: true };
 
-describe('decide() — the tap decision table', () => {
-  const now = at('2026-09-23', '17:05');
-
-  test('no session today → checkin', () => {
-    assert.equal(decide({ now, lastSession: null, cfg: CFG }), 'checkin');
-  });
-
-  test('open session, tap within the debounce → duplicate', () => {
-    const s = { status: 'open', checkInAt: at('2026-09-23', '17:04') };
-    assert.equal(decide({ now, lastSession: s, cfg: CFG }), 'duplicate');
-  });
-
-  test('open session shorter than the minimum → duplicate', () => {
-    const s = { status: 'open', checkInAt: at('2026-09-23', '16:58') };
-    assert.equal(decide({ now, lastSession: s, cfg: CFG }), 'duplicate');
-  });
-
-  test('open session, confirmation required, no confirm → offer_checkout', () => {
-    const s = { status: 'open', checkInAt: at('2026-09-23', '08:04') };
-    assert.equal(decide({ now, lastSession: s, cfg: CFG }), 'offer_checkout');
-  });
-
-  test('open session with confirm → checkout', () => {
-    const s = { status: 'open', checkInAt: at('2026-09-23', '08:04') };
-    assert.equal(decide({ now, lastSession: s, confirm: true, cfg: CFG }), 'checkout');
-  });
-
-  test('open session, confirmation switched off → checkout straight away', () => {
-    const s = { status: 'open', checkInAt: at('2026-09-23', '08:04') };
-    assert.equal(decide({ now, lastSession: s, cfg: { ...CFG, confirmCheckout: false } }), 'checkout');
-  });
-
-  test('closed session, tap right after checking out → duplicate (the same brush past the tag)', () => {
-    const s = { status: 'closed', checkInAt: at('2026-09-23', '08:04'), checkOutAt: at('2026-09-23', '17:04') };
-    assert.equal(decide({ now, lastSession: s, cfg: CFG }), 'duplicate');
-  });
-
-  test('closed session earlier in the day → a new checkin', () => {
-    const s = { status: 'closed', checkInAt: at('2026-09-23', '08:04'), checkOutAt: at('2026-09-23', '13:00') };
-    assert.equal(decide({ now, lastSession: s, cfg: CFG }), 'checkin');
-  });
-
-  test('a missed_checkout row from earlier does not block a new checkin', () => {
-    const s = { status: 'missed_checkout', checkInAt: at('2026-09-22', '08:04'), checkOutAt: null };
-    assert.equal(decide({ now, lastSession: s, cfg: CFG }), 'checkin');
-  });
-});
+// The tap decision table moved to utils/punchDay.decideTap (one session per
+// day, 17 Oct 2026) — tested in tests/punchDay.test.js.
 
 describe('punctuality() — check-in', () => {
   const expected = at('2026-09-23', '08:00');

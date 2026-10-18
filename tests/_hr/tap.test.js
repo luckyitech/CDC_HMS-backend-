@@ -57,7 +57,7 @@ before(async () => {
   today = clinicToday();
   // Tables exist from the migrations; clear HR data + users only.
   await db.sequelize.query('SET FOREIGN_KEY_CHECKS=0');
-  for (const m of [StaffAttendance, UserDevice, HrNfcTag, db.StaffWorkHours, UserEditLog, UserLoginLog, StaffProfile, User, db.Setting, db.SettingChangeLog]) await m.destroy({ where: {}, truncate: true });
+  for (const m of [db.StaffPunch, db.HrScannerUser, db.HrScanner, StaffAttendance, UserDevice, HrNfcTag, db.StaffWorkHours, UserEditLog, UserLoginLog, StaffProfile, User, db.Setting, db.SettingChangeLog]) await m.destroy({ where: {}, truncate: true });
   await db.sequelize.query('SET FOREIGN_KEY_CHECKS=1');
   doctor = await User.create({ firstName: 'Ebrahim', lastName: 'Yusuf', email: 'e@cdc.test', password: 'x', role: 'doctor', isActive: true });
   nurse  = await User.create({ firstName: 'Amina', lastName: 'Mwangi', email: 'a@cdc.test', password: 'x', role: 'nurse', isActive: true });
@@ -179,11 +179,17 @@ describe('the tap, end to end', () => {
     assert.equal(d.person.title, '');
   });
 
-  test('a second check-in on the same day earns no in-star', async () => {
+  test('after checking out, a tap is "back in" on the SAME session — no new session, no star (17 Oct 2026)', async () => {
+    const before = await StaffAttendance.count({ where: { UserId: doctor.id, clinicDate: today, status: 'closed' } });
     const r = await call(hrAttendance.tap, { user: asUser(doctor), body: tagUrl() });
     assert.equal(r.body.data.action, 'checked_in');
-    assert.deepEqual(r.body.data.star, { side: 'in', colour: null });
-    assert.equal(r.body.data.session.checkInPunctuality, 'none');
+    assert.equal(r.body.data.star, null);
+    assert.match(r.body.data.messages.headline, /^Back in, /);
+    assert.equal(r.body.data.session.status, 'open');
+    assert.equal(r.body.data.session.inCount, 2);
+    assert.equal(r.body.data.session.outCount, 1);
+    assert.equal(await StaffAttendance.count({ where: { UserId: doctor.id, clinicDate: today, status: { [require('sequelize').Op.in]: ['open', 'closed', 'missed_checkout'] } } }), 1);
+    assert.equal(before, 1);
   });
 });
 
@@ -203,10 +209,10 @@ describe('HR views', () => {
 
   test('register list + CSV', async () => {
     const r = await call(hrAttendance.list, { user: asUser(hr), query: { from: today, to: today } });
-    assert.ok(r.body.data.rows.length >= 4);
+    assert.ok(r.body.data.rows.length >= 3);
     assert.ok(r.body.data.rows.every((x) => x.person && x.person.name));
     const csv = await call(hrAttendance.list, { user: asUser(hr), query: { from: today, to: today, format: 'csv' } });
-    assert.ok(String(csv.body).startsWith('\ufeffDate,Person,Employee ID,Role,In,Out,Hours,In star,Out star'));
+    assert.ok(String(csv.body).startsWith('\ufeffDate,Person,Employee ID,Role,In,Out,Hours,Ins,Outs,Away min,In star,Out star'));
     const late = await call(hrAttendance.list, { user: asUser(hr), query: { from: today, to: today, status: 'late' } });
     assert.equal(late.body.data.rows.length, 2);
   });
