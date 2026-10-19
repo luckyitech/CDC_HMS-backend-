@@ -10,6 +10,14 @@ const {
   dueSoonWhere,
 } = require('../utils/passwordRotation');
 const { notifyStaffOfRotationPolicy } = require('../services/passwordRotationNotifier');
+const {
+  TWO_FACTOR_ROLES,
+  TTL_BOUNDS,
+  ATTEMPT_BOUNDS,
+  getTwoFactorConfig,
+  setTwoFactorConfig,
+} = require('../utils/loginOtp');
+const loginOtpService = require('../services/loginOtp');
 const { recordSettingChanges } = require('../services/settingChangeLog');
 const clinicModules = require('../services/clinicModules');
 const db = require('../models');
@@ -116,6 +124,92 @@ const updatePasswordRotation = async (req, res) => {
   } catch (err) {
     console.error('updatePasswordRotation error:', err.message);
     return error(res, 'Failed to update the password rotation setting', 500);
+  }
+};
+
+// =====================================================================
+// Two-factor sign-in (System Settings → Security)
+//
+// Same shape as the password-rotation pair above: one payload used by both the
+// read and the write, so the page always gets the recomputed numbers back.
+// =====================================================================
+
+const buildTwoFactorPayload = async () => {
+  const [{ enabled, ttlMinutes, maxAttempts }, ready] = await Promise.all([
+    getTwoFactorConfig(),
+    // WHO CANNOT RECEIVE A CODE. The one thing that turns this feature into a
+    // lockout, so it is computed whether or not the policy is on — the
+    // administrator sees it BEFORE they flip the switch, not afterwards by
+    // phone. Shared with scripts/two-factor.js rather than reimplemented here;
+    // see services/loginOtp.js readiness() on why that matters.
+    loginOtpService.readiness(),
+  ]);
+
+  return {
+    enabled,
+    ttlMinutes,
+    maxAttempts,
+    ttlBounds: TTL_BOUNDS,
+    attemptBounds: ATTEMPT_BOUNDS,
+    affectedRoles: TWO_FACTOR_ROLES,
+    accountsInScope: ready.accountsInScope,
+    unreachableAccounts: ready.unreachable,
+    emailDomains: ready.emailDomains,
+  };
+};
+
+/** GET /api/settings/two-factor */
+const getTwoFactor = async (req, res) => {
+  try {
+    return success(res, await buildTwoFactorPayload());
+  } catch (err) {
+    console.error('getTwoFactor error:', err.message);
+    return error(res, 'Failed to load the two-factor sign-in setting', 500);
+  }
+};
+
+/**
+ * PUT /api/settings/two-factor
+ * Body may carry any of: enabled (boolean), ttlMinutes, maxAttempts.
+ * Authorization: the normal admin gate (see routes/settings.js).
+ */
+const updateTwoFactor = async (req, res) => {
+  try {
+    const { enabled, ttlMinutes, maxAttempts } = req.body;
+
+    if (enabled === undefined && ttlMinutes === undefined && maxAttempts === undefined) {
+      return error(res, "Provide 'enabled', 'ttlMinutes' and/or 'maxAttempts'", 400);
+    }
+    if (enabled !== undefined && typeof enabled !== 'boolean') {
+      return error(res, "'enabled' must be true or false", 400);
+    }
+    const inRange = (v, { min, max }) => Number.isInteger(v) && v >= min && v <= max;
+    if (ttlMinutes !== undefined && !inRange(ttlMinutes, TTL_BOUNDS)) {
+      return error(res, `'ttlMinutes' must be a whole number between ${TTL_BOUNDS.min} and ${TTL_BOUNDS.max}`, 400);
+    }
+    if (maxAttempts !== undefined && !inRange(maxAttempts, ATTEMPT_BOUNDS)) {
+      return error(res, `'maxAttempts' must be a whole number between ${ATTEMPT_BOUNDS.min} and ${ATTEMPT_BOUNDS.max}`, 400);
+    }
+
+    const before = await getTwoFactorConfig();
+    const after = await setTwoFactorConfig({ enabled, ttlMinutes, maxAttempts });
+
+    // Audit trail → Activity Log ('setting_changed'). Fire-and-forget. Turning
+    // the second factor off is exactly the change an administrator should have
+    // to have their name against.
+    recordSettingChanges({
+      user: req.user, area: 'Security', before, after,
+      fields: {
+        enabled:     { key: 'twoFactorEnabled',     label: 'Two-factor sign-in (emailed code)' },
+        ttlMinutes:  { key: 'twoFactorTtlMinutes',  label: 'Code lifetime (minutes)' },
+        maxAttempts: { key: 'twoFactorMaxAttempts', label: 'Allowed code attempts' },
+      },
+    });
+
+    return success(res, await buildTwoFactorPayload());
+  } catch (err) {
+    console.error('updateTwoFactor error:', err.message);
+    return error(res, 'Failed to update the two-factor sign-in setting', 500);
   }
 };
 
@@ -472,6 +566,8 @@ module.exports = {
   updateEmail,
   getPasswordRotation,
   updatePasswordRotation,
+  getTwoFactor,
+  updateTwoFactor,
   getLabInbox,
   updateLabInbox,
   testLabInbox,

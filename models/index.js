@@ -157,6 +157,7 @@ const MessageTemplate             = require('./MessageTemplate');
 const StaffAttendance             = require('./StaffAttendance');
 const HrNfcTag                    = require('./HrNfcTag');
 const UserDevice                  = require('./UserDevice');
+const LoginOtp                    = require('./LoginOtp');
 const HrScanner                   = require('./HrScanner');
 const HrScannerUser               = require('./HrScannerUser');
 const StaffPunch                  = require('./StaffPunch');
@@ -811,6 +812,12 @@ User.hasMany(UserDevice);
 UserDevice.belongsTo(User);
 UserDevice.belongsTo(User, { as: 'revokedBy', foreignKey: 'revokedById' });
 
+// --- Two-factor sign-in: live emailed-code challenges (19 Oct 2026) ---
+// CASCADE, not SET NULL: an orphaned challenge is a code that can no longer
+// be tied to an account, which is not something to keep.
+User.hasMany(LoginOtp, { onDelete: 'CASCADE' });
+LoginOtp.belongsTo(User);
+
 // Fingerprint scanner (17 Oct 2026): every punch, the scanner, its users.
 HrScanner.belongsTo(User, { as: 'createdBy', foreignKey: 'createdById' });
 HrScanner.hasMany(HrScannerUser, { foreignKey: 'scannerId' });
@@ -977,6 +984,7 @@ const db = {
   StaffAttendance,
   HrNfcTag,
   UserDevice,
+  LoginOtp,
   HrScanner,
   HrScannerUser,
   StaffPunch,

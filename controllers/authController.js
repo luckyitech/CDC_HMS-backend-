@@ -12,6 +12,8 @@ const db = require('../models');
 
 const { User, StaffProfile, Patient, UserDevice } = db;
 const { logLogin } = require('../services/activityLogService');
+const loginOtp = require('../services/loginOtp');
+const { appliesTo, getTwoFactorConfig, looksLikeCode, UNDELIVERABLE } = require('../utils/loginOtp');
 const { getHrConfig } = require('../utils/hrConfig');
 const { STAFF_ROLES } = require('../constants/staffRoles');
 
@@ -157,7 +159,59 @@ const deviceSession = async (req, res) => {
 };
 
 // ------------------------------------
+// Opening the session — the last four steps of a sign-in.
+//
+// Extracted because there are now two ways to reach them: a password alone
+// (two-factor off) and a verified code (two-factor on). Keeping one copy is
+// what stops the two paths drifting — a `method` recorded on one and not the
+// other, or a remembered phone that works through one door only.
+//
+// `rememberDevice` and `context` are passed in rather than read from req.body:
+// on the two-factor path they come from the challenge row, which recorded what
+// the PASSWORD step asked for. See models/LoginOtp.js on why the verify request
+// is not allowed to assert them for itself.
+// ------------------------------------
+const completeLogin = async (user, req, { rememberDevice = false, context = null, method = 'password' } = {}) => {
+  // Remember this phone? Only honoured from the HR tap page, and only for
+  // internal accounts — a patient never gets a device token.
+  let deviceToken = null;
+  let deviceId = null;
+  if (rememberDevice === true && context === 'hr-tap' && user.role !== 'patient') {
+    try {
+      const { raw, device } = await createRememberedDevice(user, req);
+      deviceToken = raw;
+      deviceId = device.id;
+    } catch (err) {
+      console.error('Auth.completeLogin rememberDevice error:', err.message);   // login still succeeds
+    }
+  }
+
+  // Sign JWT (carries the device id so a tap can record which phone sent it)
+  const token = signSession(user, deviceId ? { deviceId } : {});
+
+  // Record login event (staff / doctor / lab only — fire-and-forget). `method`
+  // distinguishes a password-only sign-in from a two-factor one in the Activity
+  // log, which is how an administrator can see the policy actually biting.
+  logLogin(user, clientIp(req), method);
+
+  const userData = await buildUserResponse(user);
+
+  return { token, user: userData, ...(deviceToken ? { deviceToken } : {}) };
+};
+
+// ------------------------------------
 // POST /api/auth/login
+//
+// With two-factor OFF this behaves exactly as it always has. With it ON, a
+// correct password no longer returns a token — it returns a challenge, and
+// POST /api/auth/verify-otp is what opens the session.
+//
+// NO TOKEN IS ISSUED BEFORE THE CODE IS ACCEPTED, not even a restricted one.
+// middleware/auth.js admits any JWT signed with JWT_SECRET and re-reads role
+// and permissions from the row, so a "pending" token would be a working
+// session on every route in the system unless that middleware learned to
+// refuse it. An opaque challenge id cannot be mistaken for a session by
+// anything.
 // ------------------------------------
 const login = async (req, res) => {
   const { email, password } = req.body;
@@ -170,30 +224,179 @@ const login = async (req, res) => {
   const match = await bcrypt.compare(password, user.password);
   if (!match) return error(res, 'Invalid password', 401);
 
-  // 3. Remember this phone? Only honoured from the HR tap page, and only for
-  //    internal accounts — a patient never gets a device token.
-  let deviceToken = null;
-  let deviceId = null;
-  if (req.body.rememberDevice === true && req.body.context === 'hr-tap' && user.role !== 'patient') {
-    try {
-      const { raw, device } = await createRememberedDevice(user, req);
-      deviceToken = raw;
-      deviceId = device.id;
-    } catch (err) {
-      console.error('Auth.login rememberDevice error:', err.message);   // login still succeeds
+  // 3. Second factor, if this account is in scope. Read fresh (30s cache) so
+  //    switching the policy on takes effect for the next sign-in, not the next
+  //    deploy.
+  const config = await getTwoFactorConfig();
+  const rememberDevice = req.body.rememberDevice === true;
+  const context = req.body.context === 'hr-tap' ? 'hr-tap' : null;
+
+  if (appliesTo(user, config)) {
+    const issued = await loginOtp.issueChallenge(user, {
+      ip: clientIp(req), rememberDevice, context,
+    });
+
+    if (issued.outcome === UNDELIVERABLE.RESERVED_DOMAIN) {
+      // The address on the account is a placeholder at a domain that cannot
+      // receive mail (example.com, .test, .invalid). Named distinctly from
+      // 'no-email' so the administrator is sent to replace a fiction rather
+      // than to add something that is already there.
+      return error(
+        res,
+        'The email address on your account cannot receive mail, so a sign-in code cannot be sent. Please ask an administrator to set a real email address on your account.',
+        403,
+        { code: 'OTP_UNDELIVERABLE_EMAIL' },
+      );
     }
+
+    if (issued.outcome === UNDELIVERABLE.NO_EMAIL) {
+      // The password was right, so this is a real person locked out by a gap in
+      // their own record rather than an attacker being refused. Say so plainly
+      // and name the fix, because they cannot solve it themselves.
+      return error(
+        res,
+        'Your account has no email address on file, so a sign-in code cannot be sent. Please ask an administrator to add your email address.',
+        403,
+        { code: 'OTP_NO_EMAIL' },
+      );
+    }
+
+    if (issued.outcome === 'send-failed') {
+      console.error('Auth.login OTP send failed:', issued.error?.message);
+      // Deliberately NOT let through on the password alone. A mail outage is
+      // exactly when an attacker holding a stolen password would most like the
+      // second factor to be skipped.
+      return error(
+        res,
+        'We could not send your sign-in code. Please try again in a moment, or contact your administrator if it keeps failing.',
+        503,
+        { code: 'OTP_SEND_FAILED' },
+      );
+    }
+
+    // 401 with a code the frontend branches on, like PASSWORD_ROTATION_REQUIRED.
+    // The masked address is returned because "we sent you a code" is not
+    // actionable if the person cannot tell which of their mailboxes to open.
+    return error(res, 'We have emailed you a sign-in code.', 401, {
+      code: 'OTP_REQUIRED',
+      challengeId: issued.challengeId,
+      maskedEmail: issued.maskedEmail,
+      expiresAt: issued.expiresAt,
+      expiresMinutes: issued.expiresMinutes,
+    });
   }
 
-  // 4. Sign JWT (carries the device id so a tap can record which phone sent it)
-  const token = signSession(user, deviceId ? { deviceId } : {});
+  // 4. Two-factor off (or out of scope for this role) — open the session now.
+  const payload = await completeLogin(user, req, { rememberDevice, context, method: 'password' });
+  return success(res, payload);
+};
 
-  // 5. Record login event (staff / doctor / lab only — fire-and-forget)
-  logLogin(user, clientIp(req));
+// ------------------------------------
+// POST /api/auth/verify-otp { challengeId, code }
+//
+// The second half of a two-factor sign-in. The challenge row says which
+// account this is for, so nothing here is taken from the client except the
+// code itself.
+// ------------------------------------
+const verifyOtp = async (req, res) => {
+  try {
+    const { challengeId, code } = req.body;
 
-  // 6. Build response with profile
-  const userData = await buildUserResponse(user);
+    // Shape-checked before the lookup so a malformed code never costs the user
+    // one of their real attempts.
+    if (!looksLikeCode(code)) {
+      return error(res, 'Enter the 6-digit code from your email.', 400, { code: 'OTP_MALFORMED' });
+    }
 
-  return success(res, { token, user: userData, ...(deviceToken ? { deviceToken } : {}) });
+    const result = await loginOtp.verifyChallenge(challengeId, String(code).trim(), { ip: clientIp(req) });
+
+    switch (result.outcome) {
+      case 'ok': {
+        const payload = await completeLogin(result.user, req, {
+          rememberDevice: result.rememberDevice,
+          context: result.context,
+          method: 'otp',
+        });
+        return success(res, payload);
+      }
+
+      // 400, not 401: a wrong code is a retry on the page the user is already
+      // on. A 401 would be caught by the frontend's axios interceptor, which
+      // clears the session and bounces the browser — throwing the person off
+      // the very screen they are meant to type the next code into.
+      case 'bad-code':
+        return error(
+          res,
+          result.attemptsLeft === 1
+            ? 'That code is not right. You have 1 attempt left before you need to sign in again.'
+            : `That code is not right. You have ${result.attemptsLeft} attempts left.`,
+          400,
+          { code: 'OTP_BAD_CODE', attemptsLeft: result.attemptsLeft },
+        );
+
+      case 'expired':
+        return error(res, 'That code has expired. Please sign in again to get a new one.', 400, { code: 'OTP_EXPIRED' });
+
+      case 'attempts-exhausted':
+        return error(res, 'Too many incorrect codes. Please sign in again.', 400, { code: 'OTP_ATTEMPTS_EXHAUSTED' });
+
+      case 'consumed':
+        return error(res, 'That code has already been used. Please sign in again.', 400, { code: 'OTP_CONSUMED' });
+
+      case 'account-unusable':
+        return error(res, 'Your account has been deactivated. Please contact the administrator.', 401);
+
+      case 'not-found':
+      default:
+        // One message for "no such challenge" and for a stale one, so this
+        // cannot be used to learn which challenge ids exist.
+        return error(res, 'This sign-in has expired. Please sign in again.', 400, { code: 'OTP_NOT_FOUND' });
+    }
+  } catch (err) {
+    console.error('Auth.verifyOtp error:', err.message);
+    return error(res, 'Could not check your code. Please try again.', 500);
+  }
+};
+
+// ------------------------------------
+// POST /api/auth/resend-otp { challengeId }
+//
+// A new code for a sign-in already in progress. The attempt count is kept, so
+// this is not a way to reset a nearly-exhausted challenge.
+// ------------------------------------
+const resendOtp = async (req, res) => {
+  try {
+    const result = await loginOtp.resendChallenge(req.body.challengeId, { ip: clientIp(req) });
+
+    switch (result.outcome) {
+      case 'sent':
+        return success(res, {
+          message: 'We have emailed you a new code.',
+          challengeId: result.challengeId,
+          maskedEmail: result.maskedEmail,
+          expiresAt: result.expiresAt,
+          expiresMinutes: result.expiresMinutes,
+          resendsLeft: result.resendsLeft,
+        });
+
+      case 'resend-limit':
+        return error(res, 'We have sent you several codes already. Please sign in again.', 429, { code: 'OTP_RESEND_LIMIT' });
+
+      case 'send-failed':
+        console.error('Auth.resendOtp send failed:', result.error?.message);
+        return error(res, 'We could not send your sign-in code. Please try again in a moment.', 503, { code: 'OTP_SEND_FAILED' });
+
+      case 'expired':
+      case 'consumed':
+      case 'attempts-exhausted':
+      case 'not-found':
+      default:
+        return error(res, 'This sign-in has expired. Please sign in again.', 400, { code: 'OTP_NOT_FOUND' });
+    }
+  } catch (err) {
+    console.error('Auth.resendOtp error:', err.message);
+    return error(res, 'Could not send a new code. Please try again.', 500);
+  }
 };
 
 // ------------------------------------
@@ -331,6 +534,8 @@ const logout = async (req, res) => {
 
 module.exports = {
   login,
+  verifyOtp,
+  resendOtp,
   deviceSession,
   forgotPassword,
   resetPassword,

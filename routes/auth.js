@@ -3,7 +3,7 @@ const router = express.Router();
 const { body } = require('express-validator');
 const validate = require('../middleware/validate');
 const { authenticate } = require('../middleware/auth');
-const { authLimiter, strictLimiter } = require('../middleware/rateLimiter');
+const { authLimiter, otpLimiter, strictLimiter } = require('../middleware/rateLimiter');
 const authController = require('../controllers/authController');
 
 // POST /api/auth/login
@@ -13,6 +13,24 @@ router.post('/login', authLimiter, [
   body('password').notEmpty().withMessage('Password is required'),
   validate,
 ], authController.login);
+
+// POST /api/auth/verify-otp — the second half of a two-factor sign-in.
+// The challenge id says which account this is for, so no email or password is
+// re-sent here. Both fields are shape-checked: a malformed code must not cost
+// the user one of their real attempts.
+router.post('/verify-otp', otpLimiter, [
+  body('challengeId').isString().isLength({ min: 20, max: 64 }).withMessage('challengeId is required'),
+  body('code').isString().trim().matches(/^\d{6}$/).withMessage('Enter the 6-digit code from your email'),
+  validate,
+], authController.verifyOtp);
+
+// POST /api/auth/resend-otp — a fresh code for a sign-in already in progress.
+// Capped per challenge in services/loginOtp.js as well as per IP here, because
+// this one sends mail.
+router.post('/resend-otp', otpLimiter, [
+  body('challengeId').isString().isLength({ min: 20, max: 64 }).withMessage('challengeId is required'),
+  validate,
+], authController.resendOtp);
 
 // POST /api/auth/device-session — a remembered phone (HR Suite tap page)
 // exchanges its long-lived token for a normal session. Same limiter as login:
