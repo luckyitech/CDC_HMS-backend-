@@ -5,8 +5,7 @@
 //   HrScanners       the scanner the relay reports for (key stored as SHA-256)
 //   HrScannerUsers   users enrolled on it, and the staff member each is linked to
 //   StaffPunches     every punch: NFC tap, fingerprint/card, or an HR time
-//   StaffAttendances + 'fingerprint' / 'card' methods, + inCount, outCount,
-//                    awayMinutes (the ins and outs between first in, last out)
+//   StaffAttendances + 'fingerprint' / 'card' methods
 //
 // Guarded (describeTable / showAllTables before every step) and reversible.
 // down() turns any fingerprint/card method back into 'manual' before
@@ -23,6 +22,9 @@ const hasIndex = async (qi, table, name) => {
 
 const METHODS_NEW = ['nfc', 'code', 'manual', 'fingerprint', 'card'];
 const METHODS_OLD = ['nfc', 'code', 'manual'];
+// Counters an earlier version of this migration (17–18 Oct 2026, never run
+// in production) added; the simplified model (first punch in, last out) has
+// no use for them. down() still removes them if a database got them.
 const COUNTERS = ['inCount', 'outCount', 'awayMinutes'];
 
 const INDEXES = [
@@ -127,11 +129,6 @@ module.exports = {
           allowNull: col === 'checkOutMethod',
           ...(col === 'checkOutMethod' ? { defaultValue: null } : {}),
         });
-      }
-    }
-    for (const col of COUNTERS) {
-      if (!cols[col]) {
-        await queryInterface.addColumn(sessions, col, { type: Sequelize.INTEGER, allowNull: true, defaultValue: null });
       }
     }
   },

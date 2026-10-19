@@ -179,15 +179,17 @@ describe('the tap, end to end', () => {
     assert.equal(d.person.title, '');
   });
 
-  test('after checking out, a tap is "back in" on the SAME session — no new session, no star (17 Oct 2026)', async () => {
+  test('after checking out, a later tap moves the check-out on the SAME session — no new session (19 Oct 2026)', async () => {
     const before = await StaffAttendance.count({ where: { UserId: doctor.id, clinicDate: today, status: 'closed' } });
-    const r = await call(hrAttendance.tap, { user: asUser(doctor), body: tagUrl() });
-    assert.equal(r.body.data.action, 'checked_in');
-    assert.equal(r.body.data.star, null);
-    assert.match(r.body.data.messages.headline, /^Back in, /);
-    assert.equal(r.body.data.session.status, 'open');
-    assert.equal(r.body.data.session.inCount, 2);
-    assert.equal(r.body.data.session.outCount, 1);
+    const was = (await StaffAttendance.findOne({ where: { UserId: doctor.id, clinicDate: today, status: 'closed' } })).checkOutAt;
+    await new Promise((r) => setTimeout(r, 1100));   // the confirm token's iat is whole seconds; the check-out above is this second's
+    const o = await call(hrAttendance.tap, { user: asUser(doctor), body: tagUrl() });
+    assert.equal(o.body.data.action, 'offer_checkout', JSON.stringify(o.body));
+    const r = await call(hrAttendance.tap, { user: asUser(doctor), body: { confirmToken: o.body.data.confirmToken } });
+    assert.equal(r.body.data.action, 'checked_out', JSON.stringify(r.body));
+    assert.equal(r.body.data.session.status, 'closed');
+    assert.ok(new Date(r.body.data.session.checkOutAt) >= new Date(was));
+    assert.ok(r.body.data.messages.facts.some(([k]) => k === 'Replaces your check-out at'));
     assert.equal(await StaffAttendance.count({ where: { UserId: doctor.id, clinicDate: today, status: { [require('sequelize').Op.in]: ['open', 'closed', 'missed_checkout'] } } }), 1);
     assert.equal(before, 1);
   });
@@ -203,7 +205,7 @@ describe('HR views', () => {
     assert.equal(d.counts.lateToday, 2);
     assert.equal(d.counts.refusedToday, 3);
     const emu = d.people.find((p) => p.person.employeeId === 'EMP003');
-    assert.equal(emu.state, 'in');
+    assert.equal(emu.state, 'out');                       // checked out; the later tap moved the check-out, it did not re-open the day
     assert.equal(d.attention.filter((a) => a.kind === 'refused').length, 3);
   });
 
@@ -212,7 +214,7 @@ describe('HR views', () => {
     assert.ok(r.body.data.rows.length >= 3);
     assert.ok(r.body.data.rows.every((x) => x.person && x.person.name));
     const csv = await call(hrAttendance.list, { user: asUser(hr), query: { from: today, to: today, format: 'csv' } });
-    assert.ok(String(csv.body).startsWith('\ufeffDate,Person,Employee ID,Role,In,Out,Hours,Ins,Outs,Away min,In star,Out star'));
+    assert.ok(String(csv.body).startsWith('\ufeffDate,Person,Employee ID,Role,In,Out,Hours,In star,Out star'));
     const late = await call(hrAttendance.list, { user: asUser(hr), query: { from: today, to: today, status: 'late' } });
     assert.equal(late.body.data.rows.length, 2);
   });
@@ -220,11 +222,11 @@ describe('HR views', () => {
   test('mine and mySummary for the doctor', async () => {
     const r = await call(hrAttendance.mine, { user: asUser(doctor), query: {} });
     assert.ok(r.body.data.rows.length >= 2);
-    assert.ok(r.body.data.today.open, 'open session today');
+    assert.ok(!r.body.data.today.open, 'the day is closed: the last punch is the check-out');
     const s = await call(hrAttendance.mySummary, { user: asUser(doctor), query: { month: today.slice(0, 7) } });
     assert.equal(s.body.data.month, today.slice(0, 7));
     assert.equal(s.body.data.stars.in.gold, 1);          // first session of the day: early
-    assert.equal(s.body.data.stars.out.pending, 1);      // last session of the day is still open
+    assert.equal(s.body.data.stars.out.red, 1);          // checked out early
     assert.ok(s.body.data.previousMonth.table);
   });
 

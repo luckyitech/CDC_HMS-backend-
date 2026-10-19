@@ -136,7 +136,7 @@ describe('punches', () => {
     assert.equal((await usersList()).find((u) => u.userNo === '1').waiting, 4);
   });
 
-  test('confirm matches in one click → the waiting punches become her day: first in, last out, ins and outs', async () => {
+  test('confirm matches in one click → the waiting punches become her day: first in, last out', async () => {
     const r = await call(hrScanner.confirmMatches, { user: asUser(hr), params: { id: scanner.id } });
     assert.equal(r.body.data.linked, 3);
     const s = await sessionOf(bridgit, yesterday);
@@ -144,7 +144,7 @@ describe('punches', () => {
     assert.equal(hhmm(s.checkOutAt), '17:05');
     assert.equal(s.status, 'closed');
     assert.equal(s.checkInMethod, 'fingerprint');
-    assert.deepEqual([s.inCount, s.outCount, s.awayMinutes], [2, 2, 45]);
+    assert.equal(s.checkOutMethod, 'fingerprint');
   });
 
   test('the same punches sent again change nothing', async () => {
@@ -165,10 +165,10 @@ describe('punches', () => {
     assert.equal(s.status, 'closed');
   });
 
-  test('a brush within 2 minutes counts once', async () => {
+  test('a brush within 2 minutes of the check-out does not move it', async () => {
     await relay([{ userNo: '2', time: `${yesterday} 17:00:40`, verify: 1 }]);
     const s = await sessionOf(halima, yesterday);
-    assert.deepEqual([s.inCount, s.outCount], [1, 1]);
+    assert.equal(hhmm(s.checkOutAt), '17:00');
   });
 
   test('before go-live is kept, not counted; a future date is implausible', async () => {
@@ -220,14 +220,13 @@ describe('one session per day across methods', () => {
     const after = await sessionOf(halima, yesterday);
     assert.equal(hhmm(after.checkOutAt), '16:00');
     assert.equal(after.status, 'closed');
-    assert.deepEqual([after.inCount, after.outCount], [2, 2]);
+    assert.equal(await StaffPunch.count({ where: { attendanceId: after.id, outcome: 'applied' } }), 5);
   });
 
   test('the session shows its whole trail of punches', async () => {
     const s = await sessionOf(bridgit, yesterday);
     const r = await call(hrAttendance.getOne, { user: asUser(hr), params: { id: s.id } });
-    assert.deepEqual(r.body.data.punches.map((p) => `${hhmm(p.at)} ${p.direction}`), ['08:31 in', '12:40 out', '13:25 in', '17:05 out']);
-    assert.equal(r.body.data.awayMinutes, 45);
+    assert.deepEqual(r.body.data.punches.map((p) => `${hhmm(p.at)} ${p.direction}`), ['08:31 in', '12:40 null', '13:25 null', '17:05 out']);
   });
 });
 
@@ -242,7 +241,7 @@ describe('changing links and go-live', () => {
     r = await call(hrScanner.setLink, { user: asUser(hr), params: { id: scanner.id, userId: (await bridgitRow()).id }, body: { action: 'link', staffId: bridgit.id } });
     assert.equal(r.status, 200);
     const s = await sessionOf(bridgit, yesterday);
-    assert.deepEqual([hhmm(s.checkInAt), hhmm(s.checkOutAt), s.inCount], ['08:31', '17:05', 2]);
+    assert.deepEqual([hhmm(s.checkInAt), hhmm(s.checkOutAt)], ['08:31', '17:05']);
   });
 
   test('one staff member cannot hold two scanner IDs', async () => {
@@ -299,7 +298,7 @@ describe('review fixes', () => {
     await relay([{ userNo: '9', time: `${twoDaysAgo} 17:00:00`, verify: 1 }]);
     const again = await sessionOf(rahma, twoDaysAgo);
     assert.equal(hhmm(again.checkInAt), '17:00');               // a fresh day, not the voided one back
-    assert.equal(again.inCount, 1);
+    assert.equal(again.checkOutAt, null);
     assert.equal((await StaffAttendance.findByPk(s.id)).status, 'voided');
   });
 
@@ -325,7 +324,7 @@ describe('review fixes', () => {
       { userNo: '5', time: `${yesterday} 07:05:00`, verify: 1 },
     ]);
     const s = await sessionOf(night, twoDaysAgo);
-    assert.deepEqual([hhmm(s.checkInAt), hhmm(s.checkOutAt), s.status, s.inCount, s.outCount, s.awayMinutes], ['18:55', '07:05', 'closed', 2, 2, 30]);
+    assert.deepEqual([hhmm(s.checkInAt), hhmm(s.checkOutAt), s.status], ['18:55', '07:05', 'closed']);
     assert.equal(await sessionOf(night, yesterday), null);
   });
 

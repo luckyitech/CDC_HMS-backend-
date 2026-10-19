@@ -12,7 +12,7 @@
 // = { in, out }. A locked check-in stays as HR set it; a locked check-out (HR
 // gave one) keeps the check-out and the status. What HR did not set still
 // follows the punches — so a day HR re-opened closes at the person's next
-// "out". Later punches always count in the ins and outs.
+// "out" (the last punch of the day).
 // =====================================================================
 
 const { Op } = require('sequelize');
@@ -148,7 +148,7 @@ const rebuildDay = async ({ userId, clinicDate, cfg, transaction, now = new Date
   // reason added to, never replaced) and move their punches over.
   let session = sessions.find((x) => lockOf(parseJsonColumn(x.diagnostics)).in) || sessions[0] || null;
   for (const extra of sessions.filter((x) => x !== session)) {
-    const note = 'Merged into one session for the day (every in and out is kept on that session).';
+    const note = 'Merged into one session for the day (every punch is kept on that session).';
     await extra.update({
       status: 'voided', amendedAt: now,
       amendReason: extra.amendReason ? `${extra.amendReason} — ${note}` : note,
@@ -165,7 +165,6 @@ const rebuildDay = async ({ userId, clinicDate, cfg, transaction, now = new Date
   }
 
   const diag = session ? (parseJsonColumn(session.diagnostics) || {}) : {};
-  const counters = { inCount: day.inCount, outCount: day.outCount, awayMinutes: day.awayMinutes };
 
   const expected = session
     ? { startAt: session.expectedInAt, endAt: session.expectedOutAt, grace: await svc.graceOf(session, cfg), source: diag.hoursSource }
@@ -202,7 +201,6 @@ const rebuildDay = async ({ userId, clinicDate, cfg, transaction, now = new Date
   const fields = {
     ...inFields,
     ...outFields,
-    ...counters,
     diagnostics: { ...diag, punchModel: 1, grace: expected.grace, hoursSource: diag.hoursSource || expected.source },
   };
   if (first.deviceId && !lock.in) fields.deviceId = first.deviceId;

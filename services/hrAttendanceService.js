@@ -196,11 +196,6 @@ const serializeSession = (row) => {
     expectedInHHMM: r.expectedInAt ? clinicHHMM(r.expectedInAt) : null,
     expectedOutHHMM: r.expectedOutAt ? clinicHHMM(r.expectedOutAt) : null,
     status: r.status,
-    // One session per day (17 Oct 2026): the ins and outs between the first in
-    // and the last out. null on sessions from before punches were kept.
-    inCount: r.inCount ?? null,
-    outCount: r.outCount ?? null,
-    awayMinutes: r.awayMinutes ?? null,
     checkInIp: r.checkInIp,
     checkOutIp: r.checkOutIp,
     door: r.checkInTag ? r.checkInTag.label : null,

@@ -176,10 +176,6 @@ const tap = async (req, res) => {
         punct = punctuality({ at: now, expectedAt: session.expectedInAt, graceMinutes: grace, kind: 'in' });
         star = { side: 'in', colour: starFor('in', punct.state) };
         outAction = 'checked_in';
-      } else if (action === 'back_in') {
-        // Back in after going out: the same session, no star of its own.
-        punct = { state: 'none', minutes: null };
-        outAction = 'checked_in';
       } else {
         punct = punctuality({ at: now, expectedAt: session.expectedOutAt, graceMinutes: grace, kind: 'out' });
         star = { side: 'out', colour: starFor('out', punct.state) };
@@ -192,11 +188,12 @@ const tap = async (req, res) => {
 
     const needsMonth = outAction === 'checked_in' || outAction === 'checked_out' || outAction === 'offer_checkout';
     const month = needsMonth ? await monthBlock(me.id, cfg, now) : null;
-    const duplicateSide = outAction === 'duplicate' && counted.length % 2 === 0 ? 'out' : 'in';
+    const duplicateSide = outAction === 'duplicate' && counted.length > 1 ? 'out' : 'in';
     const messages = buildTapMessages({
       action: outAction, user: me, session: session ? session.get({ plain: true }) : null, punct, month,
       now, positiveFeedback: cfg.positiveFeedback, duplicateSide,
-      reentry: action === 'back_in', lastAt: action === 'duplicate' && counted.length ? counted[counted.length - 1].at : null,
+      lastAt: action === 'duplicate' && counted.length ? counted[counted.length - 1].at : null,
+      movedFrom: action === 'checkout' && counted.length > 1 ? counted[counted.length - 1].at : null,
     });
     console.log(`[HR] tap user=${me.id} tag=${tag.uid} action=${outAction}`);
 
@@ -372,11 +369,10 @@ const STATUS_FILTERS = {
 
 // CSV through the shared utils/csv (HR Tier 2 — also used by the leave register).
 const sendRegisterCsv = (res, rows, filename) => {
-  const headers = ['Date', 'Person', 'Employee ID', 'Role', 'In', 'Out', 'Hours', 'Ins', 'Outs', 'Away min', 'In star', 'Out star', 'Late min', 'Early-out min', 'Method', 'Verification', 'Door', 'Status', 'Amended by'];
+  const headers = ['Date', 'Person', 'Employee ID', 'Role', 'In', 'Out', 'Hours', 'In star', 'Out star', 'Late min', 'Early-out min', 'Method', 'Verification', 'Door', 'Status', 'Amended by'];
   const lines = rows.map(svc.serializeSession).map((s) => [
     s.clinicDate, s.person?.name, s.person?.employeeId, s.person?.role, s.checkInHHMM, s.checkOutHHMM,
     s.minutesWorked == null ? '' : `${Math.floor(s.minutesWorked / 60)}:${String(s.minutesWorked % 60).padStart(2, '0')}`,
-    s.inCount ?? '', s.outCount ?? '', s.awayMinutes ?? '',
     starFor('in', s.checkInPunctuality) || '', starFor('out', s.checkOutPunctuality) || '',
     s.lateMinutes ?? '', s.earlyOutMinutes ?? '', s.checkInMethod, s.checkInVerification, s.door || '', s.status, s.amendedBy || '',
   ]);
@@ -514,7 +510,7 @@ const amend = async (req, res) => {
       amendedById: req.user.id, amendedAt: new Date(), amendReason: reason,
       // HR has the last word on what HR set (17 Oct 2026): the check-in, and
       // the check-out when HR gave one. A session HR leaves open still closes
-      // at the person's next "out". Later punches always count in the ins and outs.
+      // at the person's next "out" (the last punch of the day).
       diagnostics: { ...(parseJsonColumn(row.diagnostics) || {}), hrLocked: { in: true, out: !!after.checkOutAt } },
     }, { transaction });
     // Voiding takes the day's punches with it, so the next punch starts afresh;

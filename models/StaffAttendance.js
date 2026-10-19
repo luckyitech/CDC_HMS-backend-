@@ -105,13 +105,6 @@ const StaffAttendance = defineModel('StaffAttendance', {
     defaultValue: 'open',
   },
 
-  // One session per person per day (17 Oct 2026): built from every punch
-  // (models/StaffPunch.js, utils/punchDay.js). The punches between the first
-  // in and the last out give these counters. NULL on sessions from before.
-  inCount:     { type: DataTypes.INTEGER, allowNull: true, defaultValue: null },
-  outCount:    { type: DataTypes.INTEGER, allowNull: true, defaultValue: null },
-  awayMinutes: { type: DataTypes.INTEGER, allowNull: true, defaultValue: null },
-
   amendedAt:   { type: DataTypes.DATE, allowNull: true, defaultValue: null },
   amendReason: { type: DataTypes.TEXT, allowNull: true, defaultValue: null },
 

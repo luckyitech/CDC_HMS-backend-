@@ -31,11 +31,11 @@ const hoursAndMinutes = (minutes) => {
  * @param {Date}   p.now
  * @param {boolean} p.positiveFeedback
  * @param {'in'|'out'} [p.duplicateSide]
- * @param {boolean} [p.reentry]  back in after going out the same day
  * @param {Date} [p.lastAt]  the punch a duplicate repeats
+ * @param {Date} [p.movedFrom]  a check-out this tap replaces (last punch is the check-out)
  * @returns {{ headline:string, mood:string|null, sub:string|null, facts:Array<[string,string]> }}
  */
-const buildTapMessages = ({ action, user, session, punct, month = {}, now, positiveFeedback = true, duplicateSide, reentry = false, lastAt = null }) => {
+const buildTapMessages = ({ action, user, session, punct, month = {}, now, positiveFeedback = true, duplicateSide, lastAt = null, movedFrom = null }) => {
   const name = user?.firstName || '';
   const greet = greetName(user);
   const hhmm = clinicHHMM(now);
@@ -46,11 +46,7 @@ const buildTapMessages = ({ action, user, session, punct, month = {}, now, posit
   let headline = '', mood = null, sub = null;
   const facts = [];
 
-  if (action === 'checked_in' && reentry) {
-    // Back in after going out (one session per day, 17 Oct 2026): no star.
-    headline = `Back in, ${hhmm}`;
-    if (session?.checkInAt) facts.push(['Checked in today at', clinicHHMM(session.checkInAt)]);
-  } else if (action === 'checked_in') {
+  if (action === 'checked_in') {
     headline = `Checked in, ${hhmm}`;
     const state = punct?.state || 'none';
     if (state === 'on_time') {
@@ -89,6 +85,7 @@ const buildTapMessages = ({ action, user, session, punct, month = {}, now, posit
     if (state === 'on_time') mood = '👍 See you tomorrow.';
     else if (state === 'late') mood = `🌟 ${punct.minutes} minutes past your hours — thank you, ${name}.`;
     else if (state === 'early') { mood = `😟 Checked out ${punct.minutes} minutes early.`; sub = 'See you tomorrow — on time! 🌅'; }
+    if (movedFrom) facts.push(['Replaces your check-out at', clinicHHMM(movedFrom)]);
     if (expectedOut) facts.push(['Your day ends at', expectedOut]);
     if (session?.checkInAt) facts.push(['Today', `${clinicHHMM(session.checkInAt)} – ${hhmm} · ${hoursAndMinutes((now - new Date(session.checkInAt)) / 60000)}`]);
     if (!positiveFeedback && (state === 'on_time' || state === 'late')) mood = null;

@@ -16,8 +16,9 @@ const { defineModel, DataTypes } = require('../utils/defineModel');
 //   ignored        the scanner user is marked ignored (former staff)
 //   voided         HR voided the session it belonged to — never counted again
 //                  (restored to applied if HR un-voids it)
-// direction: 'in' / 'out' when it counts in its day, null when not (a second
-// brush within the debounce, or not applied).
+// direction: 'in' for the day's first punch, 'out' for its last, null for
+// every punch between them, a second brush within the debounce, or one not
+// applied (19 Oct 2026: first in, last out, the rest kept but not read).
 //
 // Association-injected: UserId, attendanceId, scannerId, tagId, deviceId,
 // createdById (models/index.js). The (scannerId, scannerUserNo, at) unique
