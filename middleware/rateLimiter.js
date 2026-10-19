@@ -57,6 +57,43 @@ const authLimiter = rateLimit({
 });
 
 // ------------------------------------
+// Two-Factor Code Limiter
+// ------------------------------------
+// For POST /auth/verify-otp and /auth/resend-otp.
+//
+// Its own limiter because neither existing one fits. authLimiter guards
+// /auth/login, which a wrong CODE never reaches — so it cannot meter code
+// attempts at all. strictLimiter's 3-per-hour would stop a member of staff who
+// simply mistyped twice and asked for a new code.
+//
+// This is the OUTER bound only. The real defence against guessing a 6-digit
+// code is the per-challenge attempt cap in services/loginOtp.js, which an
+// attacker cannot escape by changing IP address.
+//
+// skipSuccessfulRequests IS LOAD-BEARING HERE, and it does not weaken the
+// bound: guessing a code produces FAILURES, and failures are exactly what this
+// counts. What it protects against is the shared address — the whole clinic
+// reaches this API from ONE public IP. Counting successful verifications would
+// pool every member of staff into a single quota, so a Monday morning of
+// fifteen people signing in, some of them twice, would start refusing codes
+// that were perfectly correct.
+//
+// 40 failed attempts per 15 minutes per address is therefore generous for a
+// clinic behind one IP and still useless against a search of 1,000,000.
+const otpLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 40,
+  message: {
+    success: false,
+    message: 'Too many incorrect codes from this network. Please wait a few minutes and sign in again.',
+  },
+  standardHeaders: true,
+  legacyHeaders: false,
+  skipSuccessfulRequests: true,
+  keyGenerator,
+});
+
+// ------------------------------------
 // Strict Rate Limiter
 // ------------------------------------
 // For sensitive operations (password reset, account creation)
@@ -131,6 +168,7 @@ const webhookLimiter = rateLimit({
 module.exports = {
   generalLimiter,
   authLimiter,
+  otpLimiter,
   strictLimiter,
   sseLimiter,
   publicBookingLimiter,

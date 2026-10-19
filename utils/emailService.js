@@ -177,20 +177,39 @@ const barcodeAttachment = (uhid) => {
 
 // ============================================================
 // SEND — base function (all emails go through here)
+//
+// TWO DOORS ONTO ONE TRANSPORT, and the difference matters.
+//
+// deliver() throws when the mail does not leave. sendEmail() swallows, because
+// for every notification in this file that is right: a welcome email that
+// fails must not undo the account it is announcing, and an appointment
+// confirmation that fails must not unbook the appointment.
+//
+// A two-factor code is the opposite. It is not a notification ABOUT something
+// that already happened — it is the thing the user is waiting for, and the only
+// way into their account. Swallowing that failure produces the worst outcome
+// available: a code box the user stares at, with no code coming and no reason
+// given, while the server reports success. So sendLoginOtpEmail calls deliver()
+// and lets the error reach controllers/authController.js, which refuses the
+// sign-in and says the code could not be sent.
 // ============================================================
+const deliver = async (to, subject, html, extraAttachments = []) => {
+  await transporter.sendMail({
+    from: `CDC HMS <${process.env.SMTP_USER}>`,
+    to,
+    subject,
+    html,
+    attachments: [{
+      filename: "cdc.jpg",
+      path: LOGO_PATH,
+      cid: "cdclogo",
+    }, ...extraAttachments],
+  });
+};
+
 const sendEmail = async (to, subject, html, extraAttachments = []) => {
   try {
-    await transporter.sendMail({
-      from: `CDC HMS <${process.env.SMTP_USER}>`,
-      to,
-      subject,
-      html,
-      attachments: [{
-        filename: "cdc.jpg",
-        path: LOGO_PATH,
-        cid: "cdclogo",
-      }, ...extraAttachments],
-    });
+    await deliver(to, subject, html, extraAttachments);
   } catch (err) {
     // Log but don't crash the request — email failure should never block account creation
     console.warn(`[EmailService] Failed to send email to ${to}:`, err.message);
@@ -319,6 +338,50 @@ const sendPasswordResetEmail = async ({ to, name, resetToken }) => {
   `;
 
   await sendEmail(to, 'CDC HMS — Password Reset Request', baseTemplate(body));
+};
+
+// ============================================================
+// EMAIL: Two-factor sign-in code
+// Called from services/loginOtp.js when a correct password is given and
+// two-factor is switched on. THROWS if the mail cannot be sent — see the note
+// on deliver() above.
+// ============================================================
+const sendLoginOtpEmail = async ({ to, name, code, expiresMinutes }) => {
+  const body = `
+    <h2 style="margin:0 0 8px 0;font-size:20px;color:#111827;">Your sign-in code</h2>
+    <p style="margin:0 0 24px 0;font-size:14px;color:#6B7280;">
+      Hi <strong>${name}</strong>, someone just signed in to CDC HMS with your email and password.
+      Enter the code below to finish signing in.
+    </p>
+
+    <table width="100%" cellpadding="0" cellspacing="0">
+      <tr>
+        <td align="center" style="background-color:#F0F7FF;border:2px solid #0066CC;border-radius:12px;padding:22px;">
+          <p style="margin:0 0 6px 0;font-size:12px;letter-spacing:1px;text-transform:uppercase;color:#6B7280;">Sign-in code</p>
+          <p style="margin:0;font-family:monospace;font-size:34px;font-weight:700;letter-spacing:10px;color:#0066CC;">${code}</p>
+        </td>
+      </tr>
+    </table>
+
+    <table width="100%" cellpadding="0" cellspacing="0" style="margin-top:28px;">
+      <tr>
+        <td style="background-color:#FEF2F2;border-left:4px solid #EF4444;border-radius:0 6px 6px 0;padding:12px 16px;">
+          <p style="margin:0;font-size:13px;color:#991B1B;">
+            <strong>This code expires in ${expiresMinutes} ${expiresMinutes === 1 ? 'minute' : 'minutes'} and can be used once.</strong>
+            If you did not try to sign in, someone else may know your password —
+            change it now from the login page using <strong>"Forgot password?"</strong>, and tell your administrator.
+          </p>
+        </td>
+      </tr>
+    </table>
+
+    <p style="margin:24px 0 0 0;font-size:12px;color:#9CA3AF;">
+      Nobody at the clinic will ever ask you for this code. Do not read it out or forward this email.
+    </p>
+  `;
+
+  // deliver(), not sendEmail(): the caller must know if this did not go.
+  await deliver(to, 'CDC HMS — Your sign-in code', baseTemplate(body));
 };
 
 
@@ -598,6 +661,7 @@ module.exports = {
   sendPatientWelcomeEmail,
   sendEmailUpdatedEmail,
   sendPasswordResetEmail,
+  sendLoginOtpEmail,
   sendPasswordRotationNoticeEmail,
   sendAppointmentConfirmationEmail,
   sendDoctorAppointmentNotificationEmail,

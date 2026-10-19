@@ -32,6 +32,22 @@ router.put('/password-rotation', authenticate, authorize('admin', 'config.write'
   validate,
 ], settings.updatePasswordRotation);
 
+// Two-factor sign-in — an emailed one-time code on every password login.
+// Same admin gate and the same reasoning as password-rotation above; the
+// settings-change audit records who turned it on or off.
+//
+// There is also scripts/two-factor.js, which does the same thing from the
+// command line. That is on purpose: if the policy ever locks the
+// administrators themselves out, the way back in must not be a screen that
+// requires signing in.
+router.get('/two-factor', authenticate, authorize('admin', 'config.write'), settings.getTwoFactor);
+router.put('/two-factor', authenticate, authorize('admin', 'config.write'), [
+  body('enabled').optional().isBoolean().withMessage("'enabled' must be true or false").toBoolean(),
+  body('ttlMinutes').optional().isInt().withMessage("'ttlMinutes' must be a whole number").toInt(),
+  body('maxAttempts').optional().isInt().withMessage("'maxAttempts' must be a whole number").toInt(),
+  validate,
+], settings.updateTwoFactor);
+
 // Lab Inbox — the clinic mailbox the labs email reports to, and the import
 // policy. Read, test and write all on the normal admin gate (see the note on
 // password-rotation above).
