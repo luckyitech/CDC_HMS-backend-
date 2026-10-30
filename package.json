@@ -14,8 +14,7 @@
     "test:comms:api": "node tests/_comms/controller.test.js",
     "test:hr": "node --test --test-concurrency=1 \"tests/_hr/*.test.js\"",
     "seed": "node seeders/seed.js",
-    "set-password": "node scripts/set-password.js",
-    "two-factor": "node scripts/two-factor.js"
+    "set-password": "node scripts/set-password.js"
   },
   "keywords": [],
   "author": "",
