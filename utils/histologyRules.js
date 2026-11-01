@@ -60,11 +60,12 @@ const pick = (v, allowed) => (v === undefined || v === null || v === '' ? null :
 const isDate = (v) => typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v) && !Number.isNaN(Date.parse(`${v}T00:00:00Z`));
 
 /**
- * Validate a new request. Returns { ok, value } or { ok:false, message, field }.
- * `findingId` is only checked for shape here; the controller checks the
- * finding belongs to this patient and the Dermatology module is on.
+ * Validate ONE specimen (kind, site, specimen type, pieces, fixative).
+ * Returns { ok, value } or { ok:false, message, field }. `findingId` is only
+ * checked for shape here; the controller checks the finding belongs to this
+ * patient and the Dermatology module is on.
  */
-const cleanRequest = (body = {}) => {
+const cleanSpecimen = (body = {}) => {
   const kind = pick(body.kind, KINDS);
   if (!kind) return fail('Choose histology or cytology', 'kind');
   const siteType = pick(body.siteType, SITE_TYPES);
@@ -107,15 +108,55 @@ const cleanRequest = (body = {}) => {
   }
   value.fixative = pick(body.fixative, FIXATIVES);
   if (value.fixative === undefined) return fail('Unknown fixative', 'fixative');
+  value.alsoRecordProcedure = body.alsoRecordProcedure === true;
+  return { ok: true, value };
+};
 
+/** The request-wide fields: clinical details & question, laboratory, priority, relevant history. */
+const PRIORITIES = ['Routine', 'Urgent', 'STAT'];
+const cleanHeader = (body = {}) => {
+  const value = {};
   value.clinicalDetails = text(body.clinicalDetails, 4000);
   if (value.clinicalDetails === undefined) return fail('Clinical details are too long', 'clinicalDetails');
   if (!value.clinicalDetails) return fail('Give the clinical details and question for the pathologist', 'clinicalDetails');
   value.sendTo = text(body.sendTo, 150);
   if (value.sendTo === undefined) return fail('Laboratory name is too long (150 characters)', 'sendTo');
-
-  value.alsoRecordProcedure = body.alsoRecordProcedure === true;
+  value.priority = pick(body.priority, PRIORITIES) || (body.priority ? undefined : 'Routine');
+  if (value.priority === undefined) return fail('Priority must be Routine, Urgent or STAT', 'priority');
+  value.relevantHistory = text(body.relevantHistory, 1000);
+  if (value.relevantHistory === undefined) return fail('Relevant history is too long (1000 characters)', 'relevantHistory');
   return { ok: true, value };
+};
+
+/** The single-specimen request (a skin finding's biopsy, and the API as it was): one specimen + the request fields. */
+const cleanRequest = (body = {}) => {
+  const s = cleanSpecimen(body);
+  if (!s.ok) return s;
+  const h = cleanHeader(body);
+  if (!h.ok) return h;
+  return { ok: true, value: { ...s.value, ...h.value } };
+};
+
+/**
+ * One histopathology request with several specimens (1 Nov 2026, Emu): the
+ * request fields once, then `specimens` — each histology or cytology.
+ * Returns { ok, value: { header, specimens } } or the first failure, its field
+ * prefixed `specimens.<i>.` and its message with "Specimen N: ".
+ */
+const MAX_SPECIMENS = 10;
+const cleanMultiRequest = (body = {}) => {
+  const list = Array.isArray(body.specimens) ? body.specimens : null;
+  if (!list || !list.length) return fail('Add at least one specimen', 'specimens');
+  if (list.length > MAX_SPECIMENS) return fail(`At most ${MAX_SPECIMENS} specimens on one request`, 'specimens');
+  const h = cleanHeader(body);
+  if (!h.ok) return h;
+  const specimens = [];
+  for (let i = 0; i < list.length; i++) {
+    const s = cleanSpecimen(list[i] || {});
+    if (!s.ok) return fail(`Specimen ${i + 1}: ${s.message}`, `specimens.${i}.${s.field}`);
+    specimens.push(s.value);
+  }
+  return { ok: true, value: { header: h.value, specimens } };
 };
 
 /**
@@ -216,5 +257,5 @@ const resultChangeMode = (request, userId, today) => (
 module.exports = {
   KINDS, SITE_TYPES, TISSUE_TYPES, CYTO_TYPES, SPECIMEN_TYPES, SKIN_BIOPSY_TYPES, FIXATIVES, LOBES, TIRADS,
   MARGINS, BETHESDA, CYTO_CATEGORIES, STATUSES, OVERDUE_DAYS, LABELS, LAB_TEST_NAME, NUMBER_PREFIX, RESULT_FIELDS,
-  cleanRequest, cleanResult, resultShape, isOverdue, daysBetween, resultSummary, siteSummary, resultChangeMode,
+  PRIORITIES, MAX_SPECIMENS, cleanSpecimen, cleanHeader, cleanRequest, cleanMultiRequest, cleanResult, resultShape, isOverdue, daysBetween, resultSummary, siteSummary, resultChangeMode,
 };

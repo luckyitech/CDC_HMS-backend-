@@ -12,7 +12,7 @@ const { PERMISSIONS, passesGate } = require('../constants/permissions');
 const db = require('../models');
 
 const {
-  sequelize, Patient, User, LabTest, CatalogItem, MedicalDocument, HistologyRequest, HistologyEdit,
+  sequelize, Patient, User, LabTest, MedicalDocument, HistologyRequest, HistologyEdit,
   DermFinding, DermFindingRegion, DermProcedure, DermProcedureTarget,
 } = db;
 
@@ -22,9 +22,10 @@ const {
 // Routes: routes/histology.js (module switch 'histology' → 404 while off;
 // reads on clinical.view, writes doctor / histology.record).
 //
-// A request raises ONE Pending lab request ("Histopathology" / "Cytology") on
-// its own requisition, priced from the lab catalogue when the clinic lists it
-// there — the lab and billing see it like any other (H3). The doctor types
+// A histopathology request (1 Nov 2026) carries one or more specimens, each
+// histology or cytology, on ONE requisition: each specimen raises a Pending
+// lab line ("Histopathology" / "Cytology") so the lab sees it, unpriced —
+// the doctor bills from Complete consultation. The doctor types
 // the result when the report is back (H4); the report PDF is an ordinary
 // Medical Document of this patient. A skin specimen may name a finding, but
 // only while Dermatology is on.
@@ -94,6 +95,10 @@ const formatRequest = (r, findings, today) => {
     fixative: r.fixative,
     clinicalDetails: r.clinicalDetails,
     sendTo: r.sendTo,
+    // The request the specimen is on (1 Nov 2026); older rows: their lab line's.
+    requisitionNumber: r.requisitionNumber || (r.labTest ? r.labTest.requisitionNumber : null),
+    priority: r.priority || 'Routine',
+    relevantHistory: r.relevantHistory || null,
     visitDate: r.visitDate,
     requestedById: r.requestedById,
     requestedByName: userName(r.requestedBy),
@@ -219,43 +224,73 @@ const getOne = async (req, res) => {
 // POST /api/histology/patients/:uhid — a new request (+ its lab request,
 // + optionally the biopsy as a procedure on the finding, H9)
 // ---------------------------------------------------------------------
-const create = async (req, res) => {
-  try {
-    const family = await resolvePatient(req.params.uhid);
-    if (!family) return error(res, 'Patient not found', 404);
-    if (family.isDeactivated) return error(res, 'This patient file is inactive (merged). Open the active file.', 403);
-
-    const clean = R.cleanRequest(req.body);
-    if (!clean.ok) return error(res, clean.message, 400, { field: clean.field });
-    const v = clean.value;
-
-    // A skin specimen names a finding of THIS family, and only while
-    // Dermatology is on (a finding is a Dermatology object).
+/**
+ * Check each specimen's finding (skin) against the family and Dermatology,
+ * and whether to record a skin biopsy as a procedure (H9). Returns
+ * { items } or { refuse: [code, message, field] }.
+ */
+const prepareSpecimens = async (req, family, specimens) => {
+  const items = [];
+  for (let i = 0; i < specimens.length; i++) {
+    const v = specimens[i];
+    const at = specimens.length > 1 ? `Specimen ${i + 1}: ` : '';
+    const prefix = specimens.length > 1 ? `specimens.${i}.` : '';
     let finding = null;
     if (v.siteType === 'skin') {
       if (!await isModuleOn('dermatology')) {
-        return error(res, 'Skin findings need the Dermatology module. Choose "Other site" and describe it.', 400, { field: 'siteType' });
+        return { refuse: [400, `${at}Skin findings need the Dermatology module. Choose "Other site" and describe it.`, `${prefix}siteType`] };
       }
       finding = await DermFinding.findOne({
         where: { id: v.findingId, PatientId: { [Op.in]: family.patientIds }, status: { [Op.ne]: 'entered_in_error' } },
       });
-      if (!finding) return error(res, 'That skin finding is not on this patient\'s record', 400, { field: 'findingId' });
+      if (!finding) return { refuse: [400, `${at}That skin finding is not on this patient's record`, `${prefix}findingId`] };
     }
-
-    // H9: record the biopsy as a procedure too — only for a skin biopsy type,
-    // and only for someone who may record skin procedures.
     const biopsyName = BIOPSY_PROCEDURE[v.specimenType];
     const recordProcedure = v.alsoRecordProcedure && finding && !!biopsyName
       && passesGate(req.user, ['doctor', PERMISSIONS.DERM_RECORD]);
+    items.push({ v, finding, recordProcedure, biopsyName });
+  }
+  return { items };
+};
 
-    const today = clinicToday();
-    const now = new Date();
-    const catalogue = await CatalogItem.findOne({ where: { type: 'labTest', name: R.LAB_TEST_NAME[v.kind] } });
+/**
+ * Raise one histopathology request: ONE requisition number, and per specimen
+ * its number (HP- / CY-), a Pending lab line ("Histopathology" / "Cytology")
+ * on that requisition so the lab sees it, and the HistologyRequests row.
+ * No price (1 Nov 2026, Emu): the doctor bills from Complete consultation.
+ * @returns {Promise<number[]>} the new row ids, in order
+ */
+/**
+ * Numbers for several rows written in ONE transaction: the generators read the
+ * highest number outside it, so they cannot see a row this request just wrote
+ * (two specimens got the same LAB- number). Read each series once, then count.
+ */
+const counter = () => {
+  const seen = new Map();
+  return async (key, first) => {
+    if (!seen.has(key)) {
+      const num = await first();
+      const at = num.lastIndexOf('-');
+      seen.set(key, { stem: num.slice(0, at + 1), n: parseInt(num.slice(at + 1), 10), width: num.length - at - 1 });
+      return num;
+    }
+    const s = seen.get(key);
+    s.n += 1;
+    return s.stem + String(s.n).padStart(s.width, '0');
+  };
+};
 
-    const created = await sequelize.transaction(async (t) => {
-      const specimenNumber = await generateNumber(HistologyRequest, 'specimenNumber', R.NUMBER_PREFIX[v.kind]);
-      const testNumber = await generateLabTestNumber(LabTest);
-      const requisitionNumber = await generateRequisitionNumber(LabTest);
+const raiseRequest = async (req, family, header, items) => {
+  const today = clinicToday();
+  const now = new Date();
+  const next = counter();
+  return sequelize.transaction(async (t) => {
+    const requisitionNumber = await generateRequisitionNumber(LabTest);
+    const ids = [];
+    for (const { v, finding, recordProcedure, biopsyName } of items) {
+      const prefix = R.NUMBER_PREFIX[v.kind];
+      const specimenNumber = await next(prefix, () => generateNumber(HistologyRequest, 'specimenNumber', prefix));
+      const testNumber = await next('LAB', () => generateLabTestNumber(LabTest));
       const site = R.siteSummary(v, finding ? `#${String(finding.number).padStart(3, '0')} ${finding.title}` : null);
       const lab = await LabTest.create({
         testNumber,
@@ -263,13 +298,13 @@ const create = async (req, res) => {
         PatientId: family.patient.id,
         testType: R.LAB_TEST_NAME[v.kind],
         sampleType: R.LABELS.specimen[v.specimenType],
-        priority: 'Routine',
+        priority: header.priority || 'Routine',
         orderedById: req.user.id,
-        price: catalogue && catalogue.price != null ? catalogue.price : null,
+        price: null,
         orderedDate: today,
         orderedTime: clinicClockTime({}, now),
         status: 'Pending',
-        notes: [`Specimen ${specimenNumber}`, site, v.sendTo ? `Send to: ${v.sendTo}` : null, v.clinicalDetails]
+        notes: [`Specimen ${specimenNumber}`, site, header.sendTo ? `Send to: ${header.sendTo}` : null, header.clinicalDetails]
           .filter(Boolean).join('\n').slice(0, 6000),
       }, { transaction: t });
 
@@ -286,15 +321,17 @@ const create = async (req, res) => {
         specimenType: v.specimenType,
         pieces: v.pieces,
         fixative: v.fixative,
-        clinicalDetails: v.clinicalDetails,
-        sendTo: v.sendTo,
+        clinicalDetails: header.clinicalDetails,
+        sendTo: header.sendTo,
+        requisitionNumber,
+        priority: header.priority || 'Routine',
+        relevantHistory: header.relevantHistory || null,
         visitDate: today,
         LabTestId: lab.id,
         requestedById: req.user.id,
         status: 'awaiting',
       }, { transaction: t });
 
-      let procedureId = null;
       if (recordProcedure) {
         const detail = [
           v.pieces ? `${v.pieces} piece${v.pieces === 1 ? '' : 's'}` : null,
@@ -311,16 +348,63 @@ const create = async (req, res) => {
           status: 'active',
         }, { transaction: t });
         await DermProcedureTarget.create({ DermProcedureId: p.id, DermFindingId: finding.id }, { transaction: t });
-        procedureId = p.id;
+        row.procedureId = p.id;
       }
-      return { id: row.id, procedureId };
-    });
+      ids.push({ id: row.id, procedureId: row.procedureId || null });
+    }
+    return ids;
+  });
+};
 
+// ---------------------------------------------------------------------
+// POST /api/histology/patients/:uhid — a request of ONE specimen (a skin
+// finding's biopsy; the API as it was)
+// ---------------------------------------------------------------------
+const create = async (req, res) => {
+  try {
+    const family = await resolvePatient(req.params.uhid);
+    if (!family) return error(res, 'Patient not found', 404);
+    if (family.isDeactivated) return error(res, 'This patient file is inactive (merged). Open the active file.', 403);
+
+    const clean = R.cleanRequest(req.body);
+    if (!clean.ok) return error(res, clean.message, 400, { field: clean.field });
+    const { clinicalDetails, sendTo, priority, relevantHistory, ...specimen } = clean.value;
+    const prep = await prepareSpecimens(req, family, [specimen]);
+    if (prep.refuse) return error(res, prep.refuse[1], prep.refuse[0], { field: prep.refuse[2] });
+
+    const [created] = await raiseRequest(req, family, { clinicalDetails, sendTo, priority, relevantHistory }, prep.items);
     const r = await loadRequest(created.id);
     const findings = await findingInfo(family.patientIds);
-    return success(res, { ...formatRequest(r, findings, today), procedureId: created.procedureId }, 201);
+    return success(res, { ...formatRequest(r, findings, clinicToday()), procedureId: created.procedureId }, 201);
   } catch (err) {
     console.error('HistologyRequest.create error:', err);
+    return error(res, 'Server error', 500);
+  }
+};
+
+// ---------------------------------------------------------------------
+// POST /api/histology/patients/:uhid/requests — one histopathology request
+// with one or more specimens, histology and/or cytology (1 Nov 2026)
+// ---------------------------------------------------------------------
+const createRequest = async (req, res) => {
+  try {
+    const family = await resolvePatient(req.params.uhid);
+    if (!family) return error(res, 'Patient not found', 404);
+    if (family.isDeactivated) return error(res, 'This patient file is inactive (merged). Open the active file.', 403);
+
+    const clean = R.cleanMultiRequest(req.body);
+    if (!clean.ok) return error(res, clean.message, 400, { field: clean.field });
+    const prep = await prepareSpecimens(req, family, clean.value.specimens);
+    if (prep.refuse) return error(res, prep.refuse[1], prep.refuse[0], { field: prep.refuse[2] });
+
+    const created = await raiseRequest(req, family, clean.value.header, prep.items);
+    const findings = await findingInfo(family.patientIds);
+    const today = clinicToday();
+    const rows = [];
+    for (const c of created) rows.push({ ...formatRequest(await loadRequest(c.id), findings, today), procedureId: c.procedureId });
+    return success(res, { requisitionNumber: rows[0].requisitionNumber, specimens: rows }, 201);
+  } catch (err) {
+    console.error('HistologyRequest.createRequest error:', err);
     return error(res, 'Server error', 500);
   }
 };
@@ -522,7 +606,7 @@ const worklist = async (req, res) => {
 
 module.exports = {
   worklist,
-  listForPatient, getOne, create, saveResult, cancel, reportCandidates,
+  listForPatient, getOne, create, createRequest, saveResult, cancel, reportCandidates,
   // for the dermatology board and finding detail
   findingInfo, formatRequest, INCLUDE,
 };

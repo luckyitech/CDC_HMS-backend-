@@ -28,6 +28,12 @@ const HistologyRequest = defineModel('HistologyRequest', {
   fixative:         { type: DataTypes.ENUM(...R.FIXATIVES), allowNull: true },
   clinicalDetails:  { type: DataTypes.TEXT, allowNull: false },
   sendTo:           { type: DataTypes.STRING(150), allowNull: true },
+  // One histopathology request = one requisition with one or more specimens,
+  // each a row here (1 Nov 2026; migration 20261101000002). The request fields
+  // (clinical details, laboratory, priority, history) are the same on each.
+  requisitionNumber: { type: DataTypes.STRING(30), allowNull: true },
+  priority:         { type: DataTypes.STRING(10), allowNull: true },
+  relevantHistory:  { type: DataTypes.TEXT, allowNull: true },
   visitDate:        { type: DataTypes.DATEONLY, allowNull: false },
   LabTestId:        { type: DataTypes.INTEGER, allowNull: true },
   requestedById:    { type: DataTypes.INTEGER, allowNull: true },
@@ -53,6 +59,7 @@ const HistologyRequest = defineModel('HistologyRequest', {
     { fields: ['PatientId', 'visitDate'], name: 'idx_histology_patient' },
     { fields: ['DermFindingId'], name: 'idx_histology_finding' },
     { fields: ['status', 'visitDate'], name: 'idx_histology_status' },
+    { fields: ['requisitionNumber'], name: 'idx_histology_requisition' },
   ],
 });
 

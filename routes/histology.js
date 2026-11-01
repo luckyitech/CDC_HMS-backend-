@@ -33,6 +33,8 @@ router.get('/patients/:uhid/documents', authorize('doctor', PERMISSIONS.HISTOLOG
 
 // A new histology / cytology request (+ its lab request, + optional biopsy procedure).
 router.post('/patients/:uhid', authorize('doctor', PERMISSIONS.HISTOLOGY_RECORD), histology.create);
+// One histopathology request with one or more specimens (1 Nov 2026).
+router.post('/patients/:uhid/requests', authorize('doctor', PERMISSIONS.HISTOLOGY_RECORD), histology.createRequest);
 
 // One request with its trail.
 router.get('/:id', authorize('doctor', 'nurse', 'admin', PERMISSIONS.CLINICAL_VIEW), logPatientAccess('histology'), histology.getOne);

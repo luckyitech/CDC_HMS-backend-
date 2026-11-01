@@ -199,3 +199,37 @@ describe('guard-rails', () => {
     assert.match(read('migrations/20260928000023-histology-and-derm-procedures.js'), /down refused/);
   });
 });
+
+// 1 Nov 2026 (Emu): one histopathology request, several specimens.
+describe('a histopathology request with several specimens', () => {
+  const cnb = { kind: 'histology', siteType: 'thyroid', thyroidLobe: 'right', specimenType: 'core_needle', pieces: 2, fixative: 'formalin' };
+  const fna = { kind: 'cytology', siteType: 'lymph_node', siteText: 'Right level III', specimenType: 'fnac', fixative: 'slides' };
+  test('the request fields once, each specimen histology or cytology', () => {
+    const r = R.cleanMultiRequest({ clinicalDetails: 'TR5 nodule; node', sendTo: 'Lancet', relevantHistory: 'No surgery', specimens: [cnb, fna] });
+    assert.ok(r.ok, r.message);
+    assert.equal(r.value.specimens.length, 2);
+    assert.deepEqual(r.value.specimens.map((s) => s.kind), ['histology', 'cytology']);
+    assert.equal(r.value.header.priority, 'Routine');
+    assert.equal(r.value.header.relevantHistory, 'No surgery');
+  });
+  test('at least one specimen, at most ten; clinical details required', () => {
+    assert.equal(R.cleanMultiRequest({ clinicalDetails: 'x', specimens: [] }).field, 'specimens');
+    assert.equal(R.cleanMultiRequest({ clinicalDetails: 'x', specimens: Array(11).fill(cnb) }).field, 'specimens');
+    assert.equal(R.cleanMultiRequest({ specimens: [cnb] }).field, 'clinicalDetails');
+    assert.equal(R.cleanMultiRequest({ clinicalDetails: 'x', priority: 'Soon', specimens: [cnb] }).field, 'priority');
+  });
+  test('a bad specimen names which one', () => {
+    const r = R.cleanMultiRequest({ clinicalDetails: 'x', specimens: [cnb, { ...fna, siteText: '' }] });
+    assert.equal(r.field, 'specimens.1.siteText');
+    assert.match(r.message, /^Specimen 2: /);
+  });
+  test('the single-specimen request still validates as before', () => {
+    assert.ok(R.cleanRequest({ ...cnb, clinicalDetails: 'x' }).ok);
+    assert.equal(R.cleanRequest(cnb).field, 'clinicalDetails');
+  });
+  test('the lab lines carry no price — billing is done at Complete consultation', () => {
+    const src = read('controllers/histologyController.js');
+    assert.match(src, /price: null,/);
+    assert.doesNotMatch(src, /CatalogItem/);
+  });
+});
