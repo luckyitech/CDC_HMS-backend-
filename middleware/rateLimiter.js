@@ -7,16 +7,45 @@ const { ipKeyGenerator } = rateLimit;
 // Rate limiting prevents brute force attacks and API abuse
 // by limiting how many requests a client can make in a time window
 
-// Custom key generator — normalizes IP for rate limiting
-// Handles IIS forwarding IP:port format e.g. "197.248.95.205:58192" → "197.248.95.205"
-// Handles IPv4-mapped IPv6 e.g. "::ffff:197.248.95.205" → "197.248.95.205"
-// Uses ipKeyGenerator helper required by express-rate-limit for IPv6 compliance
-const keyGenerator = (req) => {
-  const ip = req.ip || req.socket.remoteAddress || '';
-  let cleaned = ip.replace(/^::ffff:/, '');
-  cleaned = cleaned.replace(/^(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}):\d+$/, '$1');
-  req.ip = cleaned;
-  return ipKeyGenerator(req);
+// The client's address, for counting. IIS forwards it as "IP:port"
+// ("197.248.95.205:58192"), and the port changes with every connection, so it
+// is stripped; "::ffff:1.2.3.4" becomes "1.2.3.4". The bare address goes to
+// ipKeyGenerator, which groups an IPv6 address by its /56 network.
+//
+// 1 Nov 2026: this used to pass the whole request to ipKeyGenerator, which
+// handed the request back as the key — every request got a bucket of its own,
+// so no limiter here ever limited, login included.
+const clientIp = (req) => {
+  const raw = String(req.ip || req.socket?.remoteAddress || '');
+  return raw
+    .replace(/^::ffff:/, '')
+    .replace(/^(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}):\d+$/, '$1')
+    .replace(/^\[([0-9a-fA-F:.]+)\]:\d+$/, '$1');
+};
+
+const keyGenerator = (req) => ipKeyGenerator(clientIp(req));
+
+// Watch mode, for the limiters the clinic's own traffic goes through. Every
+// workstation reaches the server from the clinic's one public address, so a
+// per-address limit is a clinic-wide limit, and the numbers below were never
+// tested against a real clinic day (they never limited — see above). Until
+// they are, these limiters only log, once per address per window, when they
+// WOULD have refused a request, and let it through:
+//   [rate-limit] general would refuse 41.90.x.x — 1000 requests in 15 min
+// Read the log after a week of clinic days (pm2 logs cdc-hms-api | grep rate-limit),
+// set the limits, then drop `watch(...)` to enforce.
+const warned = new Map(); // `${name}|${key}` → when the window it was logged in ends
+const watch = (name) => (req, res, next, options) => {
+  const key = req.rateLimit?.key;
+  const tag = `${name}|${key}`;
+  const now = Date.now();
+  const resetAt = req.rateLimit?.resetTime ? req.rateLimit.resetTime.getTime() : now + options.windowMs;
+  if (!(warned.get(tag) > now)) {
+    warned.set(tag, resetAt);
+    for (const [t, until] of warned) if (until <= now) warned.delete(t);
+    console.warn(`[rate-limit] ${name} would refuse ${key} — ${req.rateLimit?.used} requests in ${Math.round(options.windowMs / 60000)} min (watch mode, let through)`);
+  }
+  next();
 };
 
 // ------------------------------------
@@ -35,6 +64,7 @@ const generalLimiter = rateLimit({
   legacyHeaders: false, // Disable the `X-RateLimit-*` headers
   skipSuccessfulRequests: false,
   keyGenerator,
+  handler: watch('general'),
 });
 
 // ------------------------------------
@@ -71,6 +101,7 @@ const strictLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   keyGenerator,
+  handler: watch('strict'),
 });
 
 // ------------------------------------
@@ -89,6 +120,7 @@ const sseLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   keyGenerator,
+  handler: watch('sse'),
 });
 
 // ------------------------------------
@@ -135,4 +167,7 @@ module.exports = {
   sseLimiter,
   publicBookingLimiter,
   webhookLimiter,
+  keyGenerator,
+  clientIp,
+  watch,
 };

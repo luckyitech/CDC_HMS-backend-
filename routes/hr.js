@@ -3,7 +3,7 @@ const router = express.Router();
 const { body, param, query } = require('express-validator');
 const validate = require('../middleware/validate');
 const { authenticate, authorize } = require('../middleware/auth');
-const { strictLimiter } = require('../middleware/rateLimiter');
+const { strictLimiter, keyGenerator, watch } = require('../middleware/rateLimiter');
 const rateLimit = require('express-rate-limit');
 const hrAttendance = require('../controllers/hrAttendanceController');
 const hrDevices = require('../controllers/hrDevicesController');
@@ -79,6 +79,8 @@ const APPRAISALS_PARTICIPATE = ['doctor', 'staff', 'lab', 'nurse', 'admin', 'hr.
 // for a whole clinic behind one NAT, and caps a scripted flood.
 const tapLimiter = rateLimit({
   windowMs: 60 * 1000, max: 60, standardHeaders: true, legacyHeaders: false,
+  keyGenerator, // counts by client address without IIS's port (middleware/rateLimiter)
+  handler: watch('tap'), // logs only for now — see middleware/rateLimiter
   message: { success: false, message: 'Too many taps — wait a moment and tap again.' },
 });
 

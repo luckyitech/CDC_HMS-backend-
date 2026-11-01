@@ -1,5 +1,6 @@
 const express = require('express');
 const rateLimit = require('express-rate-limit');
+const { keyGenerator, watch } = require('../middleware/rateLimiter');
 const { scannerAuth } = require('../middleware/scannerAuth');
 const hrScanner = require('../controllers/hrScannerController');
 
@@ -18,6 +19,8 @@ const relayLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   message: { success: false, message: 'Too many relay requests — slow down.' },
+  keyGenerator, // counts by client address without IIS's port (middleware/rateLimiter)
+  handler: watch('relay'), // logs only for now — see middleware/rateLimiter
 });
 
 router.use(relayLimiter);
