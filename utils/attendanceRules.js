@@ -10,7 +10,6 @@
 const { CLINIC_TZ } = require('./clinicTime');
 const { spanMinutes } = require('./workHours');
 const { PERMISSIONS, INTERNAL_ROLES, passesGate } = require('../constants/permissions');
-const { parseJsonColumn } = require('./jsonColumn');
 
 const MINUTE = 60 * 1000;
 
@@ -261,15 +260,16 @@ const monthSummary = ({ month, days, rows, today }) => {
  * hours). The one rule every screen, report and CSV uses.
  *   - Built from punches: the time inside (workedMinutes) — every in → out
  *     pair. A missed check-out counts up to the last out.
- *   - Times HR set by hand, or a session from before 1 Nov: check-in to
- *     check-out, less any recorded time out.
+ *   - Times HR set: the same, inside HR's times (recounted on every amend).
+ *   - A session from before 1 Nov: check-in to check-out.
  * null while the person is still in, and for voided/refused rows.
  */
 const COUNTS_HOURS = new Set(['closed', 'missed_checkout']);
 const workedMinutesOf = (s) => {
   if (!s || !COUNTS_HOURS.has(s.status)) return null;
-  const lock = (parseJsonColumn(s.diagnostics) || {}).hrLocked || {};
-  if (s.workedMinutes != null && !lock.in && !lock.out) return s.workedMinutes;
+  // Counted when the day is built, amended or entered (services/punchService
+  // countersFor → utils/punchDay hoursOf), against the session's own times.
+  if (s.workedMinutes != null) return s.workedMinutes;
   if (!s.checkInAt || !s.checkOutAt) return s.status === 'missed_checkout' ? 0 : null;
   return Math.max(0, minutesBetween(s.checkInAt, s.checkOutAt) - (s.awayMinutes || 0));
 };

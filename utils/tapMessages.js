@@ -9,7 +9,7 @@
 // forward.
 // =====================================================================
 
-const { clinicHHMM } = require('./attendanceRules');
+const { clinicHHMM, workedMinutesOf } = require('./attendanceRules');
 const { CLINIC_TZ } = require('./clinicTime');
 
 /** "Dr" for doctors, nothing otherwise (decided with Emu, 23 Sep). */
@@ -73,7 +73,8 @@ const buildTapMessages = ({ action, user, session, punct, month = {}, now, posit
     if (!positiveFeedback && state === 'late') sub = null;
   } else if (action === 'offer_checkout') {
     const since = session?.checkInAt ? clinicHHMM(session.checkInAt) : null;
-    const worked = session?.checkInAt ? hoursAndMinutes((now - new Date(session.checkInAt)) / 60000) : null;
+    // Time inside so far: since the check-in, less the time out already recorded.
+    const worked = session?.checkInAt ? hoursAndMinutes((now - new Date(session.checkInAt)) / 60000 - (session.awayMinutes || 0)) : null;
     if (punct?.state === 'early') {
       headline = 'Check out early?';
       if (expectedOut) facts.push(['Your day ends at', expectedOut]);
@@ -92,7 +93,7 @@ const buildTapMessages = ({ action, user, session, punct, month = {}, now, posit
     if (expectedOut) facts.push(['Your day ends at', expectedOut]);
     // Hours = time inside (1 Nov 2026): the session's own count when the
     // day was built from punches, else check-in to now.
-    const inside = session?.workedMinutes != null ? session.workedMinutes : (session?.checkInAt ? (now - new Date(session.checkInAt)) / 60000 : null);
+    const inside = workedMinutesOf(session) ?? (session?.checkInAt ? (now - new Date(session.checkInAt)) / 60000 : null);
     if (session?.checkInAt) facts.push(['Today', `${clinicHHMM(session.checkInAt)} – ${hhmm} · ${hoursAndMinutes(inside)}`]);
     if (session?.awayMinutes) facts.push(['Time out today', hoursAndMinutes(session.awayMinutes)]);
     if (!positiveFeedback && (state === 'on_time' || state === 'late')) mood = null;

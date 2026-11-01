@@ -352,3 +352,71 @@ describe('review fixes', () => {
   });
 });
 
+
+// 1 Nov 2026: every walk-in and walk-out counts, and the time out comes off
+// the hours. The scenarios an independent review raised against the build.
+describe('time out comes off the hours (1 Nov 2026 review)', () => {
+  const punchSvc = require('../../services/punchService');
+  const { getHrConfig } = require('../../utils/hrConfig');
+  const { workedMinutesOf } = require('../../utils/attendanceRules');
+  const at = (d, t) => new Date(`${d}T${t}:00+03:00`);
+  const punch = (u, d, times) => Promise.all(times.map((t) => StaffPunch.create({ UserId: u.id, clinicDate: d, at: at(d, t), source: 'fingerprint', outcome: 'applied' })));
+  const rebuild = async (u, d) => punchSvc.rebuildDay({ userId: u.id, clinicDate: d, cfg: await getHrConfig() });
+  const amend = (s, body) => call(hrAttendance.amend, { user: asUser(hr), params: { id: s.id }, body: { reason: 'review test', ...body } });
+
+  test('#1 fingerprints arriving after HR\'s manual entry do not flip it', async () => {
+    const d = clinicDatePlusDays(-10);
+    const m = await call(hrAttendance.manual, { user: asUser(hr), body: { userId: abdul.id, checkInAt: at(d, '08:00').toISOString(), checkOutAt: at(d, '17:00').toISOString(), reason: 'Relay was down' } });
+    assert.equal(m.status, 201, JSON.stringify(m.body));
+    assert.equal(m.body.data.minutesWorked, 540);
+    await punch(abdul, d, ['07:58', '12:00', '13:00', '17:02']);
+    await rebuild(abdul, d);
+    const s = await sessionOf(abdul, d);
+    assert.deepEqual([hhmm(s.checkInAt), hhmm(s.checkOutAt), s.status], ['08:00', '17:00', 'closed']);
+    assert.deepEqual([s.awayMinutes, s.workedMinutes], [60, 480]);
+  });
+
+  test('#2 HR corrects the check-in of a missed check-out → hours still count to the last out', async () => {
+    const d = clinicDatePlusDays(-11);
+    await punch(abdul, d, ['08:00', '12:00', '13:00']);
+    await rebuild(abdul, d);
+    let s = await sessionOf(abdul, d);
+    assert.deepEqual([s.status, s.workedMinutes], ['missed_checkout', 240]);
+    const a = await amend(s, { checkInAt: at(d, '07:55').toISOString() });
+    assert.equal(a.status, 200, JSON.stringify(a.body));
+    assert.equal(a.body.data.minutesWorked, 245);
+    s = await sessionOf(abdul, d);
+    assert.equal(workedMinutesOf(s.get({ plain: true })), 245);
+  });
+
+  test('#3 time out outside HR\'s times does not come off; #6 a locked day losing its punches keeps HR\'s hours', async () => {
+    const d = clinicDatePlusDays(-12);
+    await punch(abdul, d, ['08:00', '12:00', '13:00', '17:00']);
+    await rebuild(abdul, d);
+    let s = await sessionOf(abdul, d);
+    assert.deepEqual([s.awayMinutes, s.workedMinutes], [60, 480]);
+    const a = await amend(s, { checkOutAt: at(d, '11:00').toISOString() });
+    assert.equal(a.body.data.minutesWorked, 180);
+    await punch(abdul, d, ['18:00', '19:00']);
+    await rebuild(abdul, d);
+    s = await sessionOf(abdul, d);
+    assert.deepEqual([hhmm(s.checkOutAt), s.awayMinutes, s.workedMinutes], ['11:00', 0, 180]);
+    await StaffPunch.update({ outcome: 'unlinked', direction: null }, { where: { UserId: abdul.id, clinicDate: d } });
+    await rebuild(abdul, d);
+    s = await sessionOf(abdul, d);
+    assert.deepEqual([s.status, s.awayMinutes, s.workedMinutes], ['closed', 0, 180]);
+  });
+
+  test('#4 a day built under the 19 Oct model keeps first in, last out when rebuilt', async () => {
+    const d = clinicDatePlusDays(-13);
+    await punch(abdul, d, ['08:00', '12:00']);
+    await rebuild(abdul, d);
+    let s = await sessionOf(abdul, d);
+    await s.update({ diagnostics: { punchModel: 1 }, inCount: null, outCount: null, awayMinutes: null, workedMinutes: null });
+    await punch(abdul, d, ['17:00']);
+    await rebuild(abdul, d);
+    s = await sessionOf(abdul, d);
+    assert.deepEqual([hhmm(s.checkInAt), hhmm(s.checkOutAt), s.status, s.inCount, s.workedMinutes], ['08:00', '17:00', 'closed', null, null]);
+    assert.equal(workedMinutesOf(s.get({ plain: true })), 540);
+  });
+});

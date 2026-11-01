@@ -124,10 +124,49 @@ describe('hours = time inside', () => {
     assert.equal(workedMinutesOf({ status: 'voided', workedMinutes: 240 }), null);
   });
 
-  test('workedMinutesOf: times HR set, or an older session → check-in to check-out less time out', () => {
-    const hr = { status: 'closed', workedMinutes: 100, awayMinutes: 30, checkInAt: T('08:00'), checkOutAt: T('17:00'), diagnostics: { hrLocked: { in: true, out: true } } };
-    assert.equal(workedMinutesOf(hr), 510);
+  test('workedMinutesOf: a stored count wins; an older session → check-in to check-out less time out', () => {
+    assert.equal(workedMinutesOf({ status: 'closed', workedMinutes: 510, awayMinutes: 30, checkInAt: T('08:00'), checkOutAt: T('17:00') }), 510);
     assert.equal(workedMinutesOf({ status: 'closed', checkInAt: T('08:00'), checkOutAt: T('17:00') }), 540);
-    assert.equal(workedMinutesOf({ status: 'closed', checkInAt: T('08:00'), checkOutAt: T('17:00'), diagnostics: '{"hrLocked":{"in":true}}', workedMinutes: 9 }), 540);
+    assert.equal(workedMinutesOf({ status: 'missed_checkout', checkInAt: T('08:00'), checkOutAt: null }), 0);
+  });
+});
+
+// 1 Nov 2026 review — the hours window and the 19 Oct model for old days.
+describe('hoursOf and old days', () => {
+  const { hoursOf, buildDayFirstLast } = require('../utils/punchDay');
+  const counted = (times) => buildDay(times.map((t, i) => P(i + 1, t)), CFG).counted;
+
+  test('time out outside the times HR set does not come off', () => {
+    // HR set 08:00–17:00; punches 08:00 in, 17:00 out, 18:00 in, 19:00 out
+    const c = counted(['08:00', '17:00', '18:00', '19:00']);
+    assert.deepEqual(hoursOf(c, T('08:00'), T('17:00')), { awayMinutes: 0, workedMinutes: 540 });
+  });
+
+  test('HR moves the check-out before lunch → only the time before it counts', () => {
+    const c = counted(['08:00', '12:00', '13:00', '17:00']);
+    assert.deepEqual(hoursOf(c, T('08:00'), T('11:00')), { awayMinutes: 0, workedMinutes: 180 });
+  });
+
+  test('HR corrects the check-in of a missed check-out → counts to the last out', () => {
+    const c = counted(['08:00', '12:00', '13:00']);
+    assert.deepEqual(hoursOf(c, T('07:55'), null), { awayMinutes: 0, workedMinutes: 245 });
+  });
+
+  test('a lunch inside HR’s times still comes off', () => {
+    const c = counted(['07:58', '12:00', '13:00', '17:02']);
+    assert.deepEqual(hoursOf(c, T('08:00'), T('17:00')), { awayMinutes: 60, workedMinutes: 480 });
+  });
+
+  test('a day on the 19 Oct model keeps first in, last out', () => {
+    const d = buildDayFirstLast([P(1, '08:00'), P(2, '12:00'), P(3, '17:00')], CFG);
+    assert.equal(d.first.id, 1);
+    assert.equal(d.lastOut.id, 3);
+    assert.equal(d.inside, false);
+  });
+
+  test('a tap on a 19 Oct-model day is a check-out, not a back-in', () => {
+    const c = buildDayFirstLast([P(1, '08:00'), P(2, '12:00')], CFG).counted;
+    assert.equal(decideTap({ now: T('17:00'), counted: c, confirm: true, cfg: CFG, model: 1 }), 'checkout');
+    assert.equal(decideTap({ now: T('17:00'), counted: counted(['08:00', '12:00']), cfg: CFG }), 'back_in');
   });
 });

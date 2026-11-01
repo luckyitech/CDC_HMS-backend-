@@ -140,12 +140,12 @@ const tap = async (req, res) => {
     // of the day checks in; then out, in, out… on the same session. A night
     // shift's check-out after midnight still belongs to the evening it began.
     const clinicDay = await punchSvc.clinicDateFor(me.id, now, transaction);
-    const counted = await punchSvc.countedFor(me.id, clinicDay, cfg, transaction);
+    const { counted, model } = await punchSvc.countedFor(me.id, clinicDay, cfg, transaction);
     // A confirmation is good once: any punch counted after it was issued
     // (this check-out, or another device's) makes it stale.
     const lastCountedAt = counted.length ? new Date(counted[counted.length - 1].at).getTime() : null;
     const staleConfirm = confirm && confirmIssuedAt && lastCountedAt && lastCountedAt > confirmIssuedAt;
-    const action = staleConfirm ? 'duplicate' : decideTap({ now, counted, confirm, cfg });
+    const action = staleConfirm ? 'duplicate' : decideTap({ now, counted, confirm, cfg, model });
     const todaysSession = () => StaffAttendance.findOne({
       where: { UserId: me.id, clinicDate: clinicDay, status: { [Op.in]: ['open', 'closed', 'missed_checkout'] } },
       order: [['checkInAt', 'ASC']], transaction,
@@ -192,7 +192,7 @@ const tap = async (req, res) => {
 
     const needsMonth = outAction === 'checked_in' || outAction === 'checked_out' || outAction === 'offer_checkout';
     const month = needsMonth ? await monthBlock(me.id, cfg, now) : null;
-    const duplicateSide = outAction === 'duplicate' && counted.length % 2 === 0 ? 'out' : 'in';
+    const duplicateSide = outAction === 'duplicate' && (model === 1 ? counted.length > 1 : counted.length % 2 === 0) ? 'out' : 'in';
     const messages = buildTapMessages({
       action: outAction, user: me, session: session ? session.get({ plain: true }) : null, punct, month,
       now, positiveFeedback: cfg.positiveFeedback, duplicateSide,
@@ -446,8 +446,11 @@ const manual = async (req, res) => {
     const { session: built } = await punchSvc.rebuildDay({ userId: target.id, clinicDate, cfg, transaction });
     const row = await built.update({
       amendedById: req.user.id, amendedAt: new Date(), amendReason: reason, createdById: req.user.id,
-      diagnostics: { ...(parseJsonColumn(built.diagnostics) || {}), manual: true },
+      // HR's times are HR's word (1 Nov 2026): a fingerprint batch arriving
+      // later adds its time out inside them but cannot flip them.
+      diagnostics: { ...(parseJsonColumn(built.diagnostics) || {}), manual: true, hrLocked: { in: true, out: !!checkOutAt } },
     }, { transaction });
+    await punchSvc.recountSession({ session: row, cfg, transaction });
     await svc.writeUserEditLog({
       targetUserId: target.id, actor: req.user, transaction,
       changes: { attendanceManualEntry: { from: null, to: `${clinicDate} ${clinicHHMM(checkInAt)}–${checkOutAt ? clinicHHMM(checkOutAt) : '…'}` }, reason: { from: null, to: reason } },
@@ -519,6 +522,8 @@ const amend = async (req, res) => {
     }, { transaction });
     // Voiding takes the day's punches with it, so the next punch starts afresh;
     // un-voiding brings them back (and merges the day if it has a newer session).
+    // HR's times changed: recount the time out inside them and the hours.
+    if (after.status !== 'voided') await punchSvc.recountSession({ session: row, cfg, transaction });
     if (after.status === 'voided' && before.status !== 'voided') {
       await punchSvc.setSessionPunchesVoided(row.id, true, transaction);
     } else if (before.status === 'voided' && after.status !== 'voided') {

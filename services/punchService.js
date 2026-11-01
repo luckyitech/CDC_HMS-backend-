@@ -12,14 +12,16 @@
 // = { in, out }. A locked check-in stays as HR set it; a locked check-out (HR
 // gave one) keeps the check-out and the status. What HR did not set still
 // follows the punches — so a day HR re-opened closes at the person's next
-// "out". Later punches always count in the ins and outs.
+// "out". Later punches always count in the ins and outs, but only the time
+// out inside HR's times comes off the hours, and HR's own punches take no
+// turn in the in/out order (1 Nov 2026).
 // =====================================================================
 
 const { Op } = require('sequelize');
 const db = require('../models');
 const { clinicToday, clinicMidnight, clinicDatePlusDays } = require('../utils/clinicTime');
 const { punctuality } = require('../utils/attendanceRules');
-const { buildDay, methodOf, verificationOf } = require('../utils/punchDay');
+const { buildDay, buildDayFirstLast, hoursOf, methodOf, verificationOf } = require('../utils/punchDay');
 const { parseJsonColumn } = require('../utils/jsonColumn');
 const svc = require('./hrAttendanceService');
 
@@ -122,10 +124,55 @@ const loadDay = async (userId, clinicDate, transaction) => {
   return { sessions, punches };
 };
 
-/** The counted punches of a day — what the tap decision needs. */
+/**
+ * Which model a day is read with. 2 (1 Nov 2026): punches alternate in, out,
+ * in, out and the time out comes off the hours. 1 (19 Oct 2026): first punch
+ * in, last punch out. A day whose session was built under model 1 (or before
+ * punches were kept) keeps it, so rebuilding an old day — a scanner link made
+ * later, a late relay batch, an un-void — never re-reads it. New days use 2.
+ */
+const MODEL = 2;
+const modelOf = (session) => {
+  if (!session) return MODEL;
+  const diag = parseJsonColumn(session.diagnostics) || {};
+  return diag.punchModel === MODEL ? MODEL : 1;
+};
+const buildFor = (model, punches, cfg) => (model === MODEL ? buildDay(punches, cfg) : buildDayFirstLast(punches, cfg));
+
+/** The session a day keeps: the one HR locked, else the earliest. */
+const keeperOf = (sessions) => sessions.find((x) => lockOf(parseJsonColumn(x.diagnostics)).in) || sessions[0] || null;
+
+/**
+ * The day as it counts. When HR set a time (amend or manual entry), HR's
+ * times are the check-in / check-out and HR's own punches take no turn in the
+ * in/out order — the scanner and NFC punches alone say when the person was
+ * out (1 Nov 2026 review: a manual punch must not flip the fingerprints).
+ */
+const dayOf = (session, punches, cfg) => {
+  const model = modelOf(session);
+  const lock = session ? lockOf(parseJsonColumn(session.diagnostics)) : { in: false, out: false };
+  const all = punches.map(plain);
+  const locked = lock.in || lock.out;
+  const full = buildFor(model, all, cfg);
+  const day = locked ? buildFor(model, all.filter((p) => p.source !== 'manual'), cfg) : full;
+  return { model, lock, locked, full, day };
+};
+
+/**
+ * The counters and hours for a session's final check-in / check-out.
+ * Model 1 days keep no counters (their hours stay check-in to check-out).
+ */
+const countersFor = ({ model, day }, checkInAt, checkOutAt) => {
+  if (model !== MODEL) return { inCount: null, outCount: null, awayMinutes: null, workedMinutes: null };
+  const { awayMinutes, workedMinutes } = hoursOf(day.counted, checkInAt, checkOutAt);
+  return { inCount: day.inCount, outCount: day.outCount, awayMinutes, workedMinutes };
+};
+
+/** The counted punches of a day — what the tap decision needs — and its model. */
 const countedFor = async (userId, clinicDate, cfg, transaction) => {
-  const { punches } = await loadDay(userId, clinicDate, transaction);
-  return buildDay(punches.map(plain), cfg).counted;
+  const { sessions, punches } = await loadDay(userId, clinicDate, transaction);
+  const { model, day } = dayOf(keeperOf(sessions), punches, cfg);
+  return { counted: day.counted, model };
 };
 
 /**
@@ -141,12 +188,11 @@ const countedFor = async (userId, clinicDate, cfg, transaction) => {
  */
 const rebuildDay = async ({ userId, clinicDate, cfg, transaction, now = new Date() }) => {
   const { sessions, punches } = await loadDay(userId, clinicDate, transaction);
-  const day = buildDay(punches.map(plain), cfg);
 
   // One session per day: older days may have several. Keep the one HR
   // locked, else the earliest; void the rest (kept for the audit trail, their
   // reason added to, never replaced) and move their punches over.
-  let session = sessions.find((x) => lockOf(parseJsonColumn(x.diagnostics)).in) || sessions[0] || null;
+  let session = keeperOf(sessions);
   for (const extra of sessions.filter((x) => x !== session)) {
     const note = 'Merged into one session for the day (every in and out is kept on that session).';
     await extra.update({
@@ -155,30 +201,33 @@ const rebuildDay = async ({ userId, clinicDate, cfg, transaction, now = new Date
     }, { transaction });
   }
 
-  if (!day.first) {
+  const read = dayOf(session, punches, cfg);
+  const { model, lock, full } = read;
+  const day = read.day;
+
+  if (!full.first) {
     // Every punch was removed (a scanner link undone): the session goes too,
-    // unless HR amended it.
-    if (session && !lockOf(parseJsonColumn(session.diagnostics)).in) {
+    // unless HR amended it — then HR's times stand and nothing is out.
+    if (session && !lock.in) {
       await session.update({ status: 'voided', amendedAt: now, amendReason: 'No punches left for this day (scanner link removed).' }, { transaction });
+    } else if (session) {
+      await session.update(countersFor({ model, day }, session.checkInAt, session.checkOutAt), { transaction });
     }
-    return { session: null, day };
+    return { session: null, day: full };
   }
 
   const diag = session ? (parseJsonColumn(session.diagnostics) || {}) : {};
-  const counters = { inCount: day.inCount, outCount: day.outCount, awayMinutes: day.awayMinutes, workedMinutes: day.workedMinutes };
-
   const expected = session
     ? { startAt: session.expectedInAt, endAt: session.expectedOutAt, grace: await svc.graceOf(session, cfg), source: diag.hoursSource }
     : await svc.expectedFor(userId, clinicDate, cfg);
-  const lock = session ? lockOf(diag) : { in: false, out: false };
-  const first = day.first;
+  const first = day.first || full.first;
   const out = day.lastOut;
   const pIn = punctuality({ at: first.at, expectedAt: expected.startAt, graceMinutes: expected.grace, kind: 'in' });
   const pOut = out
     ? punctuality({ at: out.at, expectedAt: expected.endAt, graceMinutes: expected.grace, kind: 'out' })
     : { state: 'none', minutes: null };
   let status = 'closed';
-  if (day.inside) status = dayIsOver(session || { expectedOutAt: expected.endAt }, clinicDate, now) ? 'missed_checkout' : 'open';
+  if (day.inside || !out) status = dayIsOver(session || { expectedOutAt: expected.endAt }, clinicDate, now) ? 'missed_checkout' : 'open';
 
   const inFields = lock.in ? {} : {
     checkInAt: first.at,
@@ -199,11 +248,13 @@ const rebuildDay = async ({ userId, clinicDate, cfg, transaction, now = new Date
     earlyOutMinutes: pOut.state === 'early' ? pOut.minutes : (out && expected.endAt ? 0 : null),
     status,
   };
+  const finalIn = lock.in ? session.checkInAt : first.at;
+  const finalOut = lock.out ? session.checkOutAt : (out ? out.at : null);
   const fields = {
     ...inFields,
     ...outFields,
-    ...counters,
-    diagnostics: { ...diag, punchModel: 1, grace: expected.grace, hoursSource: diag.hoursSource || expected.source },
+    ...countersFor({ model, day }, finalIn, finalOut),
+    diagnostics: { ...diag, punchModel: model, grace: expected.grace, hoursSource: diag.hoursSource || expected.source },
   };
   if (first.deviceId && !lock.in) fields.deviceId = first.deviceId;
 
@@ -219,8 +270,14 @@ const rebuildDay = async ({ userId, clinicDate, cfg, transaction, now = new Date
   }
 
   // Each punch remembers its direction (null = not counted) and its session.
+  // On a day HR set, HR's own punches show as the in and the out they stand for.
+  const dirOf = new Map(day.punches.map((p) => [p.id, p.direction]));
+  if (read.locked) {
+    const manual = full.punches.filter((p) => p.source === 'manual');
+    manual.forEach((p, i) => dirOf.set(p.id, i === 0 ? 'in' : (i === manual.length - 1 ? 'out' : null)));
+  }
   const ids = { in: [], out: [], none: [] };
-  for (const p of day.punches) ids[p.direction || 'none'].push(p.id);
+  for (const p of full.punches) ids[dirOf.get(p.id) || 'none'].push(p.id);
   for (const [dir, list] of Object.entries(ids)) {
     if (!list.length) continue;
     await StaffPunch.update(
@@ -229,6 +286,22 @@ const rebuildDay = async ({ userId, clinicDate, cfg, transaction, now = new Date
     );
   }
   return { session, day };
+};
+
+/**
+ * Recount a session's time out and hours against its current check-in and
+ * check-out — after HR amends the times (which keep HR's word; nothing else
+ * on the session changes).
+ */
+const recountSession = async ({ session, cfg, transaction }) => {
+  const punches = await StaffPunch.findAll({
+    where: { UserId: session.UserId, clinicDate: session.clinicDate, outcome: 'applied' },
+    order: [['at', 'ASC'], ['id', 'ASC']],
+    transaction,
+  });
+  const read = dayOf(session, punches, cfg);
+  await session.update(countersFor(read, session.checkInAt, session.checkOutAt), { transaction });
+  return session;
 };
 
 /**
@@ -257,6 +330,8 @@ module.exports = {
   loadDay,
   countedFor,
   rebuildDay,
+  recountSession,
+  modelOf,
   setSessionPunchesVoided,
   punchesForSession,
   lockOf,
