@@ -407,6 +407,32 @@ describe('time out comes off the hours (1 Nov 2026 review)', () => {
     assert.deepEqual([s.status, s.awayMinutes, s.workedMinutes], ['closed', 0, 180]);
   });
 
+  test('A: a manual check-in only, then the evening fingerprint → closed, full hours; an NFC tap there is a check-out', async () => {
+    const d = clinicDatePlusDays(-14);
+    const m = await call(hrAttendance.manual, { user: asUser(hr), body: { userId: abdul.id, checkInAt: at(d, '08:00').toISOString(), reason: 'Forgot the morning punch' } });
+    assert.equal(m.status, 201, JSON.stringify(m.body));
+    const { decideTap } = require('../../utils/punchDay');
+    const { counted, model } = await punchSvc.countedFor(abdul.id, d, await getHrConfig());
+    assert.equal(decideTap({ now: at(d, '17:00'), counted, confirm: true, cfg: { debounceSeconds: 120, minSessionMinutes: 10 }, model }), 'checkout');
+    await punch(abdul, d, ['17:00']);
+    await rebuild(abdul, d);
+    const s = await sessionOf(abdul, d);
+    assert.deepEqual([hhmm(s.checkInAt), hhmm(s.checkOutAt), s.status, s.workedMinutes], ['08:00', '17:00', 'closed', 540]);
+  });
+
+  test('B: HR puts right a forgotten morning punch → the lunch comes off, not the afternoon', async () => {
+    const d = clinicDatePlusDays(-15);
+    await punch(abdul, d, ['12:00', '13:00', '17:02']);
+    await rebuild(abdul, d);
+    const s = await sessionOf(abdul, d);
+    const a = await amend(s, { checkInAt: at(d, '08:00').toISOString(), checkOutAt: at(d, '17:00').toISOString() });
+    assert.equal(a.status, 200, JSON.stringify(a.body));
+    assert.equal(a.body.data.minutesWorked, 480);
+    await rebuild(abdul, d);
+    const again = await sessionOf(abdul, d);
+    assert.deepEqual([again.awayMinutes, again.workedMinutes], [60, 480]);
+  });
+
   test('#4 a day built under the 19 Oct model keeps first in, last out when rebuilt', async () => {
     const d = clinicDatePlusDays(-13);
     await punch(abdul, d, ['08:00', '12:00']);

@@ -139,6 +139,8 @@ const modelOf = (session) => {
 };
 const buildFor = (model, punches, cfg) => (model === MODEL ? buildDay(punches, cfg) : buildDayFirstLast(punches, cfg));
 
+const SAME_ARRIVAL_MS = 60 * 60 * 1000;
+
 /** The session a day keeps: the one HR locked, else the earliest. */
 const keeperOf = (sessions) => sessions.find((x) => lockOf(parseJsonColumn(x.diagnostics)).in) || sessions[0] || null;
 
@@ -154,7 +156,20 @@ const dayOf = (session, punches, cfg) => {
   const all = punches.map(plain);
   const locked = lock.in || lock.out;
   const full = buildFor(model, all, cfg);
-  const day = locked ? buildFor(model, all.filter((p) => p.source !== 'manual'), cfg) : full;
+  if (!locked || !lock.in || !session.checkInAt) return { model, lock, locked, full, day: full };
+  // HR's check-in starts the order as the "in"; the scanner and NFC punches
+  // after it alternate out, in, out (a forgotten morning punch HR put right,
+  // or a manual check-in with the evening punch to come). Punches at or
+  // before HR's check-in, and HR's own punches, take no turn.
+  // SAME_ARRIVAL_MS: a scanner punch within the hour after it is that arrival.
+  // The first punch within an hour after HR's check-in is the same arrival
+  // HR corrected (08:10 on the scanner, HR says 07:55), not an "out".
+  const anchorAt = new Date(session.checkInAt).getTime();
+  const anchor = { id: null, at: session.checkInAt, source: 'manual', anchor: true };
+  let after = all.filter((p) => p.source !== 'manual' && new Date(p.at).getTime() > anchorAt);
+  if (after.length && new Date(after[0].at).getTime() - anchorAt <= SAME_ARRIVAL_MS) after = after.slice(1);
+  const built = buildFor(model, [anchor, ...after], cfg);
+  const day = { ...built, punches: built.punches.filter((p) => !p.anchor) };
   return { model, lock, locked, full, day };
 };
 
