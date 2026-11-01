@@ -22,6 +22,7 @@ const { TAKEN_STATUSES, BOOKED_STATUSES } = require('../utils/leaveWorkflow');
 const { observedDayFor } = require('../utils/leaveCalc');
 const { resolveExpected } = require('../utils/workHours');
 const { getHrConfig } = require('../utils/hrConfig');
+const { kenyaHolidays, IDD } = require('../utils/kenyaHolidays');
 
 const {
   LeaveType, LeavePolicy, LeavePolicyType, PublicHoliday, LeaveBalance, LeaveCharge, LeaveEvent, StaffLeave, StaffProfile,
@@ -157,6 +158,39 @@ const syncObservedDays = async () => {
   }
   if (changed) clearHolidayCache();
   return changed;
+};
+
+/**
+ * Fill in a year's public holidays (1 Nov 2026, Emu: nothing for HR to set
+ * up). Adds every holiday of utils/kenyaHolidays whose date has no row yet —
+ * any status, so a day HR retired stays retired. An Idd day is added only
+ * when the year has no Idd-ul-Fitr / Idd-ul-Adha row at all, so a day HR
+ * moved to the declared date is never put back on the estimate. Then the
+ * Sunday rule (syncObservedDays). Idempotent; written as source 'seed'.
+ * @returns {number} rows added
+ */
+const ensureYearHolidays = async (year) => {
+  const rows = await PublicHoliday.findAll({ where: { date: { [Op.between]: [`${year}-01-01`, `${year}-12-31`] } } });
+  const taken = new Set(rows.map((h) => String(h.date).slice(0, 10)));
+  let added = 0;
+  for (const h of kenyaHolidays(year)) {
+    if (taken.has(h.date)) continue;
+    if (h.kind === 'idd') {
+      const rule = IDD.find((x) => x.key === h.iddKey);
+      if (rows.some((r) => rule.matches.test(r.name))) continue;
+    }
+    await PublicHoliday.create({
+      date: h.date, name: h.kind === 'idd' ? `${h.name} (expected date)` : h.name,
+      status: 'active', source: 'seed', createdBy: null, updatedBy: null,
+    });
+    taken.add(h.date);
+    added += 1;
+  }
+  if (added) {
+    clearHolidayCache();
+    await syncObservedDays();
+  }
+  return added;
 };
 
 // Every active holiday as a Map date → name, cached briefly. Attendance asks
@@ -480,6 +514,7 @@ module.exports = {
   loadPolicy,
   loadHolidays,
   syncObservedDays,
+  ensureYearHolidays,
   holidayMap,
   holidayOn,
   clearHolidayCache,

@@ -20,7 +20,7 @@
 const { Op } = require('sequelize');
 const db = require('../models');
 const { clinicToday, clinicMidnight, clinicDatePlusDays } = require('../utils/clinicTime');
-const { punctuality } = require('../utils/attendanceRules');
+const { punctuality, starFor } = require('../utils/attendanceRules');
 const { buildDay, buildDayFirstLast, hoursOf, methodOf, verificationOf } = require('../utils/punchDay');
 const { parseJsonColumn } = require('../utils/jsonColumn');
 const svc = require('./hrAttendanceService');
@@ -268,13 +268,22 @@ const rebuildDay = async ({ userId, clinicDate, cfg, transaction, now = new Date
     earlyOutMinutes: pOut.state === 'early' ? pOut.minutes : (out && expected.endAt ? 0 : null),
     status,
   };
+  // The same-day star email (1 Nov 2026): a gold or red arrival, today, from a
+  // real punch (not a time HR entered), once per person per day.
+  const inStar = starFor('in', pIn.state);
+  const mailStar = !lock.in && first.source !== 'manual' && !first.anchor && clinicDate === clinicToday(now)
+    && (inStar === 'gold' || inStar === 'red') && !(diag.starMail && diag.starMail.in);
+
   const finalIn = lock.in ? session.checkInAt : first.at;
   const finalOut = lock.out ? session.checkOutAt : (out ? out.at : null);
   const fields = {
     ...inFields,
     ...outFields,
     ...countersFor({ model, day }, finalIn, finalOut),
-    diagnostics: { ...diag, punchModel: model, grace: expected.grace, hoursSource: diag.hoursSource || expected.source },
+    diagnostics: {
+      ...diag, punchModel: model, grace: expected.grace, hoursSource: diag.hoursSource || expected.source,
+      ...(mailStar ? { starMail: { in: inStar, at: now.toISOString() } } : {}),
+    },
   };
   if (first.deviceId && !lock.in) fields.deviceId = first.deviceId;
 
@@ -287,6 +296,20 @@ const rebuildDay = async ({ userId, clinicDate, cfg, transaction, now = new Date
       createdById: first.createdById || userId,
       ...fields,
     }, { transaction });
+  }
+
+  if (mailStar) {
+    const job = async () => {
+      try {
+        const u = await User.findByPk(userId, { attributes: ['firstName'] });
+        await require('./attendanceMail').sendStarMail({
+          userId, firstName: u?.firstName, star: inStar, at: first.at, expectedAt: expected.startAt, minutes: pIn.minutes,
+        });
+      } catch (err) { console.error('attendanceMail.star error:', err.message); }
+    };
+    // Only once the punch is saved: a rolled-back tap sends nothing.
+    if (transaction && typeof transaction.afterCommit === 'function') transaction.afterCommit(() => { job(); });
+    else setImmediate(job);
   }
 
   // Each punch remembers its direction (null = not counted) and its session.

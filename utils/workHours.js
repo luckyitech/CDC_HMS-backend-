@@ -19,6 +19,14 @@ const { clinicMidnight } = require('./clinicTime');
 
 const HHMM = /^([01]\d|2[0-3]):([0-5]\d)$/;
 
+/**
+ * The clinic's hours (1 Nov 2026, Emu): everyone works them — Monday to
+ * Friday 08:00–17:00, Saturday 08:00–13:00, closed Sundays and public
+ * holidays. Nothing for HR to set: per-person hours, the roster's shifts and
+ * the stored clinic default are no longer read for attendance.
+ */
+const CLINIC_HOURS = Object.freeze({ '1-5': ['08:00', '17:00'], 6: ['08:00', '13:00'], 0: 'off' });
+
 /** 'YYYY-MM-DD' → weekday 0..6 (0 = Sunday), timezone-free. */
 const weekdayOf = (clinicDate) => {
   const [y, m, d] = String(clinicDate).split('-').map(Number);
@@ -91,13 +99,18 @@ const covers = (row, clinicDate) =>
  *             grace:number, source:'date'|'weekday'|'default'|'off'|'holiday'|null,
  *             holiday?:string }}
  *
- * Precedence: a DATED row HR set for that very day (e.g. someone rostered on a
+ * Since 1 Nov 2026 `rows` is ignored: everyone is on CLINIC_HOURS (or the
+ * passed defaults) and a public holiday means nobody is expected in.
+ * Former precedence: a DATED row HR set for that very day (e.g. someone rostered on a
  * holiday) → a public holiday (nobody is expected in; B27 phase 1) → the
  * person's weekly row → the clinic default.
  */
-const resolveExpected = ({ rows = [], clinicDate, defaults, graceDefault = 0, holiday = null }) => {
+const resolveExpected = ({ rows: _rows = [], clinicDate, defaults = CLINIC_HOURS, graceDefault = 0, holiday = null }) => {
   const wd = weekdayOf(clinicDate);
-  const active = rows.filter((r) => r && r.status !== 'retired');
+  // Everyone on the clinic's hours (1 Nov 2026): a person's own rows (HR's
+  // weekly hours, the roster's dated shifts) are ignored. The rest of this
+  // function is kept so the precedence can come back without a rewrite.
+  const active = [];
   const dated = active.find((r) => r.date && String(r.date) === clinicDate);
   const weekly = active.find((r) => r.date == null && r.weekday != null && Number(r.weekday) === wd && covers(r, clinicDate));
   const def = parseHoursDefault(defaults)[wd];
@@ -148,6 +161,7 @@ const previousMonth = (month) => {
 
 module.exports = {
   HHMM,
+  CLINIC_HOURS,
   weekdayOf,
   parseHoursDefault,
   atClinicTime,

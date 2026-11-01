@@ -1,5 +1,5 @@
 const db = require('../models');
-const { parseHoursDefault } = require('./workHours');
+const { CLINIC_HOURS } = require('./workHours');
 const { DEFAULT_TARGETS, cleanTargets } = require('./cpd');
 const { cleanThresholds, DEFAULT_THRESHOLDS } = require('./expiry');
 
@@ -64,6 +64,9 @@ const ALERT_EVENTS = [
   'roster_published', 'roster_changed',
   // HR Tier 3 Phase 5: an appraisal step waits for someone. Never a rating or comment.
   'appraisal_self', 'appraisal_review', 'appraisal_sent', 'appraisal_acknowledged',
+  // 1 Nov 2026 (Emu): to the person — a gold or red arrival star on the day;
+  // their week every Saturday at 14:00 (services/attendanceMail).
+  'attendance_star', 'attendance_weekly',
 ];
 const ALERT_CHANNELS = ['bell', 'email', 'whatsapp'];
 const DEFAULT_ALERTS = Object.fromEntries(ALERT_EVENTS.map((e) => [e, { bell: true, email: true, whatsapp: false }]));
@@ -107,7 +110,7 @@ const DEFAULTS = {
   confirmCheckout: true,
   geo: 'log',
   // Decided with Emu, 23 Sep 2026: Mon–Fri 08:00–17:00, Sat 08:00–13:00, Sun off.
-  hoursDefault: { '1-5': ['08:00', '17:00'], 6: ['08:00', '13:00'], 0: 'off' },
+  hoursDefault: CLINIC_HOURS,
   graceMinutes: 0,
   positiveFeedback: true,
   deviceDays: 90,
@@ -167,10 +170,9 @@ const int = (v, d, min, max) => {
 
 const getHrConfig = async () => {
   const m = await readRows();
-  let hoursDefault = DEFAULTS.hoursDefault;
-  if (m[K.hoursDefault]) {
-    try { const parsed = JSON.parse(m[K.hoursDefault]); if (parsed && typeof parsed === 'object') hoursDefault = parsed; } catch { /* keep default */ }
-  }
+  // The clinic's hours are fixed (1 Nov 2026, utils/workHours CLINIC_HOURS);
+  // a stored hr.hours.default is no longer read.
+  const hoursDefault = CLINIC_HOURS;
   return {
     debounceSeconds:   int(m[K.debounceSeconds], DEFAULTS.debounceSeconds, 0, 3600),
     minSessionMinutes: int(m[K.minSessionMinutes], DEFAULTS.minSessionMinutes, 0, 720),
@@ -213,12 +215,7 @@ const setHrConfig = async (changes = {}) => {
     if (!GEO_MODES.includes(changes.geo)) throw new Error(`Phone location must be one of ${GEO_MODES.join(', ')}.`);
     await write(K.geo, changes.geo);
   }
-  if (changes.hoursDefault !== undefined) {
-    const parsed = parseHoursDefault(changes.hoursDefault);
-    if (!Object.keys(parsed).length) throw new Error('Clinic-wide default hours must name at least one weekday, e.g. {"1-5":["08:00","17:00"],"6":["08:00","13:00"],"0":"off"}.');
-    const obj = typeof changes.hoursDefault === 'string' ? JSON.parse(changes.hoursDefault) : changes.hoursDefault;
-    await write(K.hoursDefault, JSON.stringify(obj));
-  }
+  // changes.hoursDefault is ignored: the clinic's hours are fixed (1 Nov 2026).
 
   if (changes.alerts !== undefined) {
     const obj = typeof changes.alerts === 'string' ? JSON.parse(changes.alerts) : changes.alerts;

@@ -191,7 +191,8 @@ const streakNoRed = ({ days, rows, today }) => {
  */
 const monthSummary = ({ month, days, rows, today }) => {
   const byDay = sessionsByDay(rows);
-  const monthDays = days.filter((d) => d.date.startsWith(month)).sort((a, b) => (a.date < b.date ? -1 : 1));
+  // month null → every day passed (the weekly email's Monday–Saturday).
+  const monthDays = (month ? days.filter((d) => d.date.startsWith(month)) : [...days]).sort((a, b) => (a.date < b.date ? -1 : 1));
   const calendar = monthDays.map((d) => dayCell(d, byDay.get(d.date), today));
   const stars = countStars(calendar);
 

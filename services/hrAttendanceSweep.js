@@ -151,8 +151,23 @@ const runSweep = async (now = new Date()) => {
 // Each sweep in its own catch: one failing never stops the others. The expiry
 // pass (B27 phase 5) rides the same timer but only does real work once a day,
 // after 06:00 Nairobi (services/expiryReminders guards this).
+// This year's and next year's public holidays, once a day (1 Nov 2026).
+let holidaysDoneFor = null;
+const runHolidayFill = async (now = new Date()) => {
+  const today = clinicToday(now);
+  if (holidaysDoneFor === today) return 0;
+  const { ensureYearHolidays } = require('./leaveService');
+  const year = Number(today.slice(0, 4));
+  const added = (await ensureYearHolidays(year)) + (await ensureYearHolidays(year + 1));
+  holidaysDoneFor = today;
+  if (added) console.log(`[HR] public holidays: ${added} added for ${year}–${year + 1}`);
+  return added;
+};
+
 const runAll = () => {
   runSweep().catch((err) => console.error('[HR] missed-checkout sweep failed:', err.message));
+  runHolidayFill().catch((err) => console.error('[HR] public holiday fill failed:', err.message));
+  require('./attendanceMail').runWeeklyIfDue().catch((err) => console.error('[HR] weekly attendance email failed:', err.message));
   runLeaveStatusSweep().catch((err) => console.error('[HR] leave status sweep failed:', err.message));
   runExpiryReminders().catch((err) => console.error('[HR] expiry reminders failed:', err.message));
   runCancelRequestReminders().catch((err) => console.error('[HR] cancel-request reminders failed:', err.message));
@@ -169,5 +184,5 @@ const startScheduler = () => {
 const stopScheduler = () => { if (timer) { clearInterval(timer); timer = null; } };
 
 module.exports = {
-  isStale, runSweep, runLeaveStatusSweep, runExpiryReminders, runCancelRequestReminders, startScheduler, stopScheduler,
+  isStale, runSweep, runHolidayFill, runLeaveStatusSweep, runExpiryReminders, runCancelRequestReminders, startScheduler, stopScheduler,
 };

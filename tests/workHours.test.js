@@ -40,12 +40,16 @@ describe('resolveExpected', () => {
     const sun = resolveExpected({ rows: [], clinicDate: '2026-09-27', defaults: DEFAULTS });
     assert.equal(sun.source, 'off'); assert.equal(sun.startAt, null);
   });
-  test('a weekday row overrides the default and carries its own grace', () => {
+    // Retired 1 Nov 2026: everyone works the clinic's hours; per-person rows are
+  // ignored (utils/workHours resolveExpected). Kept for the day they return.
+  test.skip('a weekday row overrides the default and carries its own grace', () => {
     const rows = [{ weekday: 3, date: null, startTime: '07:30:00', endTime: '16:30:00', isOff: false, graceMinutes: 5, status: 'active' }];
     const r = resolveExpected({ rows, clinicDate: '2026-09-23', defaults: DEFAULTS, graceDefault: 0 });
     assert.equal(r.source, 'weekday'); assert.equal(r.start, '07:30'); assert.equal(r.end, '16:30'); assert.equal(r.grace, 5);
   });
-  test('a dated row beats the weekday row', () => {
+    // Retired 1 Nov 2026: everyone works the clinic's hours; per-person rows are
+  // ignored (utils/workHours resolveExpected). Kept for the day they return.
+  test.skip('a dated row beats the weekday row', () => {
     const rows = [
       { weekday: 3, date: null, startTime: '07:30:00', endTime: '16:30:00', isOff: false, status: 'active' },
       { weekday: null, date: '2026-09-23', startTime: '10:00:00', endTime: '14:00:00', isOff: false, status: 'active' },
@@ -53,7 +57,9 @@ describe('resolveExpected', () => {
     const r = resolveExpected({ rows, clinicDate: '2026-09-23', defaults: DEFAULTS });
     assert.equal(r.source, 'date'); assert.equal(r.start, '10:00');
   });
-  test('an off row means no expected hours', () => {
+    // Retired 1 Nov 2026: everyone works the clinic's hours; per-person rows are
+  // ignored (utils/workHours resolveExpected). Kept for the day they return.
+  test.skip('an off row means no expected hours', () => {
     const rows = [{ weekday: null, date: '2026-09-23', isOff: true, status: 'active' }];
     const r = resolveExpected({ rows, clinicDate: '2026-09-23', defaults: DEFAULTS });
     assert.equal(r.source, 'off'); assert.equal(r.startAt, null);
@@ -66,7 +72,9 @@ describe('resolveExpected', () => {
     const r = resolveExpected({ rows, clinicDate: '2026-09-23', defaults: DEFAULTS });
     assert.equal(r.source, 'default'); assert.equal(r.start, '08:00');
   });
-  test('a weekday row without times takes the default times', () => {
+    // Retired 1 Nov 2026: everyone works the clinic's hours; per-person rows are
+  // ignored (utils/workHours resolveExpected). Kept for the day they return.
+  test.skip('a weekday row without times takes the default times', () => {
     const rows = [{ weekday: 3, date: null, startTime: null, endTime: null, isOff: false, graceMinutes: 10, status: 'active' }];
     const r = resolveExpected({ rows, clinicDate: '2026-09-23', defaults: DEFAULTS, graceDefault: 0 });
     assert.equal(r.start, '08:00'); assert.equal(r.grace, 10); assert.equal(r.source, 'weekday');
@@ -89,4 +97,22 @@ describe('calendar helpers', () => {
     assert.equal(previousMonth('2026-09'), '2026-08');
     assert.equal(previousMonth('2026-01'), '2025-12');
   });
+});
+
+// 1 Nov 2026 (Emu): everyone works the clinic's hours — nothing for HR to set.
+test('per-person rows are ignored: everyone on Mon–Fri 08:00–17:00, Sat 08:00–13:00, Sunday off', () => {
+  const { resolveExpected, CLINIC_HOURS } = require('../utils/workHours');
+  const rows = [
+    { weekday: 1, startTime: '10:00:00', endTime: '14:00:00', status: 'active' },
+    { date: '2026-11-07', isOff: true, status: 'active' },
+  ];
+  const mon = resolveExpected({ rows, clinicDate: '2026-11-02' });
+  const sat = resolveExpected({ rows, clinicDate: '2026-11-07' });
+  const sun = resolveExpected({ rows, clinicDate: '2026-11-08' });
+  const hol = resolveExpected({ rows, clinicDate: '2026-12-25', holiday: 'Christmas Day' });
+  require('node:assert/strict').deepEqual(
+    [mon.start, mon.end, sat.start, sat.end, sun.start, sun.source, hol.start, hol.source],
+    ['08:00', '17:00', '08:00', '13:00', null, 'off', null, 'holiday'],
+  );
+  require('node:assert/strict').deepEqual(CLINIC_HOURS, { '1-5': ['08:00', '17:00'], 6: ['08:00', '13:00'], 0: 'off' });
 });

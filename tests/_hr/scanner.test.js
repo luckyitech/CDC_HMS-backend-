@@ -316,7 +316,9 @@ describe('review fixes', () => {
     assert.equal(s.status, 'closed');
   });
 
-  test('#4 a night shift with a break stays one session on the night it began', async () => {
+  // Retired 1 Nov 2026: everyone works the clinic's hours, so no night shifts
+  // (rostered rows are no longer read). Kept for the day per-person hours return.
+  test.skip('#4 a night shift with a break stays one session on the night it began', async () => {
     await db.StaffWorkHours.create({ UserId: night.id, date: twoDaysAgo, startTime: '19:00:00', endTime: '07:00:00', isOff: false, status: 'active' });
     await relay([
       { userNo: '5', time: `${twoDaysAgo} 18:55:00`, verify: 1 },

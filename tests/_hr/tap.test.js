@@ -5,7 +5,7 @@
 // Drives the REAL controllers with a fake req/res and a scripted fake tag
 // (utils/ntag424 computeSunMac — exactly the URL the chip would mirror).
 // =====================================================================
-const { test, describe, before, after } = require('node:test');
+const { test, describe, before, after, mock } = require('node:test');
 const assert = require('node:assert/strict');
 require('dotenv').config();
 
@@ -44,9 +44,13 @@ const hhmmPlus = (mins) => clinicHHMM(new Date(Date.now() + mins * 60000));
 // The harness runs at whatever hour it is; a day that "ends" past midnight
 // would be refused by the validator, so every fake day ends at 23:59.
 const END = '23:59';
-const setToday = async (userId, startOffsetMin) => {
-  const r = await call(hrWorkHours.update, { user: asUser(hr), params: { userId: String(userId) }, body: { overrides: [{ date: today, startTime: hhmmPlus(startOffsetMin), endTime: END }] } });
-  assert.equal(r.status, 200, JSON.stringify(r.body));
+// 1 Nov 2026: everyone works the clinic's hours (Mon–Fri 08:00–17:00), so
+// these tests run on a fixed Monday with the clock set: "work starts N
+// minutes from now" means now = 08:00 − N on Mon 2 Nov 2026.
+const CLINIC_OPENS = new Date('2026-11-02T08:00:00+03:00').getTime();
+mock.timers.enable({ apis: ['Date'], now: CLINIC_OPENS - 60 * 60000 });
+const setToday = async (_userId, startOffsetMin) => {
+  mock.timers.setTime(Math.max(Date.now(), CLINIC_OPENS - startOffsetMin * 60000));
 };
 const asUser = (u) => ({ id: u.id, role: u.role, permissions: [], deniedPermissions: [], name: `${u.firstName} ${u.lastName}` });
 

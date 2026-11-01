@@ -157,7 +157,9 @@ describe('copy last week (RO-9)', () => {
 
 describe('night shifts in attendance (RO-12)', () => {
   const night = [{ status: 'active', date: '2026-11-10', startTime: '19:00:00', endTime: '07:00:00', isOff: false }];
-  test('a dated night row ends the next morning', () => {
+    // Retired 1 Nov 2026: everyone works the clinic's hours; per-person rows are
+  // ignored (utils/workHours resolveExpected). Kept for the day they return.
+  test.skip('a dated night row ends the next morning', () => {
     const e = resolveExpected({ rows: night, clinicDate: '2026-11-10', defaults: null, graceDefault: 5 });
     assert.equal(e.source, 'date');
     assert.equal(e.start, '19:00');
@@ -170,7 +172,9 @@ describe('night shifts in attendance (RO-12)', () => {
     const e = resolveExpected({ rows: weekly, clinicDate: '2026-11-10', defaults: null });
     assert.equal(e.startAt, null);
   });
-  test('a rostered shift beats a public holiday', () => {
+    // Retired 1 Nov 2026: everyone works the clinic's hours; per-person rows are
+  // ignored (utils/workHours resolveExpected). Kept for the day they return.
+  test.skip('a rostered shift beats a public holiday', () => {
     const e = resolveExpected({ rows: night, clinicDate: '2026-11-10', defaults: null, holiday: 'Some Day' });
     assert.equal(e.source, 'date');
   });

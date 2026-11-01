@@ -169,7 +169,9 @@ describe('attendance: a public holiday is no expected hours', () => {
     const rows = [{ weekday: 2, startTime: '07:00', endTime: '15:00', status: 'active' }];
     assert.equal(resolveExpected({ rows, clinicDate: '2026-10-20', defaults, holiday: 'Mashujaa Day' }).source, 'holiday');
   });
-  test('hours HR set for that very date win — someone rostered on the holiday', () => {
+    // Retired 1 Nov 2026: everyone works the clinic's hours; per-person rows are
+  // ignored (utils/workHours resolveExpected). Kept for the day they return.
+  test.skip('hours HR set for that very date win — someone rostered on the holiday', () => {
     const rows = [{ date: '2026-10-20', startTime: '09:00', endTime: '13:00', status: 'active' }];
     const r = resolveExpected({ rows, clinicDate: '2026-10-20', defaults, holiday: 'Mashujaa Day' });
     assert.equal(r.source, 'date');

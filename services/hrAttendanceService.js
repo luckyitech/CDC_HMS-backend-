@@ -73,8 +73,10 @@ const leaveDatesFor = async (userId, from, to) => {
 };
 
 /** One entry per calendar date of a month, with expected hours, leave and holidays. */
-const daysForMonth = async (userId, month, cfg, rows, leaveSet) => {
-  const dates = datesOfMonth(month);
+const daysForMonth = async (userId, month, cfg, rows, leaveSet) => daysForDates(userId, datesOfMonth(month), cfg, rows, leaveSet);
+
+/** The same, for any run of dates (the weekly email). */
+const daysForDates = async (userId, dates, cfg, rows, leaveSet) => {
   const [leave, holidays] = await Promise.all([
     leaveSet || leaveDatesFor(userId, dates[0], dates[dates.length - 1]),
     holidayMap(),
@@ -133,6 +135,20 @@ const monthSummaryFor = async (userId, month, cfg, { now = new Date(), rows } = 
     order: [['checkInAt', 'ASC']],
   })).map(plain);
   return monthSummary({ month, days, rows: sessions, today });
+};
+
+/**
+ * A run of dates for one person (the weekly email, 1 Nov 2026): the same
+ * stars, hours and lateness as "My stars", plus the sessions themselves.
+ */
+const periodSummaryFor = async (userId, dates, cfg, { now = new Date() } = {}) => {
+  const today = clinicToday(now);
+  const days = await daysForDates(userId, dates, cfg, []);
+  const sessions = (await StaffAttendance.findAll({
+    where: { UserId: userId, clinicDate: { [Op.between]: [dates[0], dates[dates.length - 1]] }, status: { [Op.in]: ['open', 'closed', 'missed_checkout'] } },
+    order: [['checkInAt', 'ASC']],
+  })).map(plain);
+  return { ...monthSummary({ month: null, days, rows: sessions, today }), days, sessions };
 };
 
 // A rostered night shift (HR Tier 3 Phase 4) belongs to the evening it began:
@@ -237,6 +253,8 @@ module.exports = {
   daysForMonth,
   monthDataFor,
   monthSummaryFor,
+  periodSummaryFor,
+  daysForDates,
   OVERNIGHT_GRACE_HOURS,
   internalUsers,
   graceOf,
