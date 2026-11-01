@@ -56,6 +56,15 @@ describe('clinic hours and holidays — nothing for HR to set', () => {
     assert.deepEqual([mon.start, mon.end, sat.start, sat.end, sun.start], ['08:00', '17:00', '08:00', '13:00', null]);
   });
 
+  test('HR changes the clinic hours → everyone follows; per-person rows still ignored', async () => {
+    await setHrConfig({ hoursDefault: { '1-5': ['07:30', '16:30'], 6: 'off', 0: 'off' } });
+    const cfg = await getHrConfig();
+    const mon = await expectedFor(mildred.id, '2026-11-02', cfg);
+    const sat = await expectedFor(rahma.id, '2026-11-07', cfg);
+    assert.deepEqual([mon.start, mon.end, sat.start], ['07:30', '16:30', null]);
+    await setHrConfig({ hoursDefault: { '1-5': ['08:00', '17:00'], 6: ['08:00', '13:00'], 0: 'off' } });
+  });
+
   test('a year\'s holidays fill themselves in; a moved Idd day is not put back', async () => {
     const added = await ensureYearHolidays(2027);
     assert.ok(added >= 12, String(added));

@@ -20,10 +20,11 @@ const { clinicMidnight } = require('./clinicTime');
 const HHMM = /^([01]\d|2[0-3]):([0-5]\d)$/;
 
 /**
- * The clinic's hours (1 Nov 2026, Emu): everyone works them — Monday to
- * Friday 08:00–17:00, Saturday 08:00–13:00, closed Sundays and public
- * holidays. Nothing for HR to set: per-person hours, the roster's shifts and
- * the stored clinic default are no longer read for attendance.
+ * The clinic's hours (1 Nov 2026, Emu): everyone works the same hours. These
+ * are the starting hours — Monday to Friday 08:00–17:00, Saturday 08:00–13:00,
+ * closed Sundays and public holidays; HR can change them for the whole clinic
+ * (Settings → Check-in rules, setting hr.hours.default). Per-person hours and
+ * the roster's shifts are not read.
  */
 const CLINIC_HOURS = Object.freeze({ '1-5': ['08:00', '17:00'], 6: ['08:00', '13:00'], 0: 'off' });
 

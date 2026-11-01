@@ -1,5 +1,5 @@
 const db = require('../models');
-const { CLINIC_HOURS } = require('./workHours');
+const { CLINIC_HOURS, parseHoursDefault } = require('./workHours');
 const { DEFAULT_TARGETS, cleanTargets } = require('./cpd');
 const { cleanThresholds, DEFAULT_THRESHOLDS } = require('./expiry');
 
@@ -170,9 +170,15 @@ const int = (v, d, min, max) => {
 
 const getHrConfig = async () => {
   const m = await readRows();
-  // The clinic's hours are fixed (1 Nov 2026, utils/workHours CLINIC_HOURS);
-  // a stored hr.hours.default is no longer read.
-  const hoursDefault = CLINIC_HOURS;
+  // The clinic's hours — one set for everyone (1 Nov 2026): HR sets them in
+  // Settings → Check-in rules; CLINIC_HOURS until then. No per-person hours.
+  let hoursDefault = CLINIC_HOURS;
+  if (m[K.hoursDefault]) {
+    try {
+      const parsed = JSON.parse(m[K.hoursDefault]);
+      if (parsed && typeof parsed === 'object' && Object.keys(parseHoursDefault(parsed)).length) hoursDefault = parsed;
+    } catch { /* keep the clinic default */ }
+  }
   return {
     debounceSeconds:   int(m[K.debounceSeconds], DEFAULTS.debounceSeconds, 0, 3600),
     minSessionMinutes: int(m[K.minSessionMinutes], DEFAULTS.minSessionMinutes, 0, 720),
@@ -215,7 +221,12 @@ const setHrConfig = async (changes = {}) => {
     if (!GEO_MODES.includes(changes.geo)) throw new Error(`Phone location must be one of ${GEO_MODES.join(', ')}.`);
     await write(K.geo, changes.geo);
   }
-  // changes.hoursDefault is ignored: the clinic's hours are fixed (1 Nov 2026).
+  if (changes.hoursDefault !== undefined) {
+    const parsed = parseHoursDefault(changes.hoursDefault);
+    if (!Object.keys(parsed).length) throw new Error('Clinic hours must name at least one weekday, e.g. {"1-5":["08:00","17:00"],"6":["08:00","13:00"],"0":"off"}.');
+    const obj = typeof changes.hoursDefault === 'string' ? JSON.parse(changes.hoursDefault) : changes.hoursDefault;
+    await write(K.hoursDefault, JSON.stringify(obj));
+  }
 
   if (changes.alerts !== undefined) {
     const obj = typeof changes.alerts === 'string' ? JSON.parse(changes.alerts) : changes.alerts;
