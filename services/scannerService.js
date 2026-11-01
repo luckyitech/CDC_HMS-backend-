@@ -37,6 +37,18 @@ const numberOfEmployeeId = (employeeId) => {
 };
 /** A scanner number without leading zeros: '005' → '5'. */
 const normalNo = (userNo) => String(userNo || '').trim().replace(/^0+(?=\d)/, '');
+/**
+ * Whether the name enrolled on the scanner fits the staff member's first name.
+ * Staff are enrolled with their number AND first name, so a number match whose
+ * name differs is an old enrolment, not this person ('Mildred' on 2 ≠ EMP002).
+ * The scanner may cut names short, so either may be a prefix of the other.
+ */
+const firstWord = (s) => String(s || '').trim().toLowerCase().split(/\s+/)[0].replace(/[^a-z]/g, '');
+const nameFits = (scannerName, firstName) => {
+  const a = firstWord(scannerName);
+  const b = firstWord(firstName);
+  return a.length >= 3 && b.length >= 3 && (a.startsWith(b) || b.startsWith(a));
+};
 
 /** Get (or create, unlinked) the scanner user for a number. */
 const scannerUserFor = async (scannerId, userNo, transaction) => {
@@ -235,6 +247,7 @@ const usersFor = async (scanner) => {
     .map((u) => {
       const match = byNumber.get(normalNo(u.userNo));
       const proposal = u.status === 'unlinked' && match && !linkedIds.has(match.UserId)
+        && nameFits(u.name, match.User.firstName)
         ? person(match.User, match) : null;
       return {
         id: u.id, userNo: u.userNo, name: u.name, status: u.status, onScanner: u.onScanner,
@@ -281,6 +294,7 @@ module.exports = {
   isOnline,
   numberOfEmployeeId,
   normalNo,
+  nameFits,
   ingestPunches,
   processPending,
   reprocessUser,
