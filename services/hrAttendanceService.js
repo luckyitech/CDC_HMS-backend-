@@ -12,7 +12,7 @@ const db = require('../models');
 const { clinicToday } = require('../utils/clinicTime');
 
 const { resolveExpected, datesOfMonth, previousMonth } = require('../utils/workHours');
-const { monthSummary, streakNoRed, clinicHHMM } = require('../utils/attendanceRules');
+const { monthSummary, streakNoRed, clinicHHMM, workedMinutesOf } = require('../utils/attendanceRules');
 const { parseJsonColumn } = require('../utils/jsonColumn');
 const { STAFF_ROLES } = require('../constants/staffRoles');
 const { holidayMap } = require('./leaveService');
@@ -169,8 +169,8 @@ const SESSION_INCLUDE = [
   { model: UserDevice, as: 'device', attributes: ['id', 'label'] },
 ];
 
-/** Minutes between check-in and check-out, or null while open. */
-const minutesWorked = (row) => (row.checkOutAt ? Math.max(0, Math.round((new Date(row.checkOutAt) - new Date(row.checkInAt)) / 60000)) : null);
+/** The hours a session counts for — the one rule (utils/attendanceRules workedMinutesOf). */
+const minutesWorked = (row) => workedMinutesOf(plain(row));
 
 /** The shape every HR screen receives for a session row. */
 const serializeSession = (row) => {
@@ -182,7 +182,7 @@ const serializeSession = (row) => {
     checkOutAt: r.checkOutAt,
     checkInHHMM: clinicHHMM(r.checkInAt),
     checkOutHHMM: r.checkOutAt ? clinicHHMM(r.checkOutAt) : null,
-    minutesWorked: r.status === 'closed' ? minutesWorked(r) : null,
+    minutesWorked: workedMinutesOf(r),
     checkInMethod: r.checkInMethod,
     checkOutMethod: r.checkOutMethod,
     checkInVerification: r.checkInVerification,
@@ -196,6 +196,12 @@ const serializeSession = (row) => {
     expectedInHHMM: r.expectedInAt ? clinicHHMM(r.expectedInAt) : null,
     expectedOutHHMM: r.expectedOutAt ? clinicHHMM(r.expectedOutAt) : null,
     status: r.status,
+    // One session per day (17 Oct 2026): the ins and outs between the first in
+    // and the last out. null on sessions from before punches were kept.
+    inCount: r.inCount ?? null,
+    outCount: r.outCount ?? null,
+    awayMinutes: r.awayMinutes ?? null,
+    workedMinutes: r.workedMinutes ?? null,
     checkInIp: r.checkInIp,
     checkOutIp: r.checkOutIp,
     door: r.checkInTag ? r.checkInTag.label : null,

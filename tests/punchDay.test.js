@@ -1,5 +1,4 @@
-// One session per day from every punch (fingerprint scanner, 17 Oct 2026;
-// simplified 19 Oct 2026: first punch in, last punch out, the rest kept).
+// One session per day from every punch (fingerprint scanner, 17 Oct 2026).
 const { test, describe } = require('node:test');
 const assert = require('node:assert/strict');
 const { buildDay, decideTap } = require('../utils/punchDay');
@@ -13,7 +12,7 @@ describe('buildDay', () => {
     const d = buildDay([], CFG);
     assert.equal(d.first, null);
     assert.equal(d.inside, false);
-    assert.deepEqual(d.counted, []);
+    assert.equal(d.inCount, 0);
   });
 
   test('one punch → checked in, still inside', () => {
@@ -21,40 +20,38 @@ describe('buildDay', () => {
     assert.equal(d.first.id, 1);
     assert.equal(d.inside, true);
     assert.equal(d.lastOut, null);
+    assert.deepEqual([d.inCount, d.outCount, d.awayMinutes], [1, 0, 0]);
   });
 
-  test('four punches → first is the check-in, last is the check-out, the two between are kept with no direction', () => {
+  test('in, out, in, out → first is check-in, last is check-out, the middle gives the counters', () => {
     const d = buildDay([P(1, '08:31'), P(2, '12:40'), P(3, '13:25'), P(4, '17:05')], CFG);
-    assert.deepEqual(d.punches.map((p) => p.direction), ['in', null, null, 'out']);
+    assert.deepEqual(d.punches.map((p) => p.direction), ['in', 'out', 'in', 'out']);
     assert.equal(d.first.id, 1);
     assert.equal(d.lastOut.id, 4);
     assert.equal(d.inside, false);
-    assert.deepEqual(d.counted.map((p) => p.id), [1, 4]);
+    assert.deepEqual([d.inCount, d.outCount, d.awayMinutes], [2, 2, 45]);
   });
 
-  test('three punches → the third is the check-out (a later punch moves the check-out)', () => {
+  test('an odd number of punches leaves the day open, with no check-out yet', () => {
     const d = buildDay([P(1, '08:00'), P(2, '12:00'), P(3, '13:00')], CFG);
-    assert.deepEqual(d.punches.map((p) => p.direction), ['in', null, 'out']);
-    assert.equal(d.inside, false);
-    assert.equal(d.lastOut.id, 3);
+    assert.equal(d.inside, true);
+    assert.equal(d.lastOut, null);
+    assert.equal(d.awayMinutes, 60);
   });
 
   test('punches arriving out of order give the same day', () => {
     const a = buildDay([P(4, '17:05'), P(2, '12:40'), P(1, '08:31'), P(3, '13:25')], CFG);
-    assert.deepEqual(a.counted.map((p) => p.id), [1, 4]);
+    assert.deepEqual(a.counted.map((p) => p.id), [1, 2, 3, 4]);
   });
 
-  test('a second punch within the minimum session of the check-in is not a check-out', () => {
+  test('a second punch within 2 minutes is the same brush and is not counted', () => {
     const d = buildDay([P(1, '08:31'), { id: 2, at: new Date(T('08:31').getTime() + 50000), source: 'fingerprint' }, P(3, '17:00')], CFG);
     assert.deepEqual(d.punches.map((p) => p.direction), ['in', null, 'out']);
-    const e = buildDay([P(1, '08:00'), P(2, '08:05')], CFG);
-    assert.equal(e.inside, true);
   });
 
-  test('a second punch within 2 minutes of the check-out does not move it', () => {
-    const d = buildDay([P(1, '08:00'), P(2, '17:00'), { id: 3, at: new Date(T('17:00').getTime() + 40000), source: 'fingerprint' }], CFG);
-    assert.deepEqual(d.punches.map((p) => p.direction), ['in', 'out', null]);
-    assert.equal(d.lastOut.id, 2);
+  test('a first "out" inside the minimum session is not counted', () => {
+    const d = buildDay([P(1, '08:00'), P(2, '08:05'), P(3, '17:00')], CFG);
+    assert.deepEqual(d.punches.map((p) => p.direction), ['in', null, 'out']);
   });
 
   test('HR manual times always count, even minutes apart', () => {
@@ -71,7 +68,7 @@ describe('buildDay', () => {
 });
 
 describe('decideTap', () => {
-  const counted = (n) => buildDay(['08:00', '12:00'].slice(0, n).map((h, i) => P(i + 1, h, 'nfc')), CFG).counted;
+  const counted = (n) => buildDay(['08:00', '12:00', '13:00', '17:00'].slice(0, n).map((h, i) => P(i + 1, h, 'nfc')), CFG).counted;
   test('first tap of the day → checkin', () => {
     assert.equal(decideTap({ now: T('08:00'), counted: [], cfg: CFG }), 'checkin');
   });
@@ -82,15 +79,55 @@ describe('decideTap', () => {
   test('confirmation off → checkout straight away', () => {
     assert.equal(decideTap({ now: T('12:00'), counted: counted(1), cfg: { ...CFG, confirmCheckout: false } }), 'checkout');
   });
-  test('after a check-out, a later tap is another check-out (it moves the check-out), never a check-in', () => {
-    assert.equal(decideTap({ now: T('13:00'), counted: counted(2), cfg: { ...CFG, confirmCheckout: false } }), 'checkout');
-    assert.equal(decideTap({ now: T('13:00'), counted: counted(2), cfg: CFG }), 'offer_checkout');
+  test('after an out → back_in (same session, no new day)', () => {
+    assert.equal(decideTap({ now: T('13:00'), counted: counted(2), cfg: CFG }), 'back_in');
   });
-  test('a confirmation pressed on a day with no check-in → duplicate, never a check-in', () => {
-    assert.equal(decideTap({ now: T('13:00'), counted: [], confirm: true, cfg: CFG }), 'duplicate');
+  test('a confirmation pressed after the day went out → duplicate, never a check-in', () => {
+    assert.equal(decideTap({ now: T('13:00'), counted: counted(2), confirm: true, cfg: CFG }), 'duplicate');
   });
-  test('inside the debounce of the check-out, or the minimum session of the check-in → duplicate', () => {
+  test('inside the debounce → duplicate', () => {
     assert.equal(decideTap({ now: new Date(T('12:00').getTime() + 30000), counted: counted(2), cfg: CFG }), 'duplicate');
-    assert.equal(decideTap({ now: T('08:05'), counted: counted(1), cfg: CFG }), 'duplicate');
+  });
+});
+
+// Time out comes off the hours (1 Nov 2026, Emu).
+describe('hours = time inside', () => {
+  const { workedMinutesOf } = require('../utils/attendanceRules');
+
+  test('in 08:30, out 12:30, in 13:30, out 17:30 → 8 h inside, 1 h away', () => {
+    const d = buildDay([P(1, '08:30'), P(2, '12:30'), P(3, '13:30'), P(4, '17:30')], CFG);
+    assert.equal(d.workedMinutes, 480);
+    assert.equal(d.awayMinutes, 60);
+  });
+
+  test('odd day (back from lunch, never punched out) → hours stop at the last out', () => {
+    const d = buildDay([P(1, '08:30'), P(2, '12:30'), P(3, '13:30')], CFG);
+    assert.equal(d.inside, true);
+    assert.equal(d.lastOut, null);
+    assert.equal(d.workedMinutes, 240);
+  });
+
+  test('a single punch → no hours', () => {
+    assert.equal(buildDay([P(1, '08:30')], CFG).workedMinutes, 0);
+  });
+
+  test('a second brush at the door within the debounce does not flip the day', () => {
+    const d = buildDay([P(1, '08:30'), P(2, '08:31'), P(3, '17:00')], CFG);
+    assert.deepEqual(d.punches.map((p) => p.direction), ['in', null, 'out']);
+    assert.equal(d.workedMinutes, 510);
+  });
+
+  test('workedMinutesOf: punches → time inside; missed check-out counts to the last out', () => {
+    assert.equal(workedMinutesOf({ status: 'closed', workedMinutes: 480, checkInAt: T('08:30'), checkOutAt: T('17:30'), awayMinutes: 60 }), 480);
+    assert.equal(workedMinutesOf({ status: 'missed_checkout', workedMinutes: 240, checkInAt: T('08:30'), checkOutAt: null }), 240);
+    assert.equal(workedMinutesOf({ status: 'open', workedMinutes: 240, checkInAt: T('08:30') }), null);
+    assert.equal(workedMinutesOf({ status: 'voided', workedMinutes: 240 }), null);
+  });
+
+  test('workedMinutesOf: times HR set, or an older session → check-in to check-out less time out', () => {
+    const hr = { status: 'closed', workedMinutes: 100, awayMinutes: 30, checkInAt: T('08:00'), checkOutAt: T('17:00'), diagnostics: { hrLocked: { in: true, out: true } } };
+    assert.equal(workedMinutesOf(hr), 510);
+    assert.equal(workedMinutesOf({ status: 'closed', checkInAt: T('08:00'), checkOutAt: T('17:00') }), 540);
+    assert.equal(workedMinutesOf({ status: 'closed', checkInAt: T('08:00'), checkOutAt: T('17:00'), diagnostics: '{"hrLocked":{"in":true}}', workedMinutes: 9 }), 540);
   });
 });

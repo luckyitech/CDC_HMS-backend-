@@ -10,6 +10,7 @@
 const { CLINIC_TZ } = require('./clinicTime');
 const { spanMinutes } = require('./workHours');
 const { PERMISSIONS, INTERNAL_ROLES, passesGate } = require('../constants/permissions');
+const { parseJsonColumn } = require('./jsonColumn');
 
 const MINUTE = 60 * 1000;
 
@@ -214,9 +215,7 @@ const monthSummary = ({ month, days, rows, today }) => {
     const sessions = byDay.get(day.date);
     if (!sessions) continue;
     for (const s of sessions) {
-      if (s.status === 'closed' && s.checkOutAt) {
-        hoursWorkedMinutes += Math.max(0, minutesBetween(s.checkInAt, s.checkOutAt));
-      }
+      hoursWorkedMinutes += workedMinutesOf(s) || 0;
       if (s.status === 'missed_checkout') missedCheckouts += 1;
       if (s.checkInPunctuality === 'late') { lateCount += 1; lateMinutesTotal += s.lateMinutes || 0; lateDates.push(day.date); }
       if (s.checkOutPunctuality === 'early') { earlyOutCount += 1; earlyOutMinutesTotal += s.earlyOutMinutes || 0; earlyOutDates.push(day.date); }
@@ -257,6 +256,24 @@ const monthSummary = ({ month, days, rows, today }) => {
  * someone's Permissions tab takes them off the "Not yet in" list. Someone not
  * expected still appears if they tapped.
  */
+/**
+ * The hours a session counts for (1 Nov 2026, Emu: time out comes off the
+ * hours). The one rule every screen, report and CSV uses.
+ *   - Built from punches: the time inside (workedMinutes) — every in → out
+ *     pair. A missed check-out counts up to the last out.
+ *   - Times HR set by hand, or a session from before 1 Nov: check-in to
+ *     check-out, less any recorded time out.
+ * null while the person is still in, and for voided/refused rows.
+ */
+const COUNTS_HOURS = new Set(['closed', 'missed_checkout']);
+const workedMinutesOf = (s) => {
+  if (!s || !COUNTS_HOURS.has(s.status)) return null;
+  const lock = (parseJsonColumn(s.diagnostics) || {}).hrLocked || {};
+  if (s.workedMinutes != null && !lock.in && !lock.out) return s.workedMinutes;
+  if (!s.checkInAt || !s.checkOutAt) return s.status === 'missed_checkout' ? 0 : null;
+  return Math.max(0, minutesBetween(s.checkInAt, s.checkOutAt) - (s.awayMinutes || 0));
+};
+
 const CHECKIN_GATE = [...INTERNAL_ROLES, PERMISSIONS.HR_CHECKIN];
 const expectedAtWork = (user) => !!user && user.role !== 'admin' && passesGate(user, CHECKIN_GATE);
 
@@ -265,6 +282,7 @@ module.exports = {
   CHECKIN_GATE,
   MINUTE,
   minutesBetween,
+  workedMinutesOf,
   clinicHHMM,
   clinicMinuteOfDay,
   minutesToHHMM,
