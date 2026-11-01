@@ -140,6 +140,7 @@ const modelOf = (session) => {
 const buildFor = (model, punches, cfg) => (model === MODEL ? buildDay(punches, cfg) : buildDayFirstLast(punches, cfg));
 
 const SAME_ARRIVAL_MS = 60 * 60 * 1000;
+const STAR_MAIL_FRESH_MS = 15 * 60 * 1000;
 
 /** The session a day keeps: the one HR locked, else the earliest. */
 const keeperOf = (sessions) => sessions.find((x) => lockOf(parseJsonColumn(x.diagnostics)).in) || sessions[0] || null;
@@ -271,7 +272,10 @@ const rebuildDay = async ({ userId, clinicDate, cfg, transaction, now = new Date
   // The same-day star email (1 Nov 2026): a gold or red arrival, today, from a
   // real punch (not a time HR entered), once per person per day.
   const inStar = starFor('in', pIn.state);
+  // Only a punch made in the last STAR_MAIL_FRESH_MS: a relay batch arriving
+  // late, or a check-out rebuilding an older check-in, sends nothing.
   const mailStar = !lock.in && first.source !== 'manual' && !first.anchor && clinicDate === clinicToday(now)
+    && now.getTime() - new Date(first.at).getTime() <= STAR_MAIL_FRESH_MS
     && (inStar === 'gold' || inStar === 'red') && !(diag.starMail && diag.starMail.in);
 
   const finalIn = lock.in ? session.checkInAt : first.at;

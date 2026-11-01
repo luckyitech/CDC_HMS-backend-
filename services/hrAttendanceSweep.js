@@ -158,7 +158,7 @@ const runHolidayFill = async (now = new Date()) => {
   if (holidaysDoneFor === today) return 0;
   const { ensureYearHolidays } = require('./leaveService');
   const year = Number(today.slice(0, 4));
-  const added = (await ensureYearHolidays(year)) + (await ensureYearHolidays(year + 1));
+  const added = (await ensureYearHolidays(year, today)) + (await ensureYearHolidays(year + 1, today));
   holidaysDoneFor = today;
   if (added) console.log(`[HR] public holidays: ${added} added for ${year}–${year + 1}`);
   return added;

@@ -72,6 +72,16 @@ describe('clinic hours and holidays — nothing for HR to set', () => {
     assert.equal((await PublicHoliday.findOne({ where: { date: '2027-03-09' } })).status, 'retired');
   });
 
+  test('days already past are never added (a deploy mid-year leaves last spring\'s Idd alone)', async () => {
+    await ensureYearHolidays(2028, '2028-04-01');
+    const rows = await PublicHoliday.findAll({ where: { date: { [db.Sequelize.Op.between]: ['2028-01-01', '2028-12-31'] } } });
+    const dates = rows.map((h) => String(h.date).slice(0, 10));
+    assert.ok(!dates.includes('2028-01-01'));
+    assert.ok(!dates.includes('2028-02-26'));                 // Idd-ul-Fitr 2028, before 1 Apr
+    assert.ok(dates.includes('2028-05-05'));                  // Idd-ul-Adha 2028
+    assert.ok(dates.includes('2028-12-25'));
+  });
+
   test('on a public holiday nobody is expected in', async () => {
     await ensureYearHolidays(2026);
     clearHolidayCache();
@@ -105,6 +115,15 @@ describe('the same-day star email', () => {
     assert.match(sent[0].body, /08:14.*14 minutes after/);
   });
 
+  test('a punch that reaches the HMS late (relay outage) sends nothing', async () => {
+    sent.length = 0;
+    await punchDay(ghost, '2026-11-04', ['07:30'], at('2026-11-04', '08:30'));
+    await settle();
+    assert.equal(sent.length, 0);
+    await StaffPunch.destroy({ where: { UserId: ghost.id } });
+    await StaffAttendance.destroy({ where: { UserId: ghost.id } });
+  });
+
   test('on time, a past day, or a time HR entered → no star email', async () => {
     sent.length = 0;
     await punchDay(ghost, '2026-11-03', ['08:00'], at('2026-11-03', '08:01'));          // on time (green)
@@ -126,7 +145,9 @@ describe('the weekly email', () => {
     await StaffAttendance.destroy({ where: { UserId: ghost.id } });
     sent.length = 0;
 
-    assert.equal(await mail.runWeeklyIfDue(at('2026-11-07', '13:59')), 0);          // not yet
+    // First run ever (the deploy): records the week just gone, sends nothing.
+    assert.equal(await mail.runWeeklyIfDue(at('2026-11-07', '13:59')), 0);
+    assert.equal(sent.length, 0);
     const n = await mail.runWeeklyIfDue(at('2026-11-07', '14:05'));
     assert.equal(n, 2);                                                               // Mildred and Rahma (doctor); not the test account
     const m = sent.find((s) => s.recipients[0] === mildred.id);
@@ -151,4 +172,34 @@ describe('the weekly email', () => {
     assert.match(title, /45:00 hours, 3 gold, 0 red/);
     assert.match(body, /An excellent week, Bridgit/);
   });
+
+  test('first run on a Sunday (deploy day) sends nothing', async () => {
+    await Setting.destroy({ where: { key: 'hr.attendance.weeklySentFor' } });
+    sent.length = 0;
+    assert.equal(await mail.runWeeklyIfDue(at('2026-11-08', '12:00')), 0);
+    assert.equal(sent.length, 0);
+  });
+
+  test('a send cut off part-way resumes with the rest, nobody twice', async () => {
+    await Setting.destroy({ where: { key: 'hr.attendance.weeklySentFor' } });
+    await Setting.create({ key: 'hr.attendance.weeklySentFor', value: JSON.stringify({ week: '2026-11-02', done: [mildred.id], complete: false }) });
+    sent.length = 0;
+    assert.equal(await mail.runWeeklyIfDue(at('2026-11-07', '14:10')), 1);
+    assert.deepEqual(sent.map((x) => x.recipients[0]), [rahma.id]);
+    assert.equal(await mail.runWeeklyIfDue(at('2026-11-07', '14:15')), 0);
+  });
+
+  test('Saturday: a check-out still missing after closing is a missed check-out, its morning counted', () => {
+    const day = '2026-11-07';
+    const summary = {
+      table: { hoursWorkedMinutes: 0, expectedMinutes: 300, workingDays: { worked: 1, total: 1 } },
+      stars: { all: { gold: 0, red: 0 } }, days: [],
+      sessions: [{ clinicDate: day, status: 'open', checkInAt: at(day, '08:00'), expectedOutAt: at(day, '13:00'), workedMinutes: 120 }],
+    };
+    const { body } = mail.weeklyText({ firstName: 'Bridgit', dates: WEEK, summary, now: at(day, '14:00') });
+    assert.match(body, /Missed check-outs: 1 — Sat 7 Nov/);
+    assert.match(body, /Hours worked: 2:00 of 5:00/);
+    assert.doesNotMatch(body, /excellent week/);
+  });
 });
+

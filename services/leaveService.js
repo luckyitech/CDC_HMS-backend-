@@ -167,13 +167,16 @@ const syncObservedDays = async () => {
  * when the year has no Idd-ul-Fitr / Idd-ul-Adha row at all, so a day HR
  * moved to the declared date is never put back on the estimate. Then the
  * Sunday rule (syncObservedDays). Idempotent; written as source 'seed'.
+ * `fromDate` ('YYYY-MM-DD'): days before it are never added.
  * @returns {number} rows added
  */
-const ensureYearHolidays = async (year) => {
+const ensureYearHolidays = async (year, fromDate = null) => {
   const rows = await PublicHoliday.findAll({ where: { date: { [Op.between]: [`${year}-01-01`, `${year}-12-31`] } } });
   const taken = new Set(rows.map((h) => String(h.date).slice(0, 10)));
   let added = 0;
   for (const h of kenyaHolidays(year)) {
+    // Never a day already past: it would re-read days already worked.
+    if (fromDate && h.date < fromDate) continue;
     if (taken.has(h.date)) continue;
     if (h.kind === 'idd') {
       const rule = IDD.find((x) => x.key === h.iddKey);

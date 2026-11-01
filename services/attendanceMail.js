@@ -46,6 +46,8 @@ const plural = (n, one, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 const sendStarMail = async ({ userId, firstName, star, at, expectedAt, minutes }) => {
   const time = clinicHHMM(at);
   const opens = expectedAt ? clinicHHMM(expectedAt) : '08:00';
+  // Minutes from the opening time itself (any HR grace is not subtracted).
+  if (expectedAt) minutes = Math.abs(Math.round((new Date(at) - new Date(expectedAt)) / 60000));
   const name = firstName ? `, ${firstName}` : '';
   if (star === 'gold') {
     return notify('attendance_star', {
@@ -74,7 +76,7 @@ const weekOf = (clinicDate) => {
 };
 
 /** The weekly email's words for one person — pure, from periodSummaryFor's result. */
-const weeklyText = ({ firstName, dates, summary }) => {
+const weeklyText = ({ firstName, dates, summary, now = new Date() }) => {
   const { table, stars, days, sessions } = summary;
   const gold = stars.all.gold;
   const red = stars.all.red;
@@ -85,7 +87,12 @@ const weeklyText = ({ firstName, dates, summary }) => {
     .map((s) => `${dayName(s.clinicDate)} — in at ${clinicHHMM(s.checkInAt)} (${plural(s.lateMinutes || 0, 'minute')} late)`);
   const early = sessions.filter((s) => s.checkOutPunctuality === 'early')
     .map((s) => `${dayName(s.clinicDate)} — out at ${clinicHHMM(s.checkOutAt)} (${plural(s.earlyOutMinutes || 0, 'minute')} early)`);
-  const missed = sessions.filter((s) => s.status === 'missed_checkout').map((s) => dayName(s.clinicDate));
+  // Saturday's email goes at 14:00, before the midnight sweep: a day whose
+  // closing time has passed with no check-out counts as missed here too, and
+  // its time inside up to the last out is counted.
+  const endedOpen = sessions.filter((s) => s.status === 'open' && s.expectedOutAt && new Date(s.expectedOutAt) <= now);
+  const missed = sessions.filter((s) => s.status === 'missed_checkout' || endedOpen.includes(s)).map((s) => dayName(s.clinicDate));
+  const hours = table.hoursWorkedMinutes + endedOpen.reduce((n, s) => n + (s.workedMinutes || 0), 0);
   const away = sessions.reduce((n, s) => n + (s.awayMinutes || 0), 0);
   const closed = days.filter((d) => d.holiday).map((d) => `${dayName(d.date)} (${d.holiday})`);
   const leave = days.filter((d) => d.onLeave).map((d) => dayName(d.date));
@@ -93,7 +100,7 @@ const weeklyText = ({ firstName, dates, summary }) => {
   const lines = [
     `Your week, ${dayName(dates[0])} – ${dayName(dates[dates.length - 1])}:`,
     '',
-    `Hours worked: ${hm(table.hoursWorkedMinutes)} of ${hm(table.expectedMinutes)} expected${away ? ` (time out: ${hm(away)})` : ''}`,
+    `Hours worked: ${hm(hours)} of ${hm(table.expectedMinutes)} expected${away ? ` (time out: ${hm(away)})` : ''}`,
     `Days in: ${table.workingDays.worked} of ${table.workingDays.total}`,
     `Gold stars: ${gold}`,
     `Red stars: ${red}`,
@@ -112,7 +119,7 @@ const weeklyText = ({ firstName, dates, summary }) => {
     lines.push('Thank you for your work this week. Remember to punch every time you go in or out.');
   }
   return {
-    title: `Your week at CDC — ${hm(table.hoursWorkedMinutes)} hours, ${gold} gold, ${red} red`,
+    title: `Your week at CDC — ${hm(hours)} hours, ${gold} gold, ${red} red`,
     body: lines.join('\n'),
   };
 };
@@ -121,27 +128,55 @@ const SENT_KEY = 'hr.attendance.weeklySentFor';
 const SEND_FROM = '14:00';
 const RECENT_DAYS = 28;
 
+/** The Saturday whose week was last due on `today` at `time` (for the first run). */
+const lastDueSaturday = (today, time) => {
+  const wd = weekdayOf(today);
+  if (wd === 6 && time >= SEND_FROM) return today;
+  return plusDays(today, -((wd + 1) % 7 || 7));
+};
+
+const readMarker = (row) => {
+  if (!row) return null;
+  try {
+    const v = JSON.parse(row.value);
+    if (v && typeof v === 'object' && v.week) return { week: v.week, done: Array.isArray(v.done) ? v.done : [], complete: !!v.complete };
+  } catch { /* an older plain value */ }
+  return { week: String(row.value), done: [], complete: true };
+};
+
 /**
  * Send the weekly email when due: Saturday from 14:00, or Sunday if the
- * server was down on Saturday afternoon. Once per week (the Monday is kept
- * in the Setting table before anything is sent, so a restart never sends it
- * twice). To everyone expected at work (doctors included, not the admin
- * account) who checked in at least once in the last four weeks — so test and
- * departed accounts are left out.
- * @returns {Promise<number>} people emailed
+ * server was down on Saturday afternoon.
+ *
+ * Once per week, resumable: the Setting row keeps the week and who has been
+ * sent it, saved after each person — a restart or a failure part-way carries
+ * on with the rest at the next tick (every 5 minutes) instead of losing the
+ * week or sending anyone a second copy. The very first run (no row yet)
+ * records the week just gone as done and sends nothing, so a deploy never
+ * sends last week's email out of the blue.
+ *
+ * To everyone expected at work (doctors included, not the admin account) who
+ * checked in at least once in the last four weeks — so test and departed
+ * accounts are left out.
+ * @returns {Promise<number>} people sent it this run
  */
 const runWeeklyIfDue = async (now = new Date(), { force = false } = {}) => {
   const today = clinicToday(now);
   const wd = weekdayOf(today);
   const time = clinicDateTime(now).slice(11, 16);
+
+  let row = await Setting.findOne({ where: { key: SENT_KEY } });
+  if (!row && !force) {
+    const week = weekOf(lastDueSaturday(today, time))[0];
+    await Setting.create({ key: SENT_KEY, value: JSON.stringify({ week, done: [], complete: true }) });
+    return 0;
+  }
   if (!force && !((wd === 6 && time >= SEND_FROM) || wd === 0)) return 0;
   const saturday = wd === 0 ? plusDays(today, -1) : today;
   const dates = weekOf(saturday);
-
-  const marker = await Setting.findOne({ where: { key: SENT_KEY } });
-  if (!force && marker && marker.value === dates[0]) return 0;
-  if (marker) await marker.update({ value: dates[0] });
-  else await Setting.create({ key: SENT_KEY, value: dates[0] });
+  let state = readMarker(row);
+  if (!force && state && state.week === dates[0] && state.complete) return 0;
+  if (!state || state.week !== dates[0] || force) state = { week: dates[0], done: [], complete: false };
 
   const svc = require('./hrAttendanceService');
   const { getHrConfig } = require('../utils/hrConfig');
@@ -151,20 +186,26 @@ const runWeeklyIfDue = async (now = new Date(), { force = false } = {}) => {
     where: { clinicDate: { [Op.between]: [since, saturday] }, status: { [Op.in]: ['open', 'closed', 'missed_checkout'] } },
     attributes: ['UserId'], group: ['UserId'], raw: true,
   })).map((r) => r.UserId));
-  const people = (await svc.internalUsers()).filter((u) => expectedAtWork(u) && recent.has(u.id) && u.email);
+  const people = (await svc.internalUsers()).filter((u) => expectedAtWork(u) && recent.has(u.id) && u.email && !state.done.includes(u.id));
+
+  const save = async () => {
+    const value = JSON.stringify(state);
+    if (row) await row.update({ value });
+    else row = await Setting.create({ key: SENT_KEY, value });
+  };
 
   let sent = 0;
   for (const u of people) {
-    try {
-      const summary = await svc.periodSummaryFor(u.id, dates, cfg, { now });
-      const { title, body } = weeklyText({ firstName: u.firstName, dates, summary });
-      const r = await notify('attendance_weekly', { recipients: [u.id], title, body, link: LINK });
-      if (r && (r.email || r.bell)) sent += 1;
-    } catch (err) {
-      console.error('attendanceMail.weekly error:', err.message);
-    }
+    const summary = await svc.periodSummaryFor(u.id, dates, cfg, { now });
+    const { title, body } = weeklyText({ firstName: u.firstName, dates, summary, now });
+    await notify('attendance_weekly', { recipients: [u.id], title, body, link: LINK });
+    state.done.push(u.id);
+    await save();
+    sent += 1;
   }
-  console.log(`[HR] weekly attendance email: ${sent} of ${people.length} for week of ${dates[0]}`);
+  state.complete = true;
+  await save();
+  console.log(`[HR] weekly attendance email: ${sent} sent for week of ${dates[0]} (${state.done.length} in all)`);
   return sent;
 };
 

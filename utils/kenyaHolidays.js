@@ -50,10 +50,15 @@ const easterSunday = (y) => {
 
 /** The Gregorian dates in `y` of an Islamic month/day (Umm al-Qura). Usually one. */
 let hijriFmt = null;
+/** Whether this Node has the Umm al-Qura calendar (full ICU). Without it Intl
+ * silently falls back to the Gregorian calendar — the Idd days are then left
+ * for HR to add rather than put on wrong dates. */
+const hasHijri = () => {
+  if (!hijriFmt) hijriFmt = new Intl.DateTimeFormat('en-u-ca-islamic-umalqura', { day: 'numeric', month: 'numeric', timeZone: 'UTC' });
+  return hijriFmt.resolvedOptions().calendar === 'islamic-umalqura';
+};
 const hijriDates = (y, hMonth, hDay) => {
-  if (!hijriFmt) {
-    hijriFmt = new Intl.DateTimeFormat('en-u-ca-islamic-umalqura', { day: 'numeric', month: 'numeric', timeZone: 'UTC' });
-  }
+  if (!hasHijri()) return [];
   const out = [];
   for (let d = new Date(Date.UTC(y, 0, 1)); d.getUTCFullYear() === y; d = addDays(d, 1)) {
     const parts = hijriFmt.formatToParts(d);
@@ -86,4 +91,4 @@ const kenyaHolidays = (y) => {
   return list.sort((a, b) => a.date.localeCompare(b.date));
 };
 
-module.exports = { kenyaHolidays, easterSunday, IDD };
+module.exports = { kenyaHolidays, easterSunday, IDD, hasHijri };
