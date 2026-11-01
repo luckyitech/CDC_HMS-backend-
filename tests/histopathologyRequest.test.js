@@ -105,4 +105,15 @@ describe('one request, several specimens', () => {
     for (const s of list) byReq.set(s.requisitionNumber, (byReq.get(s.requisitionNumber) || 0) + 1);
     assert.deepEqual([...byReq.values()].sort(), [1, 2]);
   });
+
+  test('two requests saved at the same moment both succeed, with different numbers', async () => {
+    const body = { clinicalDetails: 'Same time', specimens: [{ kind: 'histology', siteType: 'thyroid', thyroidLobe: 'right', specimenType: 'core_needle' }] };
+    const [a, b] = await Promise.all([
+      call(histology.createRequest, { user: asUser(doctor), params: { uhid: patient.uhid }, body }),
+      call(histology.createRequest, { user: asUser(doctor), params: { uhid: patient.uhid }, body }),
+    ]);
+    assert.equal(a.status, 201, JSON.stringify(a.body));
+    assert.equal(b.status, 201, JSON.stringify(b.body));
+    assert.notEqual(a.body.data.specimens[0].specimenNumber, b.body.data.specimens[0].specimenNumber);
+  });
 });

@@ -280,7 +280,24 @@ const counter = () => {
   };
 };
 
+/**
+ * Two requests saved at the same moment can be given the same number (the
+ * generators read the highest without a lock): the unique index refuses the
+ * second and its transaction rolls back whole, so it is simply tried again
+ * with fresh numbers — up to three times.
+ */
 const raiseRequest = async (req, family, header, items) => {
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      return await raiseOnce(req, family, header, items);
+    } catch (err) {
+      if (err && err.name === 'SequelizeUniqueConstraintError' && attempt < 3) continue;
+      throw err;
+    }
+  }
+};
+
+const raiseOnce = async (req, family, header, items) => {
   const today = clinicToday();
   const now = new Date();
   const next = counter();
