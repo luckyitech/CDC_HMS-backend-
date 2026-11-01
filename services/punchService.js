@@ -166,8 +166,13 @@ const dayOf = (session, punches, cfg) => {
   // HR corrected (08:10 on the scanner, HR says 07:55), not an "out".
   const anchorAt = new Date(session.checkInAt).getTime();
   const anchor = { id: null, at: session.checkInAt, source: 'manual', anchor: true };
-  let after = all.filter((p) => p.source !== 'manual' && new Date(p.at).getTime() > anchorAt);
-  if (after.length && new Date(after[0].at).getTime() - anchorAt <= SAME_ARRIVAL_MS) after = after.slice(1);
+  const scans = all.filter((p) => p.source !== 'manual');
+  let after = scans.filter((p) => new Date(p.at).getTime() > anchorAt);
+  // Only when no scanner/NFC punch is at or before HR's check-in: an amend of
+  // the check-out alone keeps the scanner arrival as the check-in, and the
+  // next punch is then a real out.
+  const arrivalBefore = scans.some((p) => new Date(p.at).getTime() <= anchorAt);
+  if (!arrivalBefore && after.length && new Date(after[0].at).getTime() - anchorAt <= SAME_ARRIVAL_MS) after = after.slice(1);
   const built = buildFor(model, [anchor, ...after], cfg);
   const day = { ...built, punches: built.punches.filter((p) => !p.anchor) };
   return { model, lock, locked, full, day };

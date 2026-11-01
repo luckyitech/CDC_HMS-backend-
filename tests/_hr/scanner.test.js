@@ -433,6 +433,18 @@ describe('time out comes off the hours (1 Nov 2026 review)', () => {
     assert.deepEqual([again.awayMinutes, again.workedMinutes], [60, 480]);
   });
 
+  test('C: HR amends only the check-out of a busy day → the morning outs are still outs', async () => {
+    const d = clinicDatePlusDays(-16);
+    await punch(abdul, d, ['08:00', '08:40', '09:20', '12:00', '13:00']);
+    await rebuild(abdul, d);
+    const s = await sessionOf(abdul, d);
+    assert.equal(s.status, 'missed_checkout');
+    const a = await amend(s, { checkOutAt: at(d, '17:00').toISOString() });
+    assert.equal(a.status, 200, JSON.stringify(a.body));
+    const after = await sessionOf(abdul, d);
+    assert.deepEqual([after.awayMinutes, after.workedMinutes], [100, 440]);
+  });
+
   test('#4 a day built under the 19 Oct model keeps first in, last out when rebuilt', async () => {
     const d = clinicDatePlusDays(-13);
     await punch(abdul, d, ['08:00', '12:00']);
