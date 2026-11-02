@@ -261,6 +261,13 @@ const PERMISSIONS = {
   // explicit grant or the main admin account (canRegisterPhones). Checked in
   // routes/hr.js, not by authorize(); see CHECKED_ELSEWHERE in the vocabulary test.
   HR_DEVICES_REGISTER: 'hr.devices.register',
+  // 2 Nov 2026 (Emu): "the HMS will only allow log ins for those that have
+  // punched in, unless the HMS has granted a specific user access with or
+  // without attendance." Ticked = may sign in without a check-in today (an
+  // optional end date: Users.checkinExemptUntil). Explicit grant only — not
+  // carried by admin.access, not in presets, granted by a permissions
+  // administrator only (HR_NOT_DELEGABLE). Checked by utils/checkinGate.js.
+  HR_CHECKIN_EXEMPT: 'hr.checkin.exempt',
 
   // --- HR Suite phase 2: leave (B27, decision D8 — every HR function its own
   // capability so an HR manager or a supervisor can be given all or some).
@@ -1103,6 +1110,13 @@ const PERMISSION_GROUPS = [
           + 'Not part of full administrator access.',
         access: PERMISSIONS.HR_DEVICES_REGISTER, accessLabel: 'Can register a phone for someone\'s check-in',
         roleDefault: 'Nobody by role — must be granted (the main admin account always)' },
+      { key: 'hr-checkin-exempt', name: 'Signing in without checking in', appliesIn: 'Signing in',
+        description: 'Everyone must check in at the scanner (fingerprint, card or check-in phone) '
+          + 'before the HMS opens on a clinic day. Tick for those who may sign in without it — '
+          + 'remote and visiting doctors, after-hours phone requests — optionally until a date. '
+          + 'Not part of full administrator access.',
+        access: PERMISSIONS.HR_CHECKIN_EXEMPT, accessLabel: 'May sign in without checking in at the scanner',
+        roleDefault: 'Nobody by role — must be granted (the main admin account always)' },
     ],
   },
   {
@@ -1463,6 +1477,9 @@ const canEditSigninSecurity = explicitOrTrueAdmin(PERMISSIONS.SIGNIN_SETTINGS);
 const canWorkOutsideClinic = explicitOrTrueAdmin(PERMISSIONS.SIGNIN_REMOTE);
 // Registering a check-in phone (17 Oct 2026) — the same explicit-only rule.
 const canRegisterPhones = explicitOrTrueAdmin(PERMISSIONS.HR_DEVICES_REGISTER);
+// The check-in gate (2 Nov 2026) — the same explicit-only rule. The end date is
+// read by utils/checkinGate.js, which is the one place that decides.
+const canSkipCheckin = explicitOrTrueAdmin(PERMISSIONS.HR_CHECKIN_EXEMPT);
 
 /**
  * A JSON-array column, as a real array.
@@ -1717,6 +1734,8 @@ const PRESET_EXCLUDED = [
   PERMISSIONS.SIGNIN_SETTINGS,
   // 17 Oct 2026: registering check-in phones is granted person by person.
   PERMISSIONS.HR_DEVICES_REGISTER,
+  // 2 Nov 2026: signing in without a check-in is granted person by person.
+  PERMISSIONS.HR_CHECKIN_EXEMPT,
 ];
 
 // ---------------------------------------------------------------------
@@ -1726,7 +1745,11 @@ const PRESET_EXCLUDED = [
 // HR capabilities a "Grant HR permissions" holder may never hand out: the
 // confidential drawer (outside admin access on purpose) and hr.grant itself
 // (no chains). Appraisal reading joins this list when appraisals ship.
-const HR_NOT_DELEGABLE = [PERMISSIONS.HR_CONFIDENTIAL, PERMISSIONS.HR_GRANT, PERMISSIONS.HR_APPRAISALS];
+const HR_NOT_DELEGABLE = [
+  PERMISSIONS.HR_CONFIDENTIAL, PERMISSIONS.HR_GRANT, PERMISSIONS.HR_APPRAISALS,
+  // 2 Nov 2026: who may skip the check-in gate is a permissions administrator's call.
+  PERMISSIONS.HR_CHECKIN_EXEMPT,
+];
 
 // Everything in the HR Suite groups of the Permissions tab, minus the above.
 // Derived from PERMISSION_GROUPS so a new HR control is delegable the moment
@@ -1763,7 +1786,8 @@ const HR_STAFF_CONTROLS = [...new Set(PERMISSION_GROUPS
   .filter((g) => g.hr && g.key !== 'hr-self')
   .flatMap((g) => g.areas)
   .flatMap((a) => [a.access, a.write])
-  .filter(Boolean))];
+  // Being let in without a check-in (2 Nov 2026) is about the person, not HR work.
+  .filter((p) => p && p !== PERMISSIONS.HR_CHECKIN_EXEMPT))];
 
 /**
  * Is this person HR staff? Passes the same gate authorize('admin', <control>)
@@ -1849,6 +1873,7 @@ module.exports = {
   canReceiveSigninAlerts,
   canEditSigninSecurity,
   canWorkOutsideClinic,
+  canSkipCheckin,
   canRegisterPhones,
   sanitizePermissions,
   sanitizeDeniedPermissions,

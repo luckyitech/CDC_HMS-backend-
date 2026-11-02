@@ -11,6 +11,7 @@
 const { Op } = require('sequelize');
 const { success, error } = require('../utils/response');
 const { buildChanges } = require('../utils/auditChanges');
+const { clinicToday } = require('../utils/clinicTime');
 const db = require('../models');
 const sequelize = require('../config/database');
 const { STAFF_ROLES } = require('../constants/staffRoles');
@@ -96,6 +97,7 @@ const formatStaff = (profile, user) => {
     // it is an authorization input read on every request, but it is surfaced
     // here with the rest of the staff file since that is where it is set.
     staffType: user.staffType,
+    checkinExemptUntil: user.checkinExemptUntil || null,
 
     dateOfBirth: profile.dateOfBirth,
     gender:      profile.gender,
@@ -677,6 +679,15 @@ const updatePermissions = async (req, res) => {
   if (staffType !== undefined && !Object.values(STAFF_TYPES).includes(staffType)) {
     return error(res, 'staffType must be clinical or non_clinical', 400);
   }
+  // The check-in gate's end date (2 Nov 2026): a real date, today or later.
+  // A past one would end the exception before it starts.
+  if (body.checkinExemptUntil) {
+    const d = String(body.checkinExemptUntil);
+    const asDate = new Date(`${d}T00:00:00Z`);
+    const real = /^\d{4}-\d{2}-\d{2}$/.test(d) && !Number.isNaN(asDate.getTime()) && asDate.toISOString().slice(0, 10) === d;
+    if (!real) return error(res, 'Choose a real end date, or leave it empty for no end date', 400);
+    if (d < clinicToday()) return error(res, 'The end date has already passed — choose today or later', 400);
+  }
 
   try {
     // Unknown names are dropped rather than stored, so a typo grants nothing
@@ -718,11 +729,17 @@ const updatePermissions = async (req, res) => {
       permissions:       user.permissions || [],
       deniedPermissions: user.deniedPermissions || [],
       staffType:         user.staffType,
+      checkinExemptUntil: user.checkinExemptUntil || null,
     };
     const after = {
       permissions: granted,
       deniedPermissions: nextDenied,
       staffType: staffType === undefined ? user.staffType : staffType,
+      // The check-in gate (2 Nov 2026): the end date of "May sign in without
+      // checking in". Omitted = leave it; it is cleared whenever the grant is
+      // not held, so a later re-grant never inherits an old date.
+      checkinExemptUntil: !granted.includes(PERMISSIONS.HR_CHECKIN_EXEMPT) ? null
+        : (body.checkinExemptUntil === undefined ? (user.checkinExemptUntil || null) : (body.checkinExemptUntil || null)),
     };
 
     // A "Grant HR permissions" holder who is not a permissions administrator
@@ -749,6 +766,12 @@ const updatePermissions = async (req, res) => {
     }
     for (const cap of SCOPABLE) {
       if (!after.permissions.includes(cap) && storedScopes[cap].kind !== 'all') scopeChanges[cap] = { kind: 'all' };
+    }
+
+    if (!canGrantPermissions(req.user)
+      && String(before.checkinExemptUntil || '') !== String(after.checkinExemptUntil || '')) {
+      return error(res, 'Only a permissions administrator can change who may sign in without checking in', 403,
+        { code: 'NOT_DELEGABLE', capabilities: [PERMISSIONS.HR_CHECKIN_EXEMPT] });
     }
 
     if (!canGrantPermissions(req.user)) {
@@ -824,6 +847,10 @@ const updatePermissions = async (req, res) => {
         `Permissions for user ${user.id}: ${conflicting.join(', ')} sent as both granted and withdrawn — withdrawal applied.`
       );
     }
+
+    // The check-in gate answers from memory for a minute; a change of access
+    // (the exemption, its end date) counts from the next request instead.
+    require('../services/checkinGate').forgetAnswer(user.id);
 
     await user.reload();
     return success(res, await fullFile(req.user, req.staffProfile, user));

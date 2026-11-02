@@ -129,8 +129,8 @@ describe('the Permissions tab — HR Suite groups', () => {
       assert.ok(hrAreas.find((a) => a.access === cap).warning, cap);
     }
   });
-  test('delegable = every HR control except confidential documents, hr.grant itself and (T3 P5) reading appraisals', () => {
-    assert.deepEqual([...HR_NOT_DELEGABLE].sort(), [P.HR_CONFIDENTIAL, P.HR_GRANT, P.HR_APPRAISALS].sort());
+  test('delegable = every HR control except confidential documents, hr.grant itself, (T3 P5) reading appraisals and (2 Nov 2026) signing in without checking in', () => {
+    assert.deepEqual([...HR_NOT_DELEGABLE].sort(), [P.HR_CONFIDENTIAL, P.HR_GRANT, P.HR_APPRAISALS, P.HR_CHECKIN_EXEMPT].sort());
     for (const a of hrAreas) {
       assert.equal(HR_DELEGABLE.includes(a.access), !HR_NOT_DELEGABLE.includes(a.access), a.access);
     }

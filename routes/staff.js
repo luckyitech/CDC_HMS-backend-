@@ -163,6 +163,9 @@ router.patch('/:employeeId/permissions', authenticate, permissionsEditor, findSt
   // see staffController.updatePermissions.
   body('deniedPermissions').optional().isArray().withMessage('Withdrawn permissions must be a list'),
   body('staffType').optional().isIn(['clinical', 'non_clinical']).withMessage('staffType must be clinical or non_clinical'),
+  // "May sign in without checking in" — its optional end date (2 Nov 2026).
+  body('checkinExemptUntil').optional({ nullable: true })
+    .matches(/^\d{4}-\d{2}-\d{2}$/).withMessage('Choose an end date, or leave it empty for no end date'),
   validate,
 ], staffController.updatePermissions);
 

@@ -60,6 +60,7 @@ const FAIL_TEXT = {
   inactive: 'account inactive',
   wrong_password: 'wrong password',
   outside_blocked: 'outside the clinic without remote access',
+  checkin_required: 'not checked in at the scanner today',
 };
 
 const whenText = (at) => new Date(at).toLocaleString('en-GB', {

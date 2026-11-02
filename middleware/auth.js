@@ -7,6 +7,7 @@ const { hasPermission, canGrantPermissions, gateResult } = require('../constants
 const { User } = db;
 const { getSigninSecurityConfig } = require('../utils/signinSecurityConfig');
 const { blockedByLock, LOCK_MESSAGE } = require('../utils/networkLock');
+const { gateFor, tellHrScannerOffline, HELD_MESSAGE: CHECKIN_HELD_MESSAGE } = require('../services/checkinGate');
 const { clientIp } = require('../utils/ip');
 
 // Endpoints a staff member with an expired password may still reach. Enough to
@@ -61,7 +62,8 @@ const authenticate = async (req, res, next) => {
   let user;
   try {
     user = await User.findByPk(decoded.id, {
-      attributes: ['id', 'isActive', 'role', 'permissions', 'deniedPermissions', 'staffType', 'passwordChangedAt'],
+      attributes: ['id', 'isActive', 'role', 'permissions', 'deniedPermissions', 'staffType', 'passwordChangedAt',
+        'firstName', 'lastName', 'checkinExemptUntil'],
     });
   } catch {
     return error(res, 'Authentication service unavailable. Please try again.', 503);
@@ -105,6 +107,17 @@ const authenticate = async (req, res, next) => {
     }
   } catch (err) {
     console.error('Auth.networkLock error:', err.message);   // a settings read failure never locks anyone out
+  }
+
+  // The check-in gate (2 Nov 2026): a session opened before the gate applied
+  // (05:30, or yesterday) is held once it does. services/checkinGate.js
+  // remembers open answers, so this is a lookup a minute per person. 401 +
+  // code, so the browser signs out and the sign-in page shows the gate card. A
+  // check-in pass is how a person checks in — never gated. Never throws.
+  if (!tapPass && path !== '/api/auth/logout') {
+    const gate = await gateFor(user);
+    if (gate.held) return error(res, CHECKIN_HELD_MESSAGE, 401, { code: 'CHECKIN_REQUIRED' });
+    if (gate.why === 'scanner_offline') tellHrScannerOffline(user);
   }
 
   req.user = {

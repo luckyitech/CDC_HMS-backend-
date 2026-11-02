@@ -198,7 +198,9 @@ describe('one session per day across methods', () => {
     if (twoHoursAgo.slice(0, 10) !== today) return;   // too close to midnight to run this case
     await relay([{ userNo: '7', time: twoHoursAgo, verify: 1 }]);
     const counter = 50;
-    const r = await call(hrAttendance.tap, { user: asUser(abdul), body: { uid: UID, ctr: counter.toString(16).toUpperCase().padStart(6, '0'), cmac: computeSunMac({ keyHex: KEY, uidHex: UID, counter }) } });
+    // Since 17 Oct 2026 only a registered phone's check-in pass checks anyone in.
+    const phone = await db.UserDevice.create({ UserId: abdul.id, tokenHash: require('crypto').randomBytes(32).toString('hex'), label: 'iPhone · Safari', expiresAt: new Date(Date.now() + 86400000) });
+    const r = await call(hrAttendance.tap, { user: { ...asUser(abdul), scope: 'tap', deviceId: phone.id }, body: { uid: UID, ctr: counter.toString(16).toUpperCase().padStart(6, '0'), cmac: computeSunMac({ keyHex: KEY, uidHex: UID, counter }) } });
     assert.equal(r.body.data.action, 'checked_out', JSON.stringify(r.body));
     const s = await sessionOf(abdul, today);
     assert.equal(s.checkInMethod, 'fingerprint');

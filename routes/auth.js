@@ -14,6 +14,14 @@ router.post('/login', authLimiter, [
   validate,
 ], authController.login);
 
+// POST /api/auth/gate-check — the check-in gate's "check again" (2 Nov 2026).
+// Carries the short-lived gate ticket login handed back, never a password, so
+// it is not counted against the sign-in limit the clinic's one address shares.
+router.post('/gate-check', [
+  body('ticket').isString().isLength({ min: 20, max: 1024 }).withMessage('Please sign in again.'),
+  validate,
+], authController.gateCheck);
+
 // POST /api/auth/device-session — a remembered phone (HR Suite tap page)
 // exchanges its long-lived token for a normal session. Same limiter as login:
 // a guessed token is a login attempt.

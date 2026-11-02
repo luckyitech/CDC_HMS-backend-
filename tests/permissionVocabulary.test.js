@@ -69,6 +69,9 @@ const CHECKED_ELSEWHERE = {
   [PERMISSIONS.SIGNIN_REMOTE]:
     'utils/networkLock.js via canWorkOutsideClinic() — the login and middleware/auth.js '
     + 'authenticate refuse outside the clinic networks while the lock is on',
+  [PERMISSIONS.HR_CHECKIN_EXEMPT]:
+    'services/checkinGate.js via canSkipCheckin() — the login and middleware/auth.js '
+    + 'authenticate hold a person who has not checked in today (tests/checkinGate.test.js)',
   [PERMISSIONS.HR_DEVICES_REGISTER]:
     'routes/hr.js POST /devices/registration via canRegisterPhones() — explicit grant '
     + 'or the main admin account, never admin.access (tests/phoneRegistration.test.js)',

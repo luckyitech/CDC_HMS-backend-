@@ -116,6 +116,14 @@ const User = defineModel('User', {
     allowNull: false,
     defaultValue: 'clinical',
   },
+  // The check-in gate (2 Nov 2026): the last clinic date "May sign in without
+  // checking in" (hr.checkin.exempt) applies. NULL = no end date. Read only by
+  // utils/checkinGate.js; written by the Permissions tab save.
+  checkinExemptUntil: {
+    type: DataTypes.DATEONLY,
+    allowNull: true,
+    defaultValue: null,
+  },
 }, {
   indexes: [
     { unique: true, fields: ['email'], name: 'unique_email', where: { email: { [require('sequelize').Op.ne]: null } } },

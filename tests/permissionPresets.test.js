@@ -13,12 +13,12 @@ const { validatePresetPayload } = require('../controllers/permissionPresetContro
 // =====================================================================
 
 describe('PRESET_EXCLUDED — the per-person-only capabilities', () => {
-  test('is exactly admin.access, permissions.grant, hr.confidential, (HR Tier 3) hr.grant, (T3 P5) hr.appraisals (16 Oct 2026) the three IT and security controls and (17 Oct) registering check-in phones', () => {
+  test('is exactly admin.access, permissions.grant, hr.confidential, (HR Tier 3) hr.grant, (T3 P5) hr.appraisals (16 Oct 2026) the three IT and security controls (17 Oct) registering check-in phones and (2 Nov) signing in without checking in', () => {
     assert.deepEqual([...PRESET_EXCLUDED].sort(), [
       PERMISSIONS.ADMIN_ACCESS, PERMISSIONS.HR_CONFIDENTIAL, PERMISSIONS.PERMISSIONS_GRANT, PERMISSIONS.HR_GRANT,
       PERMISSIONS.HR_APPRAISALS,
       PERMISSIONS.SIGNINS_VIEW, PERMISSIONS.SIGNINS_ALERTS, PERMISSIONS.SIGNIN_SETTINGS,
-      PERMISSIONS.HR_DEVICES_REGISTER,
+      PERMISSIONS.HR_DEVICES_REGISTER, PERMISSIONS.HR_CHECKIN_EXEMPT,
     ].sort());
   });
 

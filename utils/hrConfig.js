@@ -70,6 +70,9 @@ const ALERT_EVENTS = [
   // 17 Oct 2026: HR registered a check-in phone — to the person and to whoever
   // looks after check-in phones (hr.tags / hr.devices.register).
   'phone_registered',
+  // 2 Nov 2026: someone signed in while the fingerprint scanner was offline, so
+  // the check-in gate let them in unconfirmed — to whoever sees attendance.
+  'checkin_gate_offline',
 ];
 const ALERT_CHANNELS = ['bell', 'email', 'whatsapp'];
 const DEFAULT_ALERTS = Object.fromEntries(ALERT_EVENTS.map((e) => [e, { bell: true, email: true, whatsapp: false }]));

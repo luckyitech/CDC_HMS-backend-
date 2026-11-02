@@ -15,6 +15,19 @@ const { recordSignin, attachGps } = require('../services/signinLog');
 const { getSigninSecurityConfig } = require('../utils/signinSecurityConfig');
 const { clientIp } = require('../utils/ip');
 const { blockedByLock, LOCK_MESSAGE } = require('../utils/networkLock');
+const { gateFor, issueTicket, readTicket, tellHrScannerOffline, HELD_MESSAGE } = require('../services/checkinGate');
+const { clinicToday } = require('../utils/clinicTime');
+
+// One "held at the check-in gate" row per person per clinic day: the sign-in
+// page retries every few seconds, and each retry is not a new attempt.
+const heldToday = new Set();
+const firstHeldToday = (userId) => {
+  const key = `${userId}|${clinicToday()}`;
+  if (heldToday.has(key)) return false;
+  if (heldToday.size > 2000) heldToday.clear();
+  heldToday.add(key);
+  return true;
+};
 const { getHrConfig } = require('../utils/hrConfig');
 const { redeemRegistration } = require('../services/checkinPhones');
 const { STAFF_ROLES } = require('../constants/staffRoles');
@@ -211,6 +224,28 @@ const login = async (req, res) => {
     return error(res, LOCK_MESSAGE, 423, { code: 'OUTSIDE_CLINIC' });
   }
 
+  // 2c-6. The check-in gate, then the sign-in itself (shared with gateCheck).
+  return passGateAndSignIn(req, res, user);
+};
+
+/**
+ * The check-in gate (2 Nov 2026), then the sign-in: record it, sign the
+ * session, answer with the profile. Shared by login and gateCheck so a person
+ * let through the gate later is signed in exactly as at the first attempt.
+ *
+ * Held → 423 CHECKIN_REQUIRED with a gate ticket: the sign-in page asks again
+ * with the ticket, never the password, so a queue of people waiting at the
+ * gate does not use up the sign-in limit the whole clinic shares. Only the
+ * first held attempt of the day is recorded.
+ */
+const passGateAndSignIn = async (req, res, user) => {
+  const gate = await gateFor(user);
+  if (gate.held) {
+    if (firstHeldToday(user.id)) await recordSignin(req, { user, outcome: 'failed', failReason: 'checkin_required' });
+    return error(res, HELD_MESSAGE, 423, { code: 'CHECKIN_REQUIRED', ticket: issueTicket(user), ...gate.details });
+  }
+  if (gate.why === 'scanner_offline') tellHrScannerOffline(user);
+
   // 3. (Removed 17 Oct 2026: "remember this phone" at sign-in. Only HR with
   //    hr.devices.register registers a check-in phone — POST /device-register.)
 
@@ -231,6 +266,28 @@ const login = async (req, res) => {
   }
 
   return success(res, { token, user: userData, signinGeo });
+};
+
+// ------------------------------------
+// POST /api/auth/gate-check { ticket } — the sign-in page asking the gate
+// again (2 Nov 2026). The ticket is what login handed back with the 423; the
+// account is re-read, and the network lock re-checked, as at sign-in.
+// ------------------------------------
+const GATE_EXPIRED = 'Please sign in again.';
+const gateCheck = async (req, res) => {
+  try {
+    const userId = readTicket(req.body?.ticket);
+    if (!userId) return error(res, GATE_EXPIRED, 401, { code: 'GATE_TICKET_EXPIRED' });
+    const user = await User.findOne({ where: { id: userId, isActive: true } });
+    if (!user || user.role === 'patient') return error(res, GATE_EXPIRED, 401, { code: 'GATE_TICKET_EXPIRED' });
+    if (blockedByLock({ user, ip: clientIp(req), cfg: await getSigninSecurityConfig() })) {
+      return error(res, LOCK_MESSAGE, 423, { code: 'OUTSIDE_CLINIC' });
+    }
+    return passGateAndSignIn(req, res, user);
+  } catch (err) {
+    console.error('Auth.gateCheck error:', err);
+    return error(res, 'Could not check. Please try again.', 500);
+  }
 };
 
 // ------------------------------------
@@ -383,6 +440,7 @@ const logout = async (req, res) => {
 
 module.exports = {
   login,
+  gateCheck,
   deviceSession,
   registerDevice,
   signinLocation,
