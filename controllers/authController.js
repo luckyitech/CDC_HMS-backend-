@@ -11,8 +11,12 @@ const { getRotationStatus } = require('../utils/passwordRotation');
 const db = require('../models');
 
 const { User, StaffProfile, Patient, UserDevice } = db;
-const { logLogin } = require('../services/activityLogService');
+const { recordSignin, attachGps } = require('../services/signinLog');
+const { getSigninSecurityConfig } = require('../utils/signinSecurityConfig');
+const { clientIp } = require('../utils/ip');
+const { blockedByLock, LOCK_MESSAGE } = require('../utils/networkLock');
 const { getHrConfig } = require('../utils/hrConfig');
+const { redeemRegistration } = require('../services/checkinPhones');
 const { STAFF_ROLES } = require('../constants/staffRoles');
 
 // Every staff cadre shares one profile table now, so this is a membership test
@@ -99,101 +103,149 @@ const buildUserResponse = async (user) => {
 };
 
 // ------------------------------------
-// Remembered phones (HR Suite, B21)
+// Check-in phones (HR Suite, B21; registered by HR since 17 Oct 2026)
 //
 // The HMS session is per-tab sessionStorage, so a URL opened from the
-// entrance NFC tag always lands logged out. A member of staff signs in ONCE
-// on their own phone with rememberDevice; the phone keeps a long random
-// token and every later tap exchanges it for a normal JWT here — no login.
-// Only the token's SHA-256 is stored; it rolls forward `deviceDays` on every
-// use and dies when the account is deactivated/archived or HR revokes it.
+// entrance NFC tag always lands logged out. A phone HR has registered
+// (services/checkinPhones.js) keeps a long random token, and every tap
+// exchanges it here for a CHECK-IN-ONLY pass — scope 'tap', 15 minutes,
+// refused by middleware/auth.js everywhere but the tap itself. Emu: a phone
+// registered for check-in must never be a way into the HMS; that needs the
+// password. Only the token's SHA-256 is stored; it rolls forward `deviceDays`
+// on every use and dies when the account is deactivated/archived, HR revokes
+// it, or a newer phone is registered for the same person.
 // ------------------------------------
-const clientIp = (req) => req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.socket?.remoteAddress || null;
 const sha256 = (s) => crypto.createHash('sha256').update(s).digest('hex');
-const deviceLabel = (ua = '') => {
-  const os = /iPhone/.test(ua) ? 'iPhone' : /iPad/.test(ua) ? 'iPad' : /Android/.test(ua) ? 'Android' : /Windows/.test(ua) ? 'Windows' : /Macintosh/.test(ua) ? 'Mac' : 'Phone';
-  const browser = /CriOS|Chrome/.test(ua) ? 'Chrome' : /FxiOS|Firefox/.test(ua) ? 'Firefox' : /Safari/.test(ua) ? 'Safari' : 'browser';
-  return `${os} · ${browser}`;
-};
-const signSession = (user, extra = {}) => jwt.sign(
+const signSession = (user, extra = {}, { expiresIn = process.env.JWT_EXPIRES_IN } = {}) => jwt.sign(
   { id: user.id, email: user.email, role: user.role, name: `${user.firstName} ${user.lastName}`, ...extra },
   process.env.JWT_SECRET,
-  { expiresIn: process.env.JWT_EXPIRES_IN }
+  { expiresIn }
 );
-
-const createRememberedDevice = async (user, req) => {
-  const cfg = await getHrConfig();
-  const raw = crypto.randomBytes(32).toString('base64url');
-  const device = await UserDevice.create({
-    UserId: user.id, tokenHash: sha256(raw), label: deviceLabel(req.headers['user-agent']),
-    lastSeenAt: new Date(), lastIp: clientIp(req),
-    expiresAt: new Date(Date.now() + cfg.deviceDays * 24 * 60 * 60 * 1000),
-  });
-  return { raw, device };
-};
+const TAP_PASS_TTL = '15m';
 
 // ------------------------------------
-// POST /api/auth/device-session { deviceToken }
+// POST /api/auth/device-session { deviceToken } → a check-in-only pass
 // ------------------------------------
 const deviceSession = async (req, res) => {
   try {
     const raw = String(req.body.deviceToken || '');
-    if (raw.length < 32 || raw.length > 128) return error(res, 'This phone is no longer remembered — please sign in.', 401);
+    if (raw.length < 32 || raw.length > 128) return error(res, 'This phone is no longer registered for check-in. Ask HR to register it.', 401);
     const device = await UserDevice.findOne({ where: { tokenHash: sha256(raw), revokedAt: null } });
-    if (!device || new Date(device.expiresAt) < new Date()) return error(res, 'This phone is no longer remembered — please sign in.', 401);
+    if (!device || new Date(device.expiresAt) < new Date()) return error(res, 'This phone is no longer registered for check-in. Ask HR to register it.', 401);
     const user = await User.findByPk(device.UserId);
-    if (!user || !user.isActive || user.role === 'patient') return error(res, 'This phone is no longer remembered — please sign in.', 401);
+    if (!user || !user.isActive || user.role === 'patient') return error(res, 'This phone is no longer registered for check-in. Ask HR to register it.', 401);
 
+    // The network lock applies to remembered phones too, unless the clinic
+    // exempts the entrance tag (Settings → Sign-in security).
+    if (blockedByLock({ user, ip: clientIp(req), cfg: await getSigninSecurityConfig(), viaDevice: true })) {
+      await recordSignin(req, { user, outcome: 'failed', failReason: 'outside_blocked', method: 'device' });
+      return error(res, LOCK_MESSAGE, 423, { code: 'OUTSIDE_CLINIC' });
+    }
     const cfg = await getHrConfig();
     await device.update({ lastSeenAt: new Date(), lastIp: clientIp(req), expiresAt: new Date(Date.now() + cfg.deviceDays * 24 * 60 * 60 * 1000) });
-    logLogin(user, clientIp(req), 'device');
-    const token = signSession(user, { deviceId: device.id });
-    const userData = await buildUserResponse(user);
-    return success(res, { token, user: userData });
+    const signin = await recordSignin(req, { user, method: 'device' });
+    const token = signSession(user, { deviceId: device.id, scope: 'tap', ...(signin ? { sid: signin.id } : {}) }, { expiresIn: TAP_PASS_TTL });
+    // A pass, not a session: no profile, nothing the tap page could open the HMS with.
+    return success(res, { token, scope: 'tap', firstName: user.firstName });
   } catch (err) {
     console.error('Auth.deviceSession error:', err.message);
-    return error(res, 'Could not open a session. Please sign in.', 500);
+    return error(res, 'Could not check this phone. Please tap the tag again.', 500);
+  }
+};
+
+// ------------------------------------
+// POST /api/auth/device-register { code } — the phone enters the one-time
+// code HR issued (services/checkinPhones.js). Answers with the phone's token,
+// which the tap page keeps; nothing else. The pass comes from device-session,
+// so the network lock is applied there, the same as every other tap.
+// ------------------------------------
+const registerDevice = async (req, res) => {
+  try {
+    const out = await redeemRegistration(req.body.code, req);
+    if (out.error) return error(res, out.error, 400);
+    return success(res, { deviceToken: out.deviceToken, firstName: out.user.firstName });
+  } catch (err) {
+    console.error('Auth.registerDevice error:', err);
+    return error(res, 'Could not register this phone. Please try again.', 500);
   }
 };
 
 // ------------------------------------
 // POST /api/auth/login
 // ------------------------------------
+// One answer for every refused sign-in (16 Oct 2026): it used to say "Invalid
+// password" when the email existed, which told a caller which emails do.
+const SIGNIN_REFUSED = 'Incorrect email or password, or the account is inactive.';
+const DUMMY_HASH = bcrypt.hashSync('cdc-hms-no-such-account', 10);
+
 const login = async (req, res) => {
   const { email, password } = req.body;
 
   // 1. Find user by email (role is determined by the account, not supplied by the client)
   const user = await User.findOne({ where: { email, isActive: true } });
-  if (!user) return error(res, 'Invalid credentials or account is inactive', 401);
+  if (!user) {
+    // Recorded as a failed attempt (sign-in tracking, 16 Oct 2026). The answer
+    // stays the same either way, so it never tells a caller which emails exist.
+    const inactive = await User.findOne({ where: { email }, attributes: ['id', 'firstName', 'lastName', 'role'] });
+    // A bcrypt comparison either way, so the time taken does not tell either.
+    await bcrypt.compare(String(password || ''), DUMMY_HASH);
+    await recordSignin(req, inactive
+      ? { user: inactive, outcome: 'failed', failReason: 'inactive' }
+      : { outcome: 'failed', failReason: 'unknown_account', emailTried: email });
+    return error(res, SIGNIN_REFUSED, 401);
+  }
 
   // 2. Compare password
   const match = await bcrypt.compare(password, user.password);
-  if (!match) return error(res, 'Invalid password', 401);
-
-  // 3. Remember this phone? Only honoured from the HR tap page, and only for
-  //    internal accounts — a patient never gets a device token.
-  let deviceToken = null;
-  let deviceId = null;
-  if (req.body.rememberDevice === true && req.body.context === 'hr-tap' && user.role !== 'patient') {
-    try {
-      const { raw, device } = await createRememberedDevice(user, req);
-      deviceToken = raw;
-      deviceId = device.id;
-    } catch (err) {
-      console.error('Auth.login rememberDevice error:', err.message);   // login still succeeds
-    }
+  if (!match) {
+    await recordSignin(req, { user, outcome: 'failed', failReason: 'wrong_password' });
+    return error(res, SIGNIN_REFUSED, 401);
   }
 
-  // 4. Sign JWT (carries the device id so a tap can record which phone sent it)
-  const token = signSession(user, deviceId ? { deviceId } : {});
+  // 2b. The network lock (16 Oct 2026): outside the clinic's networks only
+  //     people with remote access may sign in. Checked after the password so
+  //     the message never helps someone guessing one. 423, not 401/403: the
+  //     browser shows the sentence without signing anyone out or toasting.
+  if (blockedByLock({ user, ip: clientIp(req), cfg: await getSigninSecurityConfig() })) {
+    await recordSignin(req, { user, outcome: 'failed', failReason: 'outside_blocked' });
+    return error(res, LOCK_MESSAGE, 423, { code: 'OUTSIDE_CLINIC' });
+  }
 
-  // 5. Record login event (staff / doctor / lab only — fire-and-forget)
-  logLogin(user, clientIp(req));
+  // 3. (Removed 17 Oct 2026: "remember this phone" at sign-in. Only HR with
+  //    hr.devices.register registers a check-in phone — POST /device-register.)
 
-  // 6. Build response with profile
+  // 4. Record the sign-in (staff only — never throws). Its id rides in the
+  //    session token as `sid`, so the browser's location, when the clinic asks
+  //    for it, can only ever be written onto this sign-in.
+  const signin = await recordSignin(req, { user });
+
+  // 5. Sign JWT
+  const token = signSession(user, signin ? { sid: signin.id } : {});
+
+  // 6. Build response with profile. signinGeo tells the browser whether to ask
+  //    for its location now (Settings → Sign-in security; off unless switched on).
   const userData = await buildUserResponse(user);
+  let signinGeo = 'off';
+  if (signin) {
+    try { signinGeo = (await getSigninSecurityConfig()).gpsMode; } catch { signinGeo = 'off'; }
+  }
 
-  return success(res, { token, user: userData, ...(deviceToken ? { deviceToken } : {}) });
+  return success(res, { token, user: userData, signinGeo });
+};
+
+// ------------------------------------
+// POST /api/auth/signin-location { status, lat, lng, accuracy }
+// The browser's own location for the sign-in in this session's token.
+// ------------------------------------
+const signinLocation = async (req, res) => {
+  try {
+    const written = await attachGps(req, req.body || {});
+    return success(res, { recorded: written });
+  } catch (err) {
+    if (err.status === 400) return error(res, err.message, 400);
+    console.error('Auth.signinLocation error:', err.message);
+    return error(res, 'Could not record the location.', 500);
+  }
 };
 
 // ------------------------------------
@@ -332,6 +384,8 @@ const logout = async (req, res) => {
 module.exports = {
   login,
   deviceSession,
+  registerDevice,
+  signinLocation,
   forgotPassword,
   resetPassword,
   getMe,

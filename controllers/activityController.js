@@ -10,6 +10,9 @@ const { Queue, Patient, MedicalDocument, MedicalEquipment, EquipmentHistory, Use
 // NOTE: `detail` is a single display string — if an event has multiple pieces of context
 // (e.g. type + reason + target), concatenate them before passing: `${a} · ${b} · ${c}`.
 // Do NOT add new fields to this shape; keep the contract stable so the frontend never changes.
+const { signinSummary, FAIL_TEXT } = require('../services/signinLog');
+const { canViewSignins } = require('../constants/permissions');
+
 const makeEvent = (type, label, staff, patient, uhid, timestamp, detail = null, role = null) => ({
   type, label, staff, patient, uhid, timestamp, detail, role,
 });
@@ -70,6 +73,7 @@ const SUMMARY_KEYS = {
   initial_assessment:      'initialAssessment',
   account_created:         'accountCreated',
   user_login:              'userLogin',
+  user_login_failed:       'userLoginFailed',
   appointment_booked:      'appointmentBooked',
   appointment_cancelled:   'appointmentCancelled',
   slot_blocked:            'slotBlocked',
@@ -343,16 +347,26 @@ const getAccountCreationEvents = async (dateFilter) => {
   );
 };
 
-const getLoginEvents = async (dateFilter) => {
+// Sign-ins (16 Oct 2026): where someone signed in from — address, network,
+// place, device — and failed attempts are shown only to a viewer who may see
+// sign-in records (it.signins.view, never admin.access). Everyone else sees
+// that the person signed in, and nothing about where from.
+const getLoginEvents = async (dateFilter, { signinDetail = false } = {}) => {
   const logs = await UserLoginLog.findAll({
-    where: { loginAt: dateFilter },
-    attributes: ['userId', 'name', 'role', 'ipAddress', 'loginAt'],
+    where: { loginAt: dateFilter, ...(signinDetail ? {} : { outcome: 'success' }) },
     order: [['loginAt', 'DESC']],
   });
 
-  return logs.map(l =>
-    makeEvent('user_login', 'Logged In', l.name, null, null, l.loginAt, l.ipAddress || null, l.role)
-  );
+  return logs.map((l) => {
+    if (l.outcome === 'failed') {
+      return makeEvent('user_login_failed', 'Failed Sign-in', l.name || l.emailTried || 'Unknown account', null, null,
+        l.loginAt, [FAIL_TEXT[l.failReason] || l.failReason, signinSummary(l), l.ipAddress].filter(Boolean).join(' · '), l.role);
+    }
+    const detail = signinDetail
+      ? [signinSummary(l), l.ipAddress, l.flagged ? 'flagged' : null].filter(Boolean).join(' · ') || null
+      : null;
+    return makeEvent('user_login', 'Logged In', l.name || 'Unknown', null, null, l.loginAt, detail, l.role);
+  });
 };
 
 const getAppointmentEvents = async (dateFilter) => {
@@ -763,7 +777,7 @@ const getStockEvents = async (dateFilter) => (await collectStockRows(dateFilter)
 
 // views (the Staff File Activity tab) reuse the exact same derivation instead of
 // duplicating it — one source of truth for "what counts as activity".
-const collectAllEvents = async (dateFilter = resolveDateFilter()) => (
+const collectAllEvents = async (dateFilter = resolveDateFilter(), { signinDetail = false } = {}) => (
   await Promise.all([
     getRegistrationEvents(dateFilter),
     getQueueEvents(dateFilter),
@@ -772,7 +786,7 @@ const collectAllEvents = async (dateFilter = resolveDateFilter()) => (
     getEquipmentEvents(dateFilter),
     getDoctorEvents(dateFilter),
     getAccountCreationEvents(dateFilter),
-    getLoginEvents(dateFilter),
+    getLoginEvents(dateFilter, { signinDetail }),
     getAppointmentEvents(dateFilter),
     getAppointmentCancellationEvents(dateFilter),
     getLabTestCancellationEvents(dateFilter),
@@ -793,7 +807,7 @@ const getActivityLog = async (req, res) => {
 
   const dateFilter = resolveDateFilter(startDate, endDate, allTime === 'true');
 
-  const allEvents = await collectAllEvents(dateFilter);
+  const allEvents = await collectAllEvents(dateFilter, { signinDetail: canViewSignins(req.user) });
 
   // Summary uses all events (unfiltered)
   const summary = buildSummary(allEvents);

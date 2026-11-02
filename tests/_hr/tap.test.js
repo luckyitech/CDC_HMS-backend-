@@ -53,6 +53,16 @@ const setToday = async (_userId, startOffsetMin) => {
   mock.timers.setTime(Math.max(Date.now(), CLINIC_OPENS - startOffsetMin * 60000));
 };
 const asUser = (u) => ({ id: u.id, role: u.role, permissions: [], deniedPermissions: [], name: `${u.firstName} ${u.lastName}` });
+// Since 17 Oct 2026 only a registered phone's check-in pass (scope 'tap')
+// checks anyone in. One phone per person, made once here.
+const phones = new Map();
+const asTap = async (u) => {
+  if (!phones.has(u.id)) {
+    const d = await UserDevice.create({ UserId: u.id, tokenHash: require('crypto').randomBytes(32).toString('hex'), label: 'iPhone · Safari', expiresAt: new Date(Date.now() + 86400000) });
+    phones.set(u.id, d.id);
+  }
+  return { ...asUser(u), scope: 'tap', deviceId: phones.get(u.id) };
+};
 
 let doctor, nurse, hr, tag, today;
 
@@ -61,7 +71,7 @@ before(async () => {
   today = clinicToday();
   // Tables exist from the migrations; clear HR data + users only.
   await db.sequelize.query('SET FOREIGN_KEY_CHECKS=0');
-  for (const m of [db.StaffPunch, db.HrScannerUser, db.HrScanner, StaffAttendance, UserDevice, HrNfcTag, db.StaffWorkHours, UserEditLog, UserLoginLog, StaffProfile, User, db.Setting, db.SettingChangeLog]) await m.destroy({ where: {}, truncate: true });
+  for (const m of [db.StaffPunch, db.HrScannerUser, db.HrScanner, StaffAttendance, db.PhoneRegistration, UserDevice, HrNfcTag, db.StaffWorkHours, UserEditLog, UserLoginLog, StaffProfile, User, db.Setting, db.SettingChangeLog]) await m.destroy({ where: {}, truncate: true });
   await db.sequelize.query('SET FOREIGN_KEY_CHECKS=1');
   doctor = await User.create({ firstName: 'Ebrahim', lastName: 'Yusuf', email: 'e@cdc.test', password: 'x', role: 'doctor', isActive: true });
   nurse  = await User.create({ firstName: 'Amina', lastName: 'Mwangi', email: 'a@cdc.test', password: 'x', role: 'nurse', isActive: true });
@@ -92,14 +102,14 @@ describe('schema matches the models (no ER_BAD_FIELD)', () => {
 
 describe('the tap, end to end', () => {
   test('unknown tag → refused row, HTTP 200', async () => {
-    const r = await call(hrAttendance.tap, { user: asUser(doctor), body: { uid: '04FFFFFFFFFFFF', ctr: '000001', cmac: '0000000000000000' } });
+    const r = await call(hrAttendance.tap, { user: await asTap(doctor), body: { uid: '04FFFFFFFFFFFF', ctr: '000001', cmac: '0000000000000000' } });
     assert.equal(r.status, 200); assert.equal(r.body.data.action, 'refused'); assert.equal(r.body.data.reason, 'unknown_tag');
     assert.equal(await StaffAttendance.count({ where: { UserId: doctor.id, status: 'refused' } }), 1);
   });
 
   test('bad signature → refused, counter untouched', async () => {
     const u = tagUrl();
-    const r = await call(hrAttendance.tap, { user: asUser(doctor), body: { ...u, cmac: '0000000000000000' } });
+    const r = await call(hrAttendance.tap, { user: await asTap(doctor), body: { ...u, cmac: '0000000000000000' } });
     assert.equal(r.body.data.reason, 'bad_signature');
     assert.equal((await HrNfcTag.findByPk(tag.id)).lastCounter, 0);
   });
@@ -108,7 +118,7 @@ describe('the tap, end to end', () => {
     // A dated override for today: the day starts 15 minutes from now.
     await setToday(doctor.id, 15);
     const u = tagUrl();
-    const r = await call(hrAttendance.tap, { user: asUser(doctor), body: { ...u, geo: { lat: -1.2621, lng: 36.8123, accuracy: 20 } } });
+    const r = await call(hrAttendance.tap, { user: await asTap(doctor), body: { ...u, geo: { lat: -1.2621, lng: 36.8123, accuracy: 20 } } });
     assert.equal(r.status, 200, JSON.stringify(r.body));
     const d = r.body.data;
     assert.equal(d.action, 'checked_in');
@@ -127,20 +137,20 @@ describe('the tap, end to end', () => {
 
   test('replaying the same URL → refused (replayed_counter), nothing changes', async () => {
     const ctr = counter.toString(16).toUpperCase().padStart(6, '0');
-    const r = await call(hrAttendance.tap, { user: asUser(doctor), body: { uid: UID, ctr, cmac: computeSunMac({ keyHex: KEY, uidHex: UID, counter }) } });
+    const r = await call(hrAttendance.tap, { user: await asTap(doctor), body: { uid: UID, ctr, cmac: computeSunMac({ keyHex: KEY, uidHex: UID, counter }) } });
     assert.equal(r.body.data.action, 'refused'); assert.equal(r.body.data.reason, 'replayed_counter');
     assert.equal(await StaffAttendance.count({ where: { UserId: doctor.id, status: 'open' } }), 1);
   });
 
   test('a later tap offers check-out (early, since the day ends hours from now) with a confirm token', async () => {
-    const r = await call(hrAttendance.tap, { user: asUser(doctor), body: tagUrl() });
+    const r = await call(hrAttendance.tap, { user: await asTap(doctor), body: tagUrl() });
     const d = r.body.data;
     assert.equal(d.action, 'offer_checkout');
     assert.equal(d.messages.headline, 'Check out early?');
     assert.ok(d.confirmToken);
     assert.equal(await StaffAttendance.count({ where: { UserId: doctor.id, status: 'open' } }), 1);
     // Confirming re-posts the token, not the (now spent) tag URL.
-    const c = await call(hrAttendance.tap, { user: asUser(doctor), body: { confirmToken: d.confirmToken } });
+    const c = await call(hrAttendance.tap, { user: await asTap(doctor), body: { confirmToken: d.confirmToken } });
     assert.equal(c.body.data.action, 'checked_out');
     assert.deepEqual(c.body.data.star, { side: 'out', colour: 'red' });
     assert.equal(c.body.data.session.status, 'closed');
@@ -149,19 +159,19 @@ describe('the tap, end to end', () => {
   });
 
   test('a confirm token cannot be used by someone else', async () => {
-    const r = await call(hrAttendance.tap, { user: asUser(nurse), body: tagUrl() });
+    const r = await call(hrAttendance.tap, { user: await asTap(nurse), body: tagUrl() });
     // nurse has no session yet → this checks her in; now try the doctor's token shape for her
     assert.equal(r.body.data.action, 'checked_in');
     const jwt = require('jsonwebtoken');
     const forged = jwt.sign({ t: 'hr-confirm', u: doctor.id, tagId: tag.id, ctr: '000000' }, process.env.JWT_SECRET, { expiresIn: '10m' });
-    const bad = await call(hrAttendance.tap, { user: asUser(nurse), body: { confirmToken: forged } });
+    const bad = await call(hrAttendance.tap, { user: await asTap(nurse), body: { confirmToken: forged } });
     assert.equal(bad.status, 400);
   });
 
   test('debounce: a second tap within 2 minutes is a duplicate, nothing written', async () => {
     await setHrConfig({ debounceSeconds: 120, minSessionMinutes: 10 });
     const before = await StaffAttendance.count();
-    const r = await call(hrAttendance.tap, { user: asUser(nurse), body: tagUrl() });
+    const r = await call(hrAttendance.tap, { user: await asTap(nurse), body: tagUrl() });
     assert.equal(r.body.data.action, 'duplicate');
     assert.equal(r.body.data.messages.headline, 'Already recorded');
     assert.equal(await StaffAttendance.count(), before);
@@ -172,7 +182,7 @@ describe('the tap, end to end', () => {
     // A second session today for the doctor would earn no in-star (rule), so use a fresh user.
     const late = await User.create({ firstName: 'Peter', lastName: 'Kamau', email: 'p@cdc.test', password: 'x', role: 'lab', isActive: true });
     await setToday(late.id, -61);
-    const r = await call(hrAttendance.tap, { user: asUser(late), body: tagUrl() });
+    const r = await call(hrAttendance.tap, { user: await asTap(late), body: tagUrl() });
     const d = r.body.data;
     assert.equal(d.action, 'checked_in');
     assert.deepEqual(d.star, { side: 'in', colour: 'red' });
@@ -185,7 +195,7 @@ describe('the tap, end to end', () => {
 
   test('after checking out, a tap is "back in" on the SAME session — no new session, no star (17 Oct 2026)', async () => {
     const before = await StaffAttendance.count({ where: { UserId: doctor.id, clinicDate: today, status: 'closed' } });
-    const r = await call(hrAttendance.tap, { user: asUser(doctor), body: tagUrl() });
+    const r = await call(hrAttendance.tap, { user: await asTap(doctor), body: tagUrl() });
     assert.equal(r.body.data.action, 'checked_in');
     assert.equal(r.body.data.star, null);
     assert.match(r.body.data.messages.headline, /^Back in, /);
@@ -263,35 +273,36 @@ describe('HR views', () => {
   });
 });
 
-describe('remembered phones', () => {
+describe('check-in phones (registered by HR since 17 Oct 2026)', () => {
   let raw;
-  test('login with rememberDevice from the tap page returns a device token', async () => {
+  test('signing in on the tap page no longer remembers the phone', async () => {
     const bcrypt = require('bcryptjs');
     await doctor.update({ password: await bcrypt.hash('Passw0rd!', 4) });
     const r = await call(auth.login, { body: { email: 'e@cdc.test', password: 'Passw0rd!', rememberDevice: true, context: 'hr-tap' } });
     assert.equal(r.status, 200, JSON.stringify(r.body));
-    assert.ok(r.body.data.token); assert.ok(r.body.data.deviceToken);
-    raw = r.body.data.deviceToken;
-    const d = await UserDevice.findOne({ where: { UserId: doctor.id } });
-    assert.equal(d.label, 'iPhone · Safari');
-    assert.ok(!raw.includes(d.tokenHash));
-    // Not honoured outside the tap page
-    const plain = await call(auth.login, { body: { email: 'e@cdc.test', password: 'Passw0rd!', rememberDevice: true } });
-    assert.equal(plain.body.data.deviceToken, undefined);
+    assert.ok(r.body.data.token); assert.equal(r.body.data.deviceToken, undefined);
   });
-  test('exchanging the token opens a session and logs a device login', async () => {
+  test('HR registers the phone with a code; the token buys a check-in pass and logs a device login', async () => {
+    const issued = await call(hrDevices.issueRegistration, { user: asUser(hr), body: { userId: doctor.id } });
+    assert.equal(issued.status, 200, JSON.stringify(issued.body));
+    const reg = await call(auth.registerDevice, { body: { code: issued.body.data.code } });
+    assert.equal(reg.status, 200, JSON.stringify(reg.body));
+    raw = reg.body.data.deviceToken;
+    const d = await UserDevice.findOne({ where: { UserId: doctor.id, revokedAt: null } });
+    assert.equal(d.label, 'iPhone · Safari');
+    assert.equal(d.registeredById, hr.id);
+    assert.ok(!raw.includes(d.tokenHash));
     const r = await call(auth.deviceSession, { body: { deviceToken: raw } });
     assert.equal(r.status, 200, JSON.stringify(r.body));
-    assert.ok(r.body.data.token); assert.equal(r.body.data.user.email, 'e@cdc.test');
-    assert.ok(r.body.data.user.portals.includes('portal.hr'));
+    assert.ok(r.body.data.token); assert.equal(r.body.data.scope, 'tap'); assert.equal(r.body.data.user, undefined);
     await new Promise((res) => setTimeout(res, 50));
     assert.equal((await UserLoginLog.findOne({ where: { userId: doctor.id, method: 'device' } })) != null, true);
     const junk = await call(auth.deviceSession, { body: { deviceToken: 'x'.repeat(43) } });
     assert.equal(junk.status, 401);
   });
-  test('revoking the phone ends it; deactivating the account revokes all', async () => {
+  test('revoking the phone ends it', async () => {
     const list = await call(hrDevices.list, { user: asUser(doctor), query: {} });
-    assert.equal(list.body.data.length, 1);
+    assert.equal(list.body.data.length, 1, 'registering replaced the harness phone');
     const other = await call(hrDevices.list, { user: asUser(nurse), query: { userId: String(doctor.id) } });
     assert.equal(other.status, 403);
     const rev = await call(hrDevices.revoke, { user: asUser(doctor), params: { id: String(list.body.data[0].id) } });

@@ -94,14 +94,16 @@ const notify = async (event, { recipients = [], title, body = null, link = null,
  * The active internal staff who hold a capability (admin.access bypass and
  * withdrawals honoured, exactly as the route gate decides). ONE lookup for
  * every "tell whoever handles X" alert: clinic-wide expiry (hr.expiry.alerts),
- * new profile change requests (hr.profile.approve).
+ * new profile change requests (hr.profile.approve). A check function instead
+ * of a capability is used as is (check-in phones: canManageCheckinDevices).
  */
 const holdersOf = async (capability) => {
+  const check = typeof capability === 'function' ? capability : (u) => passesAdminGate(u, capability);
   const staff = await User.findAll({
     where: { isActive: true, role: { [Op.in]: INTERNAL_ROLES } },
     attributes: ['id', 'role', 'permissions', 'deniedPermissions', 'staffType'],
   });
-  return staff.filter((u) => passesAdminGate(u, capability)).map((u) => u.id);
+  return staff.filter(check).map((u) => u.id);
 };
 
 module.exports = { notify, holdersOf };

@@ -82,6 +82,7 @@ const MedicalEquipment    = require('./MedicalEquipment');
 const EquipmentHistory    = require('./EquipmentHistory');
 const EquipmentAuditLog   = require('./EquipmentAuditLog');
 const UserLoginLog        = require('./UserLoginLog');
+const IpLocation          = require('./IpLocation');
 const PatientAccessLog    = require('./PatientAccessLog');
 const UserEditLog         = require('./UserEditLog');
 const CareLinkPartner     = require('./CareLinkPartner');
@@ -160,6 +161,7 @@ const UserDevice                  = require('./UserDevice');
 const HrScanner                   = require('./HrScanner');
 const HrScannerUser               = require('./HrScannerUser');
 const StaffPunch                  = require('./StaffPunch');
+const PhoneRegistration           = require('./PhoneRegistration');
 const StaffWorkHours              = require('./StaffWorkHours');
 
 // --- Onboarding wizard: permission presets (a template, not a link) ---
@@ -810,6 +812,13 @@ HrNfcTag.belongsTo(User, { as: 'retiredBy', foreignKey: 'retiredById' });
 User.hasMany(UserDevice);
 UserDevice.belongsTo(User);
 UserDevice.belongsTo(User, { as: 'revokedBy', foreignKey: 'revokedById' });
+// HR registers check-in phones (17 Oct 2026, migration 039). NULL = remembered
+// by the person themselves before that.
+UserDevice.belongsTo(User, { as: 'registeredBy', foreignKey: 'registeredById' });
+User.hasMany(PhoneRegistration);
+PhoneRegistration.belongsTo(User);
+PhoneRegistration.belongsTo(User, { as: 'issuedBy', foreignKey: 'issuedById' });
+PhoneRegistration.belongsTo(UserDevice, { as: 'device', foreignKey: 'deviceId' });
 
 // Fingerprint scanner (17 Oct 2026): every punch, the scanner, its users.
 HrScanner.belongsTo(User, { as: 'createdBy', foreignKey: 'createdById' });
@@ -910,6 +919,7 @@ const db = {
   EquipmentHistory,
   EquipmentAuditLog,
   UserLoginLog,
+  IpLocation,
   PatientAccessLog,
   UserEditLog,
   CareLinkPartner,
@@ -980,6 +990,7 @@ const db = {
   HrScanner,
   HrScannerUser,
   StaffPunch,
+  PhoneRegistration,
   StaffWorkHours,
   // --- Onboarding wizard ---
   PermissionPreset,

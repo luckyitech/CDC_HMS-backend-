@@ -7,14 +7,16 @@
 // doctor + admin.access (Emu) would be refused. One helper, used everywhere:
 // passesAdminGate in constants/permissions.js is that answer, and these are
 // its two HR spellings.
-const { PERMISSIONS, passesAdminGate, canViewConfidential } = require('../constants/permissions');
+const { PERMISSIONS, passesAdminGate, canViewConfidential, canRegisterPhones } = require('../constants/permissions');
 
 // hasPermission already folds IMPLIED_BY / BUNDLES / legacy names in (a
 // stored hr.write holds hr.view and hr.tags).
 const canViewHr  = (user) => passesAdminGate(user, PERMISSIONS.HR_VIEW);
-// Someone else's remembered phones (seeing and revoking them) sit with the
+// Someone else's check-in phones (seeing and revoking them) sit with the
 // entrance tags — both are how a person checks in. Was hr.write until HR Tier 3.
-const canManageCheckinDevices = (user) => passesAdminGate(user, PERMISSIONS.HR_TAGS);
+// Whoever may register a phone (hr.devices.register, 17 Oct 2026) sees and
+// revokes them too: registering replaces, so they act on what they can see.
+const canManageCheckinDevices = (user) => passesAdminGate(user, PERMISSIONS.HR_TAGS) || canRegisterPhones(user);
 
 // Staff documents that are HEALTH DATA (B27 debt fix, 2 Oct 2026). A sick
 // note is the document behind sick leave, so it follows the same rule as the

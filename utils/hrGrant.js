@@ -5,7 +5,7 @@
 
 const {
   PERMISSIONS, hasPermission, isTrueAdmin, canGrantPermissions, HR_DELEGABLE, HR_NOT_DELEGABLE, passesAdminGate,
-  canGrantHrPermissions, canEditPermissions, canViewConfidential, canReadAppraisals, reconcilePermissionLists, toList,
+  canGrantHrPermissions, canEditPermissions, canViewConfidential, canReadAppraisals, canRegisterPhones, reconcilePermissionLists, toList,
 } = require('../constants/permissions');
 
 /**
@@ -48,7 +48,9 @@ const hrGrantRefusal = ({ caller, target, before, after }) => {
     ...after.permissions.filter((p) => !before.permissions.includes(p)),
     ...before.deniedPermissions.filter((p) => !after.deniedPermissions.includes(p)),
   ];
-  const notHeld = given.filter((p) => !passesAdminGate(caller, p));
+  // holdsControl, not passesAdminGate: admin.access does not carry the
+  // explicit-only controls (hr.devices.register, 17 Oct 2026 review).
+  const notHeld = given.filter((p) => !holdsControl(caller, p));
   if (notHeld.length) {
     return { message: 'You can only give or take away what you can do yourself', code: 403, extra: { code: 'NOT_HELD', capabilities: notHeld } };
   }
@@ -56,12 +58,14 @@ const hrGrantRefusal = ({ caller, target, before, after }) => {
 };
 
 /**
- * Does `user` hold `cap` the way that control's own gate decides? The two
- * explicit-grant controls (hr.confidential, hr.appraisals) are NOT carried by
- * admin.access, and the two grant keys have their own tests.
+ * Does `user` hold `cap` the way that control's own gate decides? The
+ * explicit-grant controls (hr.confidential, hr.appraisals, and since 17 Oct
+ * 2026 hr.devices.register) are NOT carried by admin.access, and the two
+ * grant keys have their own tests.
  */
 const holdsControl = (user, cap) => {
   if (cap === PERMISSIONS.HR_CONFIDENTIAL) return canViewConfidential(user);
+  if (cap === PERMISSIONS.HR_DEVICES_REGISTER) return canRegisterPhones(user);
   if (cap === PERMISSIONS.HR_APPRAISALS) return canReadAppraisals(user);
   if (cap === PERMISSIONS.PERMISSIONS_GRANT) return canGrantPermissions(user);
   if (cap === PERMISSIONS.HR_GRANT) return canGrantHrPermissions(user);
@@ -129,7 +133,7 @@ const presetApplyRefusal = ({ caller, granted = [], denied = [] }) => {
   if (notHr.length) {
     return { message: 'This preset includes controls outside the HR Suite — only a permissions administrator can apply it', code: 403, extra: { code: 'PRESET_NOT_DELEGABLE', capabilities: [...new Set(notHr)] } };
   }
-  const notHeld = granted.filter((p) => !passesAdminGate(caller, p));
+  const notHeld = granted.filter((p) => !holdsControl(caller, p));
   if (notHeld.length) {
     return { message: 'This preset gives controls you do not hold yourself — only someone who holds them, or a permissions administrator, can apply it', code: 403, extra: { code: 'PRESET_NOT_HELD', capabilities: notHeld } };
   }

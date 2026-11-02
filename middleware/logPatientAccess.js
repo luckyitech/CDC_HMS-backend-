@@ -1,4 +1,5 @@
 const db = require('../models');
+const { clientIp } = require('../utils/ip');
 
 const { PatientAccessLog } = db;
 
@@ -65,7 +66,7 @@ const logPatientAccess = (section) => (req, res, next) => {
       section,
       method: req.method,
       path: (req.originalUrl || '').split('?')[0].slice(0, 512),
-      ipAddress: req.ip || req.headers['x-forwarded-for'] || null,
+      ipAddress: clientIp(req),   // trusted address, never the browser-set X-Forwarded-For (16 Oct 2026)
     }).catch(() => { /* fire and forget — see the note above */ });
   } catch {
     /* never let logging break a clinical read */

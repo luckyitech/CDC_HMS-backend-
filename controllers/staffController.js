@@ -20,7 +20,7 @@ const {
   displayedPermissions, ADMIN_ACCESS_COVERS,
   reconcilePermissionLists, defaultPermissionsFor, PRESET_EXCLUDED,
   BUNDLES, IMPLIED_BY, HR_DELEGABLE, HR_NOT_DELEGABLE, passesAdminGate,
-  SCOPABLE, canEditPermissions,
+  SCOPABLE, canEditPermissions, canViewSignins,
 } = require('../constants/permissions');
 const hrScope = require('../services/hrScope');
 const staffLists = require('../services/staffLists');
@@ -33,6 +33,7 @@ const { cleanPresetScopes } = require('./permissionPresetController');
 const { resolveReportsTo, reportsToSummary, ReportsToError } = require('../services/reportsTo');
 const { sendHrNoticeEmail } = require('../utils/emailService');
 
+const { signinSummary, FAIL_TEXT } = require('../services/signinLog');
 const { collectAllEvents, resolveDateFilter } = require('./activityController');
 
 const { User, StaffProfile, UserEditLog, UserLoginLog } = db;
@@ -1010,10 +1011,23 @@ const activity = async (req, res) => {
       .filter((e) => e.type !== 'user_login' && e.type !== 'account_created')
       .map((e) => ({ type: e.type, label: e.label, patient: e.patient, uhid: e.uhid, detail: e.detail, timestamp: e.timestamp }));
 
-    const loginEvents = logins.map((l) => ({
-      type: 'user_login', label: 'Logged in', patient: null, uhid: null,
-      detail: l.ipAddress ? `IP ${l.ipAddress}` : null, timestamp: l.loginAt,
-    }));
+    // Where they signed in from is shown to a viewer who may see sign-in
+    // records (it.signins.view — never admin.access) and to the person
+    // themselves; anyone else sees only that they signed in (16 Oct 2026).
+    const signinDetail = canViewSignins(req.user) || req.user.id === req.staffUser.id;
+    const loginEvents = logins
+      .filter((l) => signinDetail || l.outcome !== 'failed')
+      .map((l) => (l.outcome === 'failed'
+        ? {
+          type: 'user_login_failed', label: 'Failed sign-in', patient: null, uhid: null,
+          detail: [FAIL_TEXT[l.failReason] || l.failReason, signinSummary(l), l.ipAddress].filter(Boolean).join(' · '),
+          timestamp: l.loginAt,
+        }
+        : {
+          type: 'user_login', label: 'Logged in', patient: null, uhid: null,
+          detail: signinDetail ? ([signinSummary(l), l.ipAddress].filter(Boolean).join(' · ') || null) : null,
+          timestamp: l.loginAt,
+        }));
 
     const editEvents = edits.map((e) => {
       // describeChanges() rather than Object.keys(): the column is DataTypes.JSON,

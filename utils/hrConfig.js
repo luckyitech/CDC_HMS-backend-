@@ -67,6 +67,9 @@ const ALERT_EVENTS = [
   // 1 Nov 2026 (Emu): to the person — a gold or red arrival star on the day;
   // their week every Saturday at 14:00 (services/attendanceMail).
   'attendance_star', 'attendance_weekly',
+  // 17 Oct 2026: HR registered a check-in phone — to the person and to whoever
+  // looks after check-in phones (hr.tags / hr.devices.register).
+  'phone_registered',
 ];
 const ALERT_CHANNELS = ['bell', 'email', 'whatsapp'];
 const DEFAULT_ALERTS = Object.fromEntries(ALERT_EVENTS.map((e) => [e, { bell: true, email: true, whatsapp: false }]));

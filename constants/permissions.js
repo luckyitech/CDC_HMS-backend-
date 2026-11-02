@@ -255,6 +255,12 @@ const PERMISSIONS = {
   HR_ATTENDANCE_AMEND: 'hr.attendance.amend',  // manual entries, amending a session
   HR_WORKHOURS:        'hr.workhours',         // setting someone's working hours
   HR_TAGS:             'hr.tags',              // naming, testing, retiring entrance tags
+  // 17 Oct 2026 (Emu): "only HR with the register phones permission can
+  // register a phone". Issuing the one-time code a member of staff's phone
+  // enters to become their check-in phone. NOT covered by admin.access —
+  // explicit grant or the main admin account (canRegisterPhones). Checked in
+  // routes/hr.js, not by authorize(); see CHECKED_ELSEWHERE in the vocabulary test.
+  HR_DEVICES_REGISTER: 'hr.devices.register',
 
   // --- HR Suite phase 2: leave (B27, decision D8 — every HR function its own
   // capability so an HR manager or a supervisor can be given all or some).
@@ -370,6 +376,27 @@ const PERMISSIONS = {
   // to a named account by migration 20260923000010. Decision (Emu, 24 Sep 2026):
   // "even an admin cannot see confidential data if the gate is not checked".
   HR_CONFIDENTIAL: 'hr.confidential',
+
+  // IT and security (16 Oct 2026, Emu): where and how staff sign in.
+  //   SIGNINS_VIEW     every sign-in record — address, device, clinic network or
+  //                    outside, approximate place, the device's own location
+  //                    when it was asked, failed attempts.
+  //   SIGNINS_ALERTS   receive the suspicious-sign-in alerts (bell / email).
+  //   SIGNIN_SETTINGS  the clinic's networks, location lookup, device location,
+  //                    and when a sign-in is flagged (Settings → Sign-in security).
+  // Like hr.confidential these are NOT covered by admin.access, never in a
+  // preset, held by nobody by role; the true 'admin' account is the fallback.
+  // Checked by canViewSignins() / canReceiveSigninAlerts() / canEditSigninSecurity().
+  // A staff member always sees their OWN sign-ins on My profile.
+  SIGNINS_VIEW:    'it.signins.view',
+  SIGNINS_ALERTS:  'it.signins.alerts',
+  SIGNIN_SETTINGS: 'it.security.settings',
+  // The network lock (16 Oct 2026, Emu): when Settings → Sign-in security →
+  // "Only allow outside sign-ins for people with remote access" is on, only
+  // holders of this (and the main admin account) may sign in and work from
+  // outside the clinic's networks. Explicit grant only — admin.access does not
+  // carry it. Checked by canWorkOutsideClinic() (utils/networkLock.js).
+  SIGNIN_REMOTE:   'it.remote.signin',
 };
 
 const ALL_PERMISSIONS = Object.values(PERMISSIONS);
@@ -454,6 +481,9 @@ const IMPLIED_BY = {
   [PERMISSIONS.LEAVE_MANAGE]:        PERMISSIONS.LEAVE_VIEW,
   [PERMISSIONS.LEAVE_SICK]:          PERMISSIONS.LEAVE_VIEW,
   [PERMISSIONS.LEAVE_REQUIRED]:      PERMISSIONS.LEAVE_VIEW,
+  // IT and security: alerts and settings both show sign-in records.
+  [PERMISSIONS.SIGNINS_ALERTS]:      PERMISSIONS.SIGNINS_VIEW,
+  [PERMISSIONS.SIGNIN_SETTINGS]:     PERMISSIONS.SIGNINS_VIEW,
 };
 
 /**
@@ -1066,6 +1096,13 @@ const PERMISSION_GROUPS = [
           + 'is "HR Suite settings".',
         access: PERMISSIONS.HR_TAGS, accessLabel: 'Can manage entrance tags',
         roleDefault: 'Administrators' },
+      { key: 'hr-devices-register', name: 'Register check-in phones', appliesIn: 'Staff file → Access → Check-in phone',
+        description: 'Giving a member of staff the one-time code that makes their phone the one '
+          + 'that checks them in at the entrance tag. One phone per person: a new one replaces '
+          + 'the old. A registered phone can only check in and out — it never signs in to the HMS. '
+          + 'Not part of full administrator access.',
+        access: PERMISSIONS.HR_DEVICES_REGISTER, accessLabel: 'Can register a phone for someone\'s check-in',
+        roleDefault: 'Nobody by role — must be granted (the main admin account always)' },
     ],
   },
   {
@@ -1242,6 +1279,43 @@ const PERMISSION_GROUPS = [
         roleDefault: 'Administrators' },
     ],
   },
+  {
+    key: 'it-security',
+    name: 'IT and security',
+    description: 'Where and how staff sign in. Not part of full administrator access — '
+      + 'each of these is granted person by person. The Sign-ins page and its alerts '
+      + 'open in the Admin portal, so grant that portal too. Everyone sees their own '
+      + 'sign-ins on My profile → Activity.',
+    areas: [
+      { key: 'signins', name: 'Sign-in records', appliesIn: 'Admin → Monitoring → Sign-ins',
+        description: 'Every sign-in and failed attempt: the address, the device, whether it '
+          + 'came from the clinic network or outside, the approximate place, and the '
+          + 'device\'s own location when it was asked. Without this, the Activity Log and '
+          + 'staff files show "Signed in" with no address or place.',
+        access: PERMISSIONS.SIGNINS_VIEW, accessLabel: 'Can see where and how staff sign in',
+        roleDefault: 'Nobody by role — must be granted (the main admin account always)' },
+      { key: 'signin-alerts', name: 'Suspicious sign-in alerts', appliesIn: 'Notifications, email',
+        description: 'A bell (and email, if switched on) when a sign-in is flagged — a new '
+          + 'device, a new country, outside the clinic or outside the expected hours, or '
+          + 'repeated wrong passwords. Comes with seeing sign-in records.',
+        access: PERMISSIONS.SIGNINS_ALERTS, accessLabel: 'Receives suspicious sign-in alerts',
+        roleDefault: 'Nobody by role — must be granted (the main admin account always)' },
+      { key: 'signin-settings', name: 'Sign-in security settings', appliesIn: 'Admin → Settings → Sign-in security',
+        description: 'The clinic\'s own networks, looking up where outside addresses are, '
+          + 'asking the device for its location, and when a sign-in is flagged.',
+        access: null, write: PERMISSIONS.SIGNIN_SETTINGS,
+        readOpen: 'the settings are shown to whoever can change them',
+        writeLabel: 'Can change sign-in security settings',
+        roleDefault: 'Nobody by role — must be granted (the main admin account always)' },
+      { key: 'remote-signin', name: 'Remote access', appliesIn: 'Signing in',
+        description: 'Signing in and working from outside the clinic\'s networks — at home, on '
+          + 'phone data, at another hospital. Only matters once the network lock is switched '
+          + 'on (Settings → Sign-in security); until then everyone can sign in from anywhere. '
+          + 'Patients are never locked.',
+        access: PERMISSIONS.SIGNIN_REMOTE, accessLabel: 'May sign in from outside the clinic',
+        roleDefault: 'Nobody by role — must be granted (the main admin account always)' },
+    ],
+  },
 ];
 
 // Roles that may hold permissions at all. Patients are excluded outright: the
@@ -1374,6 +1448,21 @@ const canViewConfidential = (user) =>
 const canReadAppraisals = (user) =>
   !isDenied(user, PERMISSIONS.HR_APPRAISALS)
   && (isTrueAdmin(user) || hasPermission(user, PERMISSIONS.HR_APPRAISALS));
+
+/**
+ * IT and security (16 Oct 2026): an explicit grant, or the true admin account.
+ * NOT satisfied by admin.access — where a colleague signs in from is its own
+ * trust, like hr.confidential. A withdrawal still wins. Alerts and settings
+ * carry the view (IMPLIED_BY), so their holders can read what they act on.
+ */
+const explicitOrTrueAdmin = (cap) => (user) =>
+  !isDenied(user, cap) && (isTrueAdmin(user) || hasPermission(user, cap));
+const canViewSignins = explicitOrTrueAdmin(PERMISSIONS.SIGNINS_VIEW);
+const canReceiveSigninAlerts = explicitOrTrueAdmin(PERMISSIONS.SIGNINS_ALERTS);
+const canEditSigninSecurity = explicitOrTrueAdmin(PERMISSIONS.SIGNIN_SETTINGS);
+const canWorkOutsideClinic = explicitOrTrueAdmin(PERMISSIONS.SIGNIN_REMOTE);
+// Registering a check-in phone (17 Oct 2026) — the same explicit-only rule.
+const canRegisterPhones = explicitOrTrueAdmin(PERMISSIONS.HR_DEVICES_REGISTER);
 
 /**
  * A JSON-array column, as a real array.
@@ -1622,7 +1711,12 @@ const PRESET_EXCLUDED = [
   // it can never ride inside a template a users.write holder may apply.
   PERMISSIONS.HR_GRANT,
   // HR Tier 3 Phase 5 (T3-10 a): reading appraisals is its own trust.
-  PERMISSIONS.HR_APPRAISALS,
+  PERMISSIONS.HR_APPRAISALS,  // IT and security (16 Oct 2026): where colleagues sign in is granted per person.
+  PERMISSIONS.SIGNINS_VIEW,
+  PERMISSIONS.SIGNINS_ALERTS,
+  PERMISSIONS.SIGNIN_SETTINGS,
+  // 17 Oct 2026: registering check-in phones is granted person by person.
+  PERMISSIONS.HR_DEVICES_REGISTER,
 ];
 
 // ---------------------------------------------------------------------
@@ -1751,6 +1845,11 @@ module.exports = {
   passesGate,
   canViewConfidential,
   canReadAppraisals,
+  canViewSignins,
+  canReceiveSigninAlerts,
+  canEditSigninSecurity,
+  canWorkOutsideClinic,
+  canRegisterPhones,
   sanitizePermissions,
   sanitizeDeniedPermissions,
   reconcilePermissionLists,

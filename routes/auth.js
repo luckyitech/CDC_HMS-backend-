@@ -22,6 +22,14 @@ router.post('/device-session', authLimiter, [
   validate,
 ], authController.deviceSession);
 
+// POST /api/auth/device-register — a phone enters the one-time code HR issued
+// (17 Oct 2026: only HR registers check-in phones). Same limiter: a guessed
+// code is a login attempt; successful ones are not counted.
+router.post('/device-register', authLimiter, [
+  body('code').isString().isLength({ min: 8, max: 16 }).withMessage('Enter the code HR gave you'),
+  validate,
+], authController.registerDevice);
+
 // POST /api/auth/forgot-password
 // Rate limit: 3 attempts per hour (prevents abuse)
 router.post('/forgot-password', strictLimiter, [
@@ -38,6 +46,16 @@ router.post('/reset-password', strictLimiter, [
 ], authController.resetPassword);
 
 // GET /api/auth/me  — protected, needs a valid token
+// The browser's own location for this session's sign-in (sign-in tracking,
+// 16 Oct 2026). Written once, onto the row in the caller's own token.
+router.post('/signin-location', authenticate, [
+  body('status').isIn(['given', 'declined', 'unavailable']).withMessage("status must be 'given', 'declined' or 'unavailable'"),
+  body('lat').optional({ nullable: true }).isFloat({ min: -90, max: 90 }),
+  body('lng').optional({ nullable: true }).isFloat({ min: -180, max: 180 }),
+  body('accuracy').optional({ nullable: true }).isFloat({ min: 0 }),
+  validate,
+], authController.signinLocation);
+
 router.get('/me', authenticate, authController.getMe);
 
 // PUT /api/auth/change-password — change password (authenticated)

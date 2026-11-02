@@ -35,12 +35,15 @@ const leaveService = require('../services/leaveService');
 const svc = require('../services/hrAttendanceService');
 const punchSvc = require('../services/punchService');
 
-const { sequelize, StaffAttendance, StaffPunch, HrNfcTag, User, StaffProfile, StaffLeave, StaffWorkHours } = db;
+const { sequelize, StaffAttendance, StaffPunch, HrNfcTag, User, StaffProfile, StaffLeave, StaffWorkHours, UserDevice } = db;
+
+const PHONE_NOT_REGISTERED = 'This phone is not registered for your check-in. Ask HR to register it.';
 
 const CONFIRM_TTL = '10m';
 
-const clientIp = (req) =>
-  (req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.ip || req.socket?.remoteAddress || null);
+// The trusted address (utils/ip.js) — never the left-most X-Forwarded-For
+// entry, which the browser can set (16 Oct 2026).
+const { clientIp } = require('../utils/ip');
 
 const geoOf = (geo, cfg) => {
   if (cfg.geo !== 'log' || !geo || typeof geo !== 'object') return { lat: null, lng: null, accuracy: null };
@@ -83,7 +86,16 @@ const tap = async (req, res) => {
     if (!me) return error(res, 'User not found', 404);
     const ip = clientIp(req);
     const ua = (req.headers['user-agent'] || '').slice(0, 255) || null;
-    const deviceId = req.user.deviceId || null;
+    // Only the person's own registered phone checks them in (17 Oct 2026, Emu):
+    // the pass from POST /auth/device-session, for a phone that is still
+    // registered to them now — not a password session, not a revoked phone.
+    const deviceId = req.user.scope === 'tap' ? (req.user.deviceId || null) : null;
+    const device = deviceId
+      ? await UserDevice.findOne({ where: { id: deviceId, UserId: me.id, revokedAt: null }, attributes: ['id', 'expiresAt'] })
+      : null;
+    if (!device || new Date(device.expiresAt) < now) {
+      return error(res, PHONE_NOT_REGISTERED, 403, { code: 'PHONE_NOT_REGISTERED' });
+    }
     const geo = geoOf(req.body.geo, cfg);
 
     // --- Which path: a fresh tag URL, or the check-out confirmation token?

@@ -5,6 +5,9 @@ const { getRotationStatus } = require('../utils/passwordRotation');
 const db = require('../models');
 const { hasPermission, canGrantPermissions, gateResult } = require('../constants/permissions');
 const { User } = db;
+const { getSigninSecurityConfig } = require('../utils/signinSecurityConfig');
+const { blockedByLock, LOCK_MESSAGE } = require('../utils/networkLock');
+const { clientIp } = require('../utils/ip');
 
 // Endpoints a staff member with an expired password may still reach. Enough to
 // see who they are, set a new password, and leave — nothing else. Matched
@@ -13,7 +16,18 @@ const ROTATION_EXEMPT_PATHS = [
   '/api/auth/change-password',
   '/api/auth/me',
   '/api/auth/logout',
+  '/api/auth/signin-location',
 ];
+
+// A check-in phone's pass (scope 'tap', authController.deviceSession) opens
+// these and nothing else (17 Oct 2026, Emu: a phone registered for check-in
+// does not get a sign-in to the HMS). Method and full path, like the list above.
+const TAP_PASS_PATHS = [
+  'POST /api/hr/attendance/tap',
+  'GET /api/hr/attendance/checkin-config',
+  'POST /api/auth/logout',
+];
+const TAP_ONLY_MESSAGE = 'This phone is registered for check-in only. Sign in with your password to use the HMS.';
 
 // Verifies the JWT token and attaches the decoded payload to req.user.
 // Also checks isActive on every request so deactivation takes effect immediately,
@@ -63,7 +77,13 @@ const authenticate = async (req, res, next) => {
   // '/api/auth/me/' to the same handler, so the allowlist has to match it too
   // or the user is locked out of the very screen they are being sent to.
   const path = req.originalUrl.split('?')[0].replace(/\/+$/, '') || '/';
-  if (!ROTATION_EXEMPT_PATHS.includes(path)) {
+  const tapPass = decoded.scope === 'tap';
+  if (tapPass && !TAP_PASS_PATHS.includes(`${req.method} ${path}`)) {
+    return error(res, TAP_ONLY_MESSAGE, 403, { code: 'TAP_ONLY' });
+  }
+  // A check-in pass can do nothing but check in, so an expired password does
+  // not stop the tap — the password is changed at the next real sign-in.
+  if (!tapPass && !ROTATION_EXEMPT_PATHS.includes(path)) {
     const rotation = await getRotationStatus(user);
     if (rotation.mustChangePassword) {
       return error(
@@ -73,6 +93,18 @@ const authenticate = async (req, res, next) => {
         { code: 'PASSWORD_ROTATION_REQUIRED' }
       );
     }
+  }
+
+  // The network lock (16 Oct 2026): a session that leaves the clinic network
+  // stops working unless this person has remote access. 401 + code, so the
+  // browser signs out and the sign-in page says why. Read from a 15 s cache.
+  try {
+    const lockCfg = await getSigninSecurityConfig();
+    if (lockCfg.lockOutside && blockedByLock({ user, ip: clientIp(req), cfg: lockCfg, viaDevice: tapPass })) {
+      return error(res, LOCK_MESSAGE, 401, { code: 'OUTSIDE_CLINIC' });
+    }
+  } catch (err) {
+    console.error('Auth.networkLock error:', err.message);   // a settings read failure never locks anyone out
   }
 
   req.user = {

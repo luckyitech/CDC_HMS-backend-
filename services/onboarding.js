@@ -48,7 +48,8 @@ const factsForMany = async (userIds) => {
       attributes: ['UserId', 'category'],
     }),
     UserDevice.findAll({ where: { UserId: { [Op.in]: ids }, revokedAt: null, expiresAt: { [Op.gt]: now } }, attributes: ['UserId'] }),
-    UserLoginLog.findAll({ where: { userId: { [Op.in]: ids } }, attributes: ['userId'], group: ['userId'], raw: true }),
+    // Failed attempts are recorded too (16 Oct 2026) — only a real sign-in ticks it.
+    UserLoginLog.findAll({ where: { userId: { [Op.in]: ids }, outcome: 'success' }, attributes: ['userId'], group: ['userId'], raw: true }),
   ]);
   users.forEach((u) => { out.get(u.id).permissions = toList(u.permissions).length > 0; });
   profiles.forEach((p) => {

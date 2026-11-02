@@ -57,6 +57,21 @@ const CHECKED_ELSEWHERE = {
     'services/appraisals.js via canReadAppraisals() — reading every appraisal; '
     + 'deliberately not an authorize() argument so admin.access can never satisfy it '
     + '(tests/hrTier3Phase5.test.js)',
+  // IT and security (16 Oct 2026): explicit grant or the main admin account,
+  // never admin.access — routes/signins.js allow(), services/signinLog.js.
+  [PERMISSIONS.SIGNINS_VIEW]:
+    'routes/signins.js via canViewSignins(); controllers/activityController.js and '
+    + 'staffController.activity show sign-in detail only to holders',
+  [PERMISSIONS.SIGNINS_ALERTS]:
+    'services/signinLog.js alertRecipients() via canReceiveSigninAlerts()',
+  [PERMISSIONS.SIGNIN_SETTINGS]:
+    'routes/signins.js /settings via canEditSigninSecurity()',
+  [PERMISSIONS.SIGNIN_REMOTE]:
+    'utils/networkLock.js via canWorkOutsideClinic() — the login and middleware/auth.js '
+    + 'authenticate refuse outside the clinic networks while the lock is on',
+  [PERMISSIONS.HR_DEVICES_REGISTER]:
+    'routes/hr.js POST /devices/registration via canRegisterPhones() — explicit grant '
+    + 'or the main admin account, never admin.access (tests/phoneRegistration.test.js)',
   [PERMISSIONS.HR_GRANT]:
     'routes/staff.js permissionsEditor / catalogReader via canGrantHrPermissions() — '
     + 'delegated HR granting; deliberately not an authorize() argument so admin.access '

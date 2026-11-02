@@ -2,8 +2,10 @@ const express = require('express');
 const router = express.Router();
 const { body, param, query } = require('express-validator');
 const validate = require('../middleware/validate');
+const { error } = require('../utils/response');
 const { authenticate, authorize } = require('../middleware/auth');
 const { strictLimiter, keyGenerator, watch } = require('../middleware/rateLimiter');
+const { canRegisterPhones } = require('../constants/permissions');
 const rateLimit = require('express-rate-limit');
 const hrAttendance = require('../controllers/hrAttendanceController');
 const hrDevices = require('../controllers/hrDevicesController');
@@ -125,6 +127,13 @@ router.patch('/attendance/:id', authenticate, authorize(...AMEND), [
 // ---- Remembered phones -------------------------------------------------------
 router.get('/devices/me',    authenticate, authorize(...CHECKIN), hrDevices.list);
 router.delete('/devices/:id', authenticate, authorize(...CHECKIN), [param('id').isInt(), validate], hrDevices.revoke);
+// HR registers a person's check-in phone (17 Oct 2026, Emu): a one-time code
+// the phone enters on the tap page. hr.devices.register — an explicit grant or
+// the main admin account, never admin.access, so not authorize().
+const canRegister = (req, res, next) => (canRegisterPhones(req.user)
+  ? next()
+  : error(res, 'You do not have permission to do that — this has not been granted to your account.', 403));
+router.post('/devices/registration', authenticate, canRegister, [body('userId').isInt({ min: 1 }).toInt(), validate], hrDevices.issueRegistration);
 
 // ---- Working hours -----------------------------------------------------------
 router.get('/work-hours',         authenticate, authorize(...VIEW), hrWorkHours.listAll);

@@ -1,7 +1,3 @@
-const db = require('../models');
-
-const { UserLoginLog } = db;
-
 // Roles whose logins are tracked in the activity log.
 //
 // Nurse and admin were missing, so neither appeared in the activity log or on
@@ -14,27 +10,7 @@ const { UserLoginLog } = db;
 // fire-and-forget.
 const TRACKED_ROLES = new Set(['staff', 'doctor', 'lab', 'nurse', 'admin']);
 
-/**
- * Records a login event for staff accounts.
- * Fire-and-forget — never throws, never blocks the auth response.
- *
- * @param {object} user        - Sequelize User instance (must have id, firstName, lastName, role)
- * @param {string} ipAddress   - Client IP (may be null)
- * @param {string} [method]    - 'password' (the login form, default) or
- *                               'device' (a remembered phone at the entrance
- *                               tag — HR Suite, B21)
- */
-const logLogin = (user, ipAddress, method = 'password') => {
-  if (!TRACKED_ROLES.has(user.role)) return;
+// The sign-in record itself is written by services/signinLog.js recordSignin
+// (16 Oct 2026), which reads this set.
 
-  UserLoginLog.create({
-    userId:    user.id,
-    name:      `${user.firstName} ${user.lastName}`,
-    role:      user.role,
-    ipAddress: ipAddress || null,
-    loginAt:   new Date(),
-    method,
-  }).catch(() => {});
-};
-
-module.exports = { logLogin };
+module.exports = { TRACKED_ROLES };
